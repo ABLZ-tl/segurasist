@@ -492,6 +492,25 @@ model ChatKb {
   @@map("chat_kb")
 }
 
+/// Alertas operativas (P2/P3). En MVP se usa para bounce_rate>5% diario en
+/// email — no bloquea envíos, sólo notifica para que ops revise. Modelo
+/// deliberadamente simple: no hay multi-tenant por defecto (alertas globales
+/// SegurAsist) pero `tenantId` es opcional para alertas tenant-specific.
+model SystemAlert {
+  id         String    @id @default(uuid()) @db.Uuid
+  tenantId   String?   @map("tenant_id") @db.Uuid
+  severity   String    @db.VarChar(16) // 'P1' | 'P2' | 'P3'
+  code       String    @db.VarChar(64)
+  message    String    @db.Text
+  context    Json?
+  occurredAt DateTime  @default(now()) @map("occurred_at")
+  resolvedAt DateTime? @map("resolved_at")
+
+  @@index([severity, occurredAt(sort: Desc)])
+  @@index([tenantId, occurredAt(sort: Desc)])
+  @@map("system_alerts")
+}
+
 model AuditLog {
   id           String      @id @default(uuid()) @db.Uuid
   tenantId     String      @map("tenant_id") @db.Uuid
@@ -511,6 +530,13 @@ model AuditLog {
   /// Tampering detection: `GET /v1/audit/verify-chain` recomputa la cadena.
   prevHash     String      @map("prev_hash") @db.Char(64)
   rowHash      String      @map("row_hash") @db.Char(64)
+  /// Mirror inmutable a S3 (Sprint 2 — S2-07). `mirroredToS3` arranca FALSE;
+  /// `AuditS3MirrorService` corre cada minuto, agrupa por (tenant, día), sube
+  /// NDJSON al bucket Object Lock COMPLIANCE 730d y marca las filas como
+  /// mirrored. Si LocalStack/S3 está down: graceful retry — la fila vuelve a
+  /// caer en el batch siguiente (mirrored_to_s3 sigue false hasta success).
+  mirroredToS3 Boolean     @default(false) @map("mirrored_to_s3")
+  mirroredAt   DateTime?   @map("mirrored_at") @db.Timestamp(3)
 
   tenant Tenant @relation(fields: [tenantId], references: [id])
 

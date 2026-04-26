@@ -204,6 +204,62 @@ describe('Audit chain E2E (verify-chain endpoint + tampering detection)', () => 
       .set('Authorization', `Bearer ${superToken}`);
     expect(res.status).toBe(400);
   });
+
+  // ---------------------------------------------------------------------
+  // Sprint 2 S2-07 — verify-chain con source=s3 / source=both
+  // ---------------------------------------------------------------------
+
+  it('verify-chain rechaza source inválido con 400', async () => {
+    const res = await request(server)
+      .get(`/v1/audit/verify-chain?tenantId=${macTenantId}&source=invalid`)
+      .set('Authorization', `Bearer ${superToken}`);
+    expect(res.status).toBe(400);
+  });
+
+  it('verify-chain con source=s3 ejecuta sin error (LocalStack puede estar abajo en CI: aceptamos 200/500)', async () => {
+    // Best-effort: si LocalStack no está provisionado con el bucket de
+    // audit, la lectura S3 va a fallar. En ese caso aceptamos 200 con
+    // valid=true/false o 500. Lo importante: el query param se acepta y
+    // routes correctamente al mode 's3' del verifier.
+    const res = await request(server)
+      .get(`/v1/audit/verify-chain?tenantId=${macTenantId}&source=s3`)
+      .set('Authorization', `Bearer ${superToken}`);
+    expect([200, 500]).toContain(res.status);
+    if (res.status === 200) {
+      const body = res.body as { source?: string; valid?: boolean };
+      expect(body.source).toBe('s3');
+      expect(typeof body.valid).toBe('boolean');
+    }
+  }, 30_000);
+
+  it('verify-chain con source=both incluye campo discrepancies o undefined', async () => {
+    const res = await request(server)
+      .get(`/v1/audit/verify-chain?tenantId=${macTenantId}&source=both`)
+      .set('Authorization', `Bearer ${superToken}`);
+    expect([200, 500]).toContain(res.status);
+    if (res.status === 200) {
+      const body = res.body as { source?: string; valid?: boolean; discrepancies?: unknown };
+      expect(body.source).toBe('both');
+      expect(typeof body.valid).toBe('boolean');
+      // discrepancies puede ser undefined (cuando valid=true) o array.
+      if (body.discrepancies !== undefined) {
+        expect(Array.isArray(body.discrepancies)).toBe(true);
+      }
+    }
+  }, 30_000);
+
+  it('verify-chain rechaza non-admin (admin_mac) con 403 incluso para source=s3', async () => {
+    // Usamos el macToken implícito vía login adicional para no recargar el setup.
+    const macLogin = await request(server)
+      .post('/v1/auth/login')
+      .set('Content-Type', 'application/json')
+      .send({ email: 'admin@mac.local', password: 'Admin123!' });
+    const macToken = (macLogin.body as LoginResponseBody).idToken;
+    const res = await request(server)
+      .get(`/v1/audit/verify-chain?tenantId=${macTenantId}&source=s3`)
+      .set('Authorization', `Bearer ${macToken}`);
+    expect(res.status).toBe(403);
+  });
 });
 
 async function countAuditRows(tenantId: string): Promise<number> {

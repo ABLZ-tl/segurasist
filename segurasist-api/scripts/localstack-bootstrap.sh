@@ -48,10 +48,26 @@ aws_local() {
 # =========================================================================
 # 1) S3 buckets — uploads, certificates, audit, exports
 # =========================================================================
+#
+# Sprint 2 — S2-07: el bucket de audit se crea con Object Lock COMPLIANCE
+# 730 días para mirror inmutable del audit_log. LocalStack 2.x soporta
+# Object Lock; sin embargo NO se puede convertir un bucket existente sin
+# Object Lock — hay que crearlo desde cero CON `--object-lock-enabled-for-bucket`.
+# Por eso usamos un bucket nuevo `segurasist-<env>-audit-v2` cuando el bucket
+# legacy `segurasist-<env>-audit` ya existe sin la flag (idempotente: si
+# audit-v2 ya existe con Object Lock, lo respetamos).
+#
+# Implicación operativa: la env var S3_BUCKET_AUDIT debe apuntar a `*-audit-v2`
+# para que el AuditS3MirrorService escriba al bucket inmutable. El bucket legacy
+# `*-audit` sigue albergando los backups de pg_dump (script backup.sh) hasta
+# Sprint 5 — la migración completa al bucket inmutable se hace cuando se
+# provisiona AWS S3 real.
+AUDIT_BUCKET_LEGACY="segurasist-${ENV_TAG}-audit"
+AUDIT_BUCKET="segurasist-${ENV_TAG}-audit-v2"
 BUCKETS=(
   "segurasist-${ENV_TAG}-uploads"
   "segurasist-${ENV_TAG}-certificates"
-  "segurasist-${ENV_TAG}-audit"
+  "${AUDIT_BUCKET_LEGACY}"
   "segurasist-${ENV_TAG}-exports"
 )
 
@@ -81,11 +97,46 @@ for b in "${BUCKETS[@]}"; do
   esac
 done
 
+# -------------------------------------------------------------------------
+# 1.b) Audit bucket inmutable (Object Lock COMPLIANCE 730d) — Sprint 2 S2-07
+# -------------------------------------------------------------------------
+if aws_local s3api head-bucket --bucket "${AUDIT_BUCKET}" >/dev/null 2>&1; then
+  echo "[s3] ${AUDIT_BUCKET} ya existe (Object Lock asumido configurado)"
+else
+  echo "[s3] creando ${AUDIT_BUCKET} CON Object Lock"
+  if [[ "${AWS_REGION}" == "us-east-1" ]]; then
+    aws_local s3api create-bucket \
+      --bucket "${AUDIT_BUCKET}" \
+      --object-lock-enabled-for-bucket >/dev/null
+  else
+    aws_local s3api create-bucket \
+      --bucket "${AUDIT_BUCKET}" \
+      --object-lock-enabled-for-bucket \
+      --create-bucket-configuration "LocationConstraint=${AWS_REGION}" >/dev/null
+  fi
+fi
+
+# Object Lock implica versioning automático — NO llamamos a put-bucket-versioning
+# explícito porque LocalStack/AWS responden InvalidBucketState ("An Object Lock
+# configuration is present on this bucket, so the versioning state cannot be
+# changed"). El bucket queda con versioning=Enabled como side-effect de la flag
+# --object-lock-enabled-for-bucket.
+
+# Default retention COMPLIANCE 730 días (24 meses, alineado con LFPDPPP +
+# Aviso de Privacidad). En modo COMPLIANCE NI EL ROOT account puede borrar
+# o sobrescribir un objeto antes de que expire la retención. Esto es el
+# control que defendemos en INTERIM_RISKS y cierra Sprint 5 con AWS real.
+aws_local s3api put-object-lock-configuration \
+  --bucket "${AUDIT_BUCKET}" \
+  --object-lock-configuration '{"ObjectLockEnabled":"Enabled","Rule":{"DefaultRetention":{"Mode":"COMPLIANCE","Days":730}}}' >/dev/null
+echo "[s3] ${AUDIT_BUCKET} Object Lock COMPLIANCE 730d aplicado"
+
 # =========================================================================
-# 2) SQS queues — layout, pdf, email, reports
+# 2) SQS queues — layout, insureds-creation, pdf, email, reports
 # =========================================================================
 QUEUES=(
   "layout-validation-queue"
+  "insureds-creation-queue"
   "pdf-queue"
   "email-queue"
   "reports-queue"
@@ -124,6 +175,10 @@ fi
 # =========================================================================
 echo ""
 echo "[localstack-bootstrap] OK"
-echo "  S3:  ${BUCKETS[*]}"
-echo "  SQS: ${QUEUES[*]}"
-echo "  KMS: ${ALIAS}"
+echo "  S3:               ${BUCKETS[*]}"
+echo "  S3 (Object Lock): ${AUDIT_BUCKET} (COMPLIANCE 730d)"
+echo "  SQS:              ${QUEUES[*]}"
+echo "  KMS:              ${ALIAS}"
+echo ""
+echo "  Recordá actualizar S3_BUCKET_AUDIT=${AUDIT_BUCKET} en .env si querés"
+echo "  que el AuditS3MirrorService apunte al bucket inmutable."

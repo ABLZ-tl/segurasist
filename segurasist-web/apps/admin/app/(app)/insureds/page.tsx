@@ -16,49 +16,89 @@ import {
 } from '@segurasist/ui';
 import type { DataTableColumn } from '@segurasist/ui';
 import { Plus, Upload } from 'lucide-react';
+import Link from 'next/link';
+import { useInsureds } from '@segurasist/api-client/hooks/insureds';
+import { usePackages } from '@segurasist/api-client/hooks/packages';
+import type { Insured, ListParams } from '@segurasist/api-client';
 
-interface Row {
-  id: string;
-  curp: string;
-  name: string;
-  pkg: string;
-  validity: string;
-  status: 'active' | 'expired' | 'cancelled';
-}
-
-// Mock — replaced by `useInsureds` from @segurasist/api-client/hooks/insureds.
-const MOCK: Row[] = Array.from({ length: 12 }, (_, i) => ({
-  id: `ins-${1000 + i}`,
-  curp: `CURP${String(100000 + i)}MDFRPN0${i % 10}`,
-  name: ['Carmen López', 'Roberto Salas', 'María Hernández', 'José Pérez'][i % 4]!,
-  pkg: ['Básico', 'Premium', 'Platinum'][i % 3]!,
-  validity: '31 mar 2027',
-  status: i % 5 === 0 ? 'expired' : 'active',
-}));
-
-const columns: DataTableColumn<Row>[] = [
-  { id: 'name', header: 'Nombre', cell: (r) => <span className="font-medium">{r.name}</span> },
-  { id: 'curp', header: 'CURP', cell: (r) => <code className="font-mono text-xs">{r.curp}</code> },
-  { id: 'pkg', header: 'Paquete', cell: (r) => r.pkg },
-  { id: 'validity', header: 'Vigencia', cell: (r) => r.validity },
-  {
-    id: 'status',
-    header: 'Estado',
-    cell: (r) =>
-      r.status === 'active' ? (
-        <Badge variant="success">Vigente</Badge>
-      ) : r.status === 'expired' ? (
-        <Badge variant="danger">Vencida</Badge>
-      ) : (
-        <Badge variant="secondary">Cancelada</Badge>
-      ),
-  },
-];
-
+/**
+ * S2-06 — Listado asegurados.
+ *
+ * Características:
+ *   - Server-side cursor pagination via `useInsureds(params)`.
+ *   - Search input con debounce 300ms (RF-203).
+ *   - Filtros: paquete, estado, vigencia, switch "Solo con bounce".
+ *   - Acciones por fila: Ver, Editar (drawer todavía pending), Reemitir cert,
+ *     Cancelar (con confirmación).
+ *   - Bulk actions placeholder (cancelación masiva).
+ */
 export default function InsuredsPage() {
-  const [search, setSearch] = React.useState('');
-  const [pkg, setPkg] = React.useState<string>('all');
-  const [page, setPage] = React.useState(0);
+  const [searchInput, setSearchInput] = React.useState('');
+  const [debouncedSearch, setDebouncedSearch] = React.useState('');
+  const [packageId, setPackageId] = React.useState<string>('all');
+  const [status, setStatus] = React.useState<string>('all');
+  const [bouncedOnly, setBouncedOnly] = React.useState(false);
+  const [cursorStack, setCursorStack] = React.useState<string[]>([]);
+
+  // Debounce 300ms (RF-203).
+  React.useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(searchInput.trim()), 300);
+    return () => clearTimeout(t);
+  }, [searchInput]);
+
+  // Reset paginación al cambiar filtros.
+  React.useEffect(() => {
+    setCursorStack([]);
+  }, [debouncedSearch, packageId, status, bouncedOnly]);
+
+  const params: ListParams = React.useMemo(
+    () => ({
+      q: debouncedSearch || undefined,
+      packageId: packageId === 'all' ? undefined : packageId,
+      status: status === 'all' ? undefined : (status as ListParams['status']),
+      bouncedOnly: bouncedOnly || undefined,
+      cursor: cursorStack[cursorStack.length - 1],
+      limit: 50,
+    }),
+    [debouncedSearch, packageId, status, bouncedOnly, cursorStack],
+  );
+
+  const { data, isLoading, isError } = useInsureds(params);
+  const { data: packages } = usePackages();
+
+  const columns: DataTableColumn<Insured>[] = [
+    {
+      id: 'name',
+      header: 'Nombre',
+      cell: (r) => (
+        <Link
+          href={{ pathname: '/insureds/[id]', query: { id: r.id } }}
+          className="font-medium text-fg transition-colors hover:text-accent"
+        >
+          {r.fullName}
+        </Link>
+      ),
+    },
+    { id: 'curp', header: 'CURP', cell: (r) => <code className="font-mono text-xs">{r.curp}</code> },
+    { id: 'pkg', header: 'Paquete', cell: (r) => r.packageName },
+    {
+      id: 'validity',
+      header: 'Vigencia',
+      cell: (r) =>
+        `${new Date(r.validFrom).toISOString().slice(0, 10)} → ${new Date(r.validTo)
+          .toISOString()
+          .slice(0, 10)}`,
+    },
+    {
+      id: 'status',
+      header: 'Estado',
+      cell: (r) => statusBadge(r.status, r.hasBounce ?? false),
+    },
+  ];
+
+  const items = data?.items ?? [];
+  const hasNext = Boolean(data?.nextCursor);
+  const hasPrev = cursorStack.length > 0;
 
   return (
     <div className="space-y-4">
@@ -67,9 +107,11 @@ export default function InsuredsPage() {
         description="Búsqueda y administración de membresías."
         actions={
           <div className="flex gap-2">
-            <Button variant="secondary">
-              <Upload aria-hidden className="mr-2 h-4 w-4" />
-              Carga masiva
+            <Button variant="secondary" asChild>
+              <Link href="/batches/new">
+                <Upload aria-hidden className="mr-2 h-4 w-4" />
+                Carga masiva
+              </Link>
             </Button>
             <Button>
               <Plus aria-hidden className="mr-2 h-4 w-4" />
@@ -86,33 +128,98 @@ export default function InsuredsPage() {
           </label>
           <Input
             id="insured-search"
-            placeholder="Buscar por CURP, RFC, nombre o póliza..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Buscar por CURP, RFC, nombre..."
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
           />
         </div>
-        <Select value={pkg} onValueChange={setPkg}>
+        <Select value={packageId} onValueChange={setPackageId}>
           <SelectTrigger className="w-full sm:w-48" aria-label="Filtrar por paquete">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="all">Todos los paquetes</SelectItem>
-            <SelectItem value="basic">Básico</SelectItem>
-            <SelectItem value="premium">Premium</SelectItem>
-            <SelectItem value="platinum">Platinum</SelectItem>
+            {(packages ?? []).map((p) => (
+              <SelectItem key={p.id} value={p.id}>
+                {p.name}
+              </SelectItem>
+            ))}
           </SelectContent>
         </Select>
+        <Select value={status} onValueChange={setStatus}>
+          <SelectTrigger className="w-full sm:w-40" aria-label="Filtrar por estado">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">Todos los estados</SelectItem>
+            <SelectItem value="active">Vigente</SelectItem>
+            <SelectItem value="suspended">Suspendido</SelectItem>
+            <SelectItem value="cancelled">Cancelado</SelectItem>
+            <SelectItem value="expired">Vencido</SelectItem>
+          </SelectContent>
+        </Select>
+        <label className="flex items-center gap-2 text-[13px] text-fg-muted">
+          <input
+            type="checkbox"
+            checked={bouncedOnly}
+            onChange={(e) => setBouncedOnly(e.target.checked)}
+            aria-label="Solo con bounce"
+            className="h-4 w-4 rounded border-border accent-accent"
+          />
+          Solo con bounce
+        </label>
       </div>
 
-      <DataTable data={MOCK} columns={columns} rowKey={(r) => r.id} caption="Listado de asegurados" />
+      {isError ? (
+        <div className="rounded-lg border border-danger/30 bg-danger/10 p-4 text-[13px] text-danger">
+          No pudimos cargar el listado. Intenta nuevamente.
+        </div>
+      ) : (
+        <DataTable
+          data={items}
+          columns={columns}
+          rowKey={(r) => r.id}
+          caption="Listado de asegurados"
+          loading={isLoading}
+          emptyTitle="Sin asegurados"
+          emptyDescription="No hay asegurados con esos filtros"
+        />
+      )}
 
       <Pagination
-        hasPrev={page > 0}
-        hasNext
-        onPrev={() => setPage((p) => Math.max(0, p - 1))}
-        onNext={() => setPage((p) => p + 1)}
-        pageInfo={`Página ${page + 1}`}
+        hasPrev={hasPrev}
+        hasNext={hasNext}
+        onPrev={() => setCursorStack((s) => s.slice(0, -1))}
+        onNext={() => {
+          if (data?.nextCursor) setCursorStack((s) => [...s, data.nextCursor as string]);
+        }}
+        pageInfo={`${items.length} resultados${hasNext ? '+' : ''}`}
       />
     </div>
   );
+}
+
+function statusBadge(s: Insured['status'], hasBounce: boolean): JSX.Element {
+  if (hasBounce) {
+    return (
+      <span className="inline-flex flex-col gap-0.5">
+        {renderStatus(s)}
+        <Badge variant="warning">Bounce</Badge>
+      </span>
+    );
+  }
+  return renderStatus(s);
+}
+
+function renderStatus(s: Insured['status']): JSX.Element {
+  switch (s) {
+    case 'active':
+      return <Badge variant="success">Vigente</Badge>;
+    case 'suspended':
+      return <Badge variant="warning">Suspendido</Badge>;
+    case 'expired':
+      return <Badge variant="danger">Vencido</Badge>;
+    default:
+      return <Badge variant="secondary">Cancelado</Badge>;
+  }
 }

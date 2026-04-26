@@ -9,9 +9,14 @@ export interface ListParams {
   cursor?: string;
   limit?: number;
   pkg?: string;
-  status?: 'active' | 'cancelled' | 'expired';
+  packageId?: string;
+  status?: 'active' | 'suspended' | 'cancelled' | 'expired';
   from?: string;
   to?: string;
+  validFromGte?: string;
+  validFromLte?: string;
+  validToGte?: string;
+  validToLte?: string;
   bouncedOnly?: boolean;
 }
 
@@ -25,13 +30,15 @@ export interface CursorPage<T> {
 export interface Insured {
   id: string;
   curp: string;
-  rfc?: string;
+  rfc?: string | null;
   fullName: string;
   packageId: string;
   packageName: string;
-  status: 'active' | 'cancelled' | 'expired';
+  status: 'active' | 'suspended' | 'cancelled' | 'expired';
   validFrom: string;
   validTo: string;
+  email?: string | null;
+  hasBounce?: boolean;
 }
 
 export interface CreateInsuredDto {

@@ -46,17 +46,30 @@ type TxClient = Omit<PrismaClient, '$connect' | '$disconnect' | '$on' | '$transa
 @Injectable({ scope: Scope.REQUEST })
 export class PrismaService implements OnModuleInit, OnModuleDestroy {
   private readonly log = new Logger(PrismaService.name);
-  private readonly tenantId?: string;
-  private readonly bypassRls: boolean;
+  private readonly req: FastifyRequest & { tenant?: TenantCtx; bypassRls?: boolean };
   private readonly root: PrismaClient;
   /** Cliente público con el wrapper RLS aplicado. Usar este en services. */
   public readonly client: ReturnType<PrismaService['buildExtended']>;
 
   constructor(@Inject(REQUEST) req: FastifyRequest & { tenant?: TenantCtx; bypassRls?: boolean }) {
-    this.tenantId = req.tenant?.id;
-    this.bypassRls = req.bypassRls === true;
+    // NOTE — leemos `req.tenant` / `req.bypassRls` LAZY en cada query
+    // (`getTenantId()` / `getBypassRls()`) en lugar de en el constructor.
+    // Razón: NestJS+Fastify puede instanciar este provider request-scoped
+    // ANTES de que el JwtAuthGuard pueble `req.tenant`, lo que dejaba
+    // `tenantId` como `undefined` para todo el ciclo de vida del request
+    // y rompía con "Tenant context missing" en endpoints que sí tenían
+    // sesión válida (ver bug Sprint 2 día consolidación).
+    this.req = req;
     this.root = new PrismaClient({ log: ['warn', 'error'] });
     this.client = this.buildExtended();
+  }
+
+  private getTenantId(): string | undefined {
+    return this.req.tenant?.id;
+  }
+
+  private getBypassRls(): boolean {
+    return this.req.bypassRls === true;
   }
 
   async onModuleInit(): Promise<void> {
@@ -77,7 +90,7 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
    * superadmin SÓLO si las queries son inocuas (e.g. no asumen tenant).
    */
   async withTenant<T>(fn: (tx: TxClient) => Promise<T>): Promise<T> {
-    if (this.bypassRls) {
+    if (this.getBypassRls()) {
       // Superadmin: sin SET, defensa en profundidad → en PrismaService normal
       // (rol segurasist_app NOBYPASSRLS) las queries devolverán 0 filas o
       // fallarán por `tenant_id::text = current_setting(...)`. Lanzamos antes:
@@ -93,16 +106,19 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
   }
 
   private assertTenant(): string {
-    if (!this.tenantId) throw new ForbiddenException('Tenant context missing');
-    if (!UUID_RE.test(this.tenantId)) throw new ForbiddenException('Tenant id malformed');
-    return this.tenantId;
+    const tenantId = this.getTenantId();
+    if (!tenantId) throw new ForbiddenException('Tenant context missing');
+    if (!UUID_RE.test(tenantId)) throw new ForbiddenException('Tenant id malformed');
+    return tenantId;
   }
 
   private buildExtended() {
     // Bind explícito: el callback se invoca por Prisma sin contexto.
     const root = this.root;
     const log = this.log;
-    const bypassRls = this.bypassRls;
+    // bypassRls + tenantId se evalúan LAZY en cada query (ver nota en
+    // constructor sobre timing NestJS+Fastify request-scoped vs guards).
+    const getBypassRls = (): boolean => this.getBypassRls();
     const assertTenant = (): string => this.assertTenant();
     return root.$extends({
       name: 'rls-tenant-context',
@@ -118,7 +134,7 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
           // profundidad: el código superadmin NUNCA debe leer con este client.
           // Si algún service lo hace por error, queda como un bug detectable
           // (lista vacía / 404) en lugar de una fuga cross-tenant.
-          if (bypassRls) {
+          if (getBypassRls()) {
             log.warn(
               `PrismaService: query con bypassRls=true ignora tenant context (model=${model} op=${operation}); el cliente NOBYPASSRLS devolverá 0 filas. Usar PrismaBypassRlsService.`,
             );

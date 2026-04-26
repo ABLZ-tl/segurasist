@@ -1,19 +1,112 @@
-import { NotImplementedException } from '@nestjs/common';
+import { NotFoundException } from '@nestjs/common';
+import { mockPrismaService } from '../../../test/mocks/prisma.mock';
+import type { CoverageInputDto } from '../packages/dto/package.dto';
 import { CoveragesService } from './coverages.service';
 
-describe('CoveragesService (stubs Sprint 0)', () => {
-  const svc = new CoveragesService();
-  it('list lanza NotImplementedException', () => {
-    expect(() => svc.list()).toThrow(NotImplementedException);
-    expect(() => svc.list()).toThrow('CoveragesService.list');
+describe('CoveragesService', () => {
+  const tenant = { id: '11111111-1111-1111-1111-111111111111' };
+
+  function build(): {
+    svc: CoveragesService;
+    prisma: ReturnType<typeof mockPrismaService>;
+  } {
+    const prisma = mockPrismaService();
+    const svc = new CoveragesService(prisma);
+    return { svc, prisma };
+  }
+
+  it('list devuelve coverages con kind decodificado', async () => {
+    const { svc, prisma } = build();
+    prisma.client.coverage.findMany.mockResolvedValue([
+      {
+        id: 'c1',
+        packageId: 'p1',
+        name: 'Consultas',
+        type: 'consultation',
+        limitCount: 10,
+        limitAmount: null,
+        description: JSON.stringify({ kind: 'count', unit: 'consultas', description: null }),
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      },
+    ] as never);
+    const out = await svc.list('p1', tenant);
+    expect(out).toHaveLength(1);
+    expect(out[0]?.type).toBe('count');
+    expect(out[0]?.unit).toBe('consultas');
   });
-  it('create lanza NotImplementedException', () => {
-    expect(() => svc.create()).toThrow('CoveragesService.create');
+
+  it('upsertForPackage lanza NotFound si el package no existe', async () => {
+    const { svc, prisma } = build();
+    prisma.client.package.findFirst.mockResolvedValue(null);
+    await expect(svc.upsertForPackage('missing', [], tenant)).rejects.toThrow(NotFoundException);
   });
-  it('update lanza NotImplementedException', () => {
-    expect(() => svc.update()).toThrow('CoveragesService.update');
+
+  it('upsertForPackageWithTx soft-deletea el set anterior y crea uno nuevo', async () => {
+    const { svc } = build();
+    const updateMany = jest.fn().mockResolvedValue({ count: 2 });
+    const create = jest.fn().mockResolvedValue({
+      id: 'new',
+      packageId: 'p1',
+      name: 'x',
+      type: 'consultation',
+      limitCount: 5,
+      limitAmount: null,
+      description: JSON.stringify({ kind: 'count', unit: 'u', description: null }),
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+    const tx = { coverage: { updateMany, create } } as never;
+    const input: CoverageInputDto[] = [
+      { name: 'x', type: 'count', limitCount: 5, unit: 'u', description: null },
+    ];
+    const out = await svc.upsertForPackageWithTx(tx, tenant.id, 'p1', input);
+    expect(updateMany).toHaveBeenCalledTimes(1);
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(out).toHaveLength(1);
+    expect(out[0]?.type).toBe('count');
   });
-  it('remove lanza NotImplementedException', () => {
-    expect(() => svc.remove()).toThrow('CoveragesService.remove');
+
+  it('upsertForPackageWithTx con array vacío sólo borra el set anterior', async () => {
+    const { svc } = build();
+    const updateMany = jest.fn().mockResolvedValue({ count: 3 });
+    const create = jest.fn();
+    const tx = { coverage: { updateMany, create } } as never;
+    const out = await svc.upsertForPackageWithTx(tx, tenant.id, 'p1', []);
+    expect(updateMany).toHaveBeenCalledTimes(1);
+    expect(create).not.toHaveBeenCalled();
+    expect(out).toHaveLength(0);
+  });
+
+  it('upsertForPackageWithTx con type=amount setea limitAmount y nullea limitCount', async () => {
+    const { svc } = build();
+    const updateMany = jest.fn().mockResolvedValue({ count: 0 });
+    const create = jest.fn().mockResolvedValue({
+      id: 'a1',
+      packageId: 'p1',
+      name: 'farmacia',
+      type: 'pharmacy',
+      limitCount: null,
+      limitAmount: '15000.00',
+      description: JSON.stringify({ kind: 'amount', unit: 'MXN', description: null }),
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+    const tx = { coverage: { updateMany, create } } as never;
+    const input: CoverageInputDto[] = [
+      { name: 'farmacia', type: 'amount', limitAmount: 15000, unit: 'MXN', description: null },
+    ];
+    const out = await svc.upsertForPackageWithTx(tx, tenant.id, 'p1', input);
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          type: 'pharmacy',
+          limitCount: null,
+          limitAmount: 15000,
+        }),
+      }),
+    );
+    expect(out[0]?.type).toBe('amount');
+    expect(out[0]?.limitAmount).toBe(15000);
   });
 });

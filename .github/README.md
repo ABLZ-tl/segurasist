@@ -20,7 +20,35 @@ Cuando GH-001 se desbloquee:
 
 | Archivo | Propósito |
 |---|---|
-| [`workflows/ci.yml`](workflows/ci.yml) | Lint + typecheck + unit + e2e contra `segurasist-api` y `segurasist-web` con detección de cambios por path-filter |
+| [`workflows/ci.yml`](workflows/ci.yml) | Lint + typecheck + unit + e2e + SAST + DAST contra `segurasist-api` y `segurasist-web` con detección de cambios por path-filter |
+
+## Quality gates
+
+Todo PR a `main` debe pasar el check agregado `ci-success`, que combina:
+
+| Gate | Tooling | Falla si |
+|---|---|---|
+| Lint + typecheck | ESLint + tsc | warnings / errors de TS |
+| Unit / E2E | Jest + Vitest | tests rojos o cobertura < umbral |
+| SAST (código) | Semgrep (`p/owasp-top-ten`, `p/jwt`, `p/secrets`, `p/nodejs`, `p/react`, `p/nextjs`) | finding `--error` |
+| Dependencias | `npm audit` / `pnpm audit` + dependency-review-action | CVE `high+critical` o licencia `GPL-3.0` / `AGPL-3.0` |
+| **DAST (runtime)** | **OWASP ZAP baseline (S2-08)** | **finding con `risk_code >= 3` (HIGH)** |
+
+### DAST — OWASP ZAP
+
+- Jobs: `api-dast` y `web-dast` (matrix `admin` / `portal`).
+- Scope: passive scan + AJAX spider sobre la app levantada en el runner.
+  - `api-dast` apunta a `http://localhost:3000/v1/openapi.json`; ZAP descubre
+    cada endpoint declarado en la spec OpenAPI y lo escanea automáticamente.
+    **Ergonomía**: si agregas un endpoint nuevo y lo expones en la spec, ZAP
+    lo recorre sin tocar CI.
+  - `web-dast` apunta a `http://localhost:3001/login` y `http://localhost:3002/`.
+- Reglas custom: [`.zap/rules.tsv`](../.zap/rules.tsv) — IGNORE para FPs
+  conocidos, FAIL para checks críticos elevados.
+- Reporte HTML disponible como artifact (`zap-report-api`,
+  `zap-report-web-admin`, `zap-report-web-portal`).
+- Local: `./scripts/run-zap-baseline.sh [api|admin|portal] [--full]`.
+- Runbook si el job falla: [`segurasist-infra/docs/runbooks/RB-011-dast-failure.md`](../segurasist-infra/docs/runbooks/RB-011-dast-failure.md).
 
 ## Branch protection recomendado (post GH-001)
 

@@ -19,12 +19,14 @@ import { CertificatesModule } from './modules/certificates/certificates.module';
 import { ChatModule } from './modules/chat/chat.module';
 import { ClaimsModule } from './modules/claims/claims.module';
 import { CoveragesModule } from './modules/coverages/coverages.module';
+import { EmailModule } from './modules/email/email.module';
 import { InsuredsModule } from './modules/insureds/insureds.module';
 import { PackagesModule } from './modules/packages/packages.module';
 import { ReportsModule } from './modules/reports/reports.module';
 import { TenantsModule } from './modules/tenants/tenants.module';
 import { UsersModule } from './modules/users/users.module';
 import { WebhooksModule } from './modules/webhooks/webhooks.module';
+import { WorkersModule } from './workers/workers.module';
 
 @Module({
   imports: [
@@ -96,12 +98,16 @@ import { WebhooksModule } from './modules/webhooks/webhooks.module';
     CoveragesModule,
     InsuredsModule,
     BatchesModule,
+    EmailModule,
     CertificatesModule,
     ClaimsModule,
     ReportsModule,
     ChatModule,
     AuditModule,
     WebhooksModule,
+    // S2-01 — workers SQS (layout-validation + insureds-creation). Pollers
+    // se inician sólo si `WORKERS_ENABLED=true` (default off para tests/e2e).
+    WorkersModule,
   ],
   controllers: [HealthController],
   providers: [

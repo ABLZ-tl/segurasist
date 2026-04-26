@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <title>Certificado SegurAsist — {{insured.fullName}}</title>
+    <style>
+      :root {
+        --primary: {{tenant.colors.primary}};
+        --accent: {{tenant.colors.accent}};
+      }
+      * { box-sizing: border-box; }
+      body {
+        font-family: 'Helvetica', 'Arial', sans-serif;
+        margin: 0;
+        padding: 40px 56px;
+        color: #1a1a1a;
+        font-size: 12px;
+        line-height: 1.5;
+      }
+      header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        border-bottom: 3px solid var(--primary);
+        padding-bottom: 16px;
+        margin-bottom: 24px;
+      }
+      header .brand {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+      }
+      header .brand img {
+        height: 48px;
+      }
+      header .brand h1 {
+        margin: 0;
+        font-size: 18px;
+        color: var(--primary);
+      }
+      header .meta {
+        text-align: right;
+        font-size: 10px;
+        color: #555;
+      }
+      h2.section-title {
+        font-size: 14px;
+        color: var(--primary);
+        margin: 24px 0 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 12px 24px;
+      }
+      .grid div span.label {
+        display: block;
+        font-size: 10px;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: #777;
+      }
+      .grid div span.value {
+        display: block;
+        font-size: 13px;
+        font-weight: 600;
+      }
+      table.coverages {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 8px;
+      }
+      table.coverages th, table.coverages td {
+        text-align: left;
+        padding: 8px 10px;
+        font-size: 11px;
+        border-bottom: 1px solid #e5e5e5;
+      }
+      table.coverages th {
+        background: var(--accent);
+        color: #fff;
+      }
+      .qr-block {
+        margin-top: 32px;
+        display: flex;
+        align-items: center;
+        gap: 24px;
+      }
+      .qr-block img { width: 120px; height: 120px; }
+      .qr-block .qr-info { font-size: 10px; color: #444; }
+      .qr-block .qr-info code {
+        display: inline-block;
+        background: #f4f4f4;
+        padding: 2px 6px;
+        border-radius: 3px;
+        font-size: 9px;
+        word-break: break-all;
+      }
+      footer {
+        margin-top: 40px;
+        padding-top: 16px;
+        border-top: 1px solid #ccc;
+        font-size: 9px;
+        color: #555;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="brand">
+        {{#if tenant.logo}}<img src="{{tenant.logo}}" alt="logo" />{{/if}}
+        <h1>{{tenant.name}}</h1>
+      </div>
+      <div class="meta">
+        <div>Certificado #{{certificateNumber}}</div>
+        <div>Versión {{version}}</div>
+        <div>Emitido: {{issuedAt}}</div>
+      </div>
+    </header>
+
+    <h2 class="section-title">Datos del asegurado</h2>
+    <div class="grid">
+      <div><span class="label">Nombre</span><span class="value">{{insured.fullName}}</span></div>
+      <div><span class="label">CURP</span><span class="value">{{insured.curp}}</span></div>
+      <div><span class="label">Paquete</span><span class="value">{{package.name}}</span></div>
+      <div><span class="label">Vigencia</span><span class="value">{{validFrom}} — {{validTo}}</span></div>
+    </div>
+
+    <h2 class="section-title">Coberturas incluidas</h2>
+    <table class="coverages">
+      <thead>
+        <tr>
+          <th>Cobertura</th>
+          <th>Tipo</th>
+          <th>Límite</th>
+          <th>Copago</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{#each coverages}}
+          <tr>
+            <td>{{this.name}}</td>
+            <td>{{this.type}}</td>
+            <td>{{this.limitFormatted}}</td>
+            <td>{{this.copaymentFormatted}}</td>
+          </tr>
+        {{/each}}
+      </tbody>
+    </table>
+
+    <div class="qr-block">
+      <img src="{{qrCodeDataUrl}}" alt="QR verificación" />
+      <div class="qr-info">
+        <strong>Verificación pública</strong><br />
+        Escaneá el QR o visitá:<br />
+        <code>{{verificationUrl}}</code>
+      </div>
+    </div>
+
+    <footer>
+      {{#if tenant.legal}}{{tenant.legal}}{{/if}}<br />
+      Este documento es público y verificable. Hash: {{hashShort}}
+    </footer>
+  </body>
+</html>

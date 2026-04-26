@@ -63,6 +63,30 @@ npm run test:cross-tenant  # GATE — debe pasar en cada PR
 npm run test:e2e           # opcional, lento
 ```
 
+## DAST local (OWASP ZAP)
+
+CI corre OWASP ZAP baseline contra la API en cada PR (job `api-dast`,
+S2-08). Para reproducir el scan local antes de pushear:
+
+```bash
+# 1. Stack arriba (postgres, redis, localstack, mailpit, cognito-local)
+cd segurasist-api && docker compose up -d
+
+# 2. API arriba en :3000
+npm run dev   # o npm run build && npm run start:prod
+
+# 3. Desde la raíz del repo: scan baseline (~5-8 min)
+cd ..
+./scripts/run-zap-baseline.sh api
+
+# 4. Reporte HTML
+open .zap-reports/api-<timestamp>.html
+```
+
+Pre-requisitos: Docker Desktop. Reglas custom en `.zap/rules.tsv`. Si encuentras
+findings reales o falsos positivos, sigue
+[`segurasist-infra/docs/runbooks/RB-011-dast-failure.md`](../segurasist-infra/docs/runbooks/RB-011-dast-failure.md).
+
 ## Estructura
 
 ```

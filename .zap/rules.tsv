@@ -1,0 +1,43 @@
+# OWASP ZAP Baseline rules override — S2-08
+#
+# Formato: <ruleId>\t<action>\t<comment>
+#   action ∈ { IGNORE | WARN | FAIL }
+#
+# Política:
+#   - IGNORE = falso positivo conocido en nuestro stack (motivo documentado).
+#   - WARN   = visible en el reporte pero no rompe el job.
+#   - FAIL   = endurece (default es WARN para ciertos checks); acá lo elevamos.
+#
+# Cualquier IGNORE requiere segunda firma del CISO en el PR comment cuando se
+# agregue por primera vez (RB-011-dast-failure).
+
+# -------------------------------------------------------------------------
+# IGNORE — controles que no aplican o están cubiertos por otra capa
+# -------------------------------------------------------------------------
+
+10038	IGNORE	CSP not set on subresource — endpoints API JSON no devuelven HTML; CSP estricta sí está en respuestas HTML del frontend (helmet en main.ts).
+10010	IGNORE	Cookie no HttpOnly — sólo aplica a cookies de UX (theme/locale en apps/admin); auth tokens viven en Authorization header (Bearer JWT), no en cookies.
+10202	IGNORE	Absence of Anti-CSRF Tokens — API stateless con SameSite=Strict + Origin allowlist (M6) + JWT en Authorization header. CSRF mitigado a nivel arquitectura.
+10049	IGNORE	Storable & Cacheable Content — endpoints públicos /openapi.json y /health/* son intencionalmente cacheables.
+
+# -------------------------------------------------------------------------
+# FAIL — checks críticos elevados a fail aunque ZAP los marque medium/low
+# -------------------------------------------------------------------------
+
+40012	FAIL	Cross Site Scripting (Reflected)
+40014	FAIL	Cross Site Scripting (Persistent)
+40016	FAIL	Cross Site Scripting (Persistent) — Prime
+40017	FAIL	Cross Site Scripting (Persistent) — Spider
+40018	FAIL	SQL Injection
+40019	FAIL	SQL Injection — MySQL
+40020	FAIL	SQL Injection — Hypersonic SQL
+40021	FAIL	SQL Injection — Oracle
+40022	FAIL	SQL Injection — PostgreSQL
+40024	FAIL	SQL Injection — SQLite
+90019	FAIL	Server Side Code Injection
+90020	FAIL	Remote OS Command Injection
+6	FAIL	Path Traversal
+10094	FAIL	Base64 Disclosure (puede revelar tokens)
+10001	FAIL	Cookie No Secure — falla bajo NODE_ENV=production-like
+10054	FAIL	Cookie sin SameSite — auditoría M6/L3 exige Strict
+10063	FAIL	Permissions-Policy header missing

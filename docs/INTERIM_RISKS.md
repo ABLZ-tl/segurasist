@@ -2,7 +2,7 @@
 
 > Estado: vigente desde Sprint 1 hasta el cierre de Sprint 5.
 > Owner: Tech Lead + DevOps.
-> Última actualización: 2026-04-26.
+> Última actualización: 2026-04-25 — Sprint 2 S2-07 (audit log mirror inmutable).
 
 Este documento captura los riesgos operativos que existen mientras el stack es
 local-first y la infraestructura productiva todavía no se ha provisionado en
@@ -21,20 +21,29 @@ Toma snapshot inmediato (ver [Mitigación interim](#mitigación-interim)).
 
 ### 1.1 Buckets / Object Storage
 
-| Bucket | Hoy (Sprint 1–4) | Sprint 5 (target) |
+| Bucket | Hoy (Sprint 2) | Sprint 5 (target) |
 | --- | --- | --- |
-| `audit` | LocalStack S3, **versioning ON, Object Lock OFF** | S3 mx-central-1 + replicación us-east-1, **Object Lock COMPLIANCE 730 días** |
-| `certificates` | LocalStack S3, **versioning ON, Object Lock OFF** | Idem audit (730 días) |
+| `audit` (legacy) | LocalStack S3, **versioning ON, Object Lock OFF** — uso restringido a backups pg_dump | Deprecado |
+| `audit-v2` | **LocalStack S3, Object Lock COMPLIANCE 730d, versioning ON, SSE-KMS** (Sprint 2 S2-07) | S3 mx-central-1 + replicación us-east-1, misma config |
+| `certificates` | LocalStack S3, **versioning ON, Object Lock OFF** | Object Lock COMPLIANCE 730 días |
 | `exports` | LocalStack S3, **mutable**, sin versioning | S3 + Object Lock COMPLIANCE 730 días |
 | `uploads` | LocalStack S3, **mutable**, sin versioning | S3 con lifecycle (TTL 90 días); no requiere Object Lock |
 
-> Implicación: **cualquier escritura es reversible/sobreescribible** hasta que se aplique Object Lock. Un actor con credenciales válidas puede borrar versions; LocalStack no aplica MFA Delete.
+> Implicación: **escrituras al bucket `audit-v2` son inmutables localmente** (LocalStack 3.x soporta Object Lock COMPLIANCE; ver caveat §1.2). El resto de buckets sigue mutable hasta Sprint 5.
 
-### 1.2 Audit log (Postgres)
+### 1.2 Audit log (Postgres + S3 mirror inmutable)
 
-- Persiste vía `AuditInterceptor` (NestJS) en tabla `audit_log` con `tenant_id`, `actor_id`, `action`, `resource_type`, `resource_id`, `metadata jsonb`, `created_at`.
-- RLS por `tenant_id` activo.
-- **Mutable**: un `DELETE` desde la consola admin de Postgres (o un actor con DBA) deja sin trace la fila. La BD es restorable desde backup, **no inmutable**.
+- Persiste vía `AuditInterceptor` (NestJS) en tabla `audit_log` con `tenant_id`, `actor_id`, `action`, `resource_type`, `resource_id`, `payload_diff jsonb`, `prev_hash`, `row_hash`, `occurred_at`.
+- Hash chain SHA-256 (Sprint 1) — `GET /v1/audit/verify-chain?source=db` recomputa en BD.
+- **Mirror inmutable a S3 (Sprint 2 S2-07)**: `AuditS3MirrorService` corre cada 60s, agrupa filas por (tenant, día UTC) en NDJSON y sube a `s3://segurasist-dev-audit-v2/audit/{tenantId}/{YYYY}/{MM}/{DD}/{batchId}.ndjson` con SSE-KMS y Object Lock COMPLIANCE 730d. Una vez subido, **NI EL ROOT account de LocalStack puede sobrescribir o borrar el objeto antes de que expire la retención**.
+- `GET /v1/audit/verify-chain?source=s3` recompone la cadena leyendo S3.
+- `GET /v1/audit/verify-chain?source=both` cross-checkea fila a fila DB↔S3 — un tampering en BD que no haya tocado el mirror se detecta (`row_hash_mismatch` en `discrepancies`).
+- **Limitación local**: LocalStack Object Lock es una emulación. **No equivale legalmente a Object Lock real de AWS S3** — un atacante con acceso al docker host puede modificar el filesystem subyacente (`/var/lib/localstack`). Para producción se requiere AWS S3 real (Sprint 5).
+- Riesgos cerrados por este control: tampering por DBA con DELETE/UPDATE de `audit_log` queda detectable vía `verify-chain?source=both`.
+- Riesgos restantes hasta Sprint 5:
+  - Eventual consistency de 60s: una fila escrita en t=0 puede tardar hasta t≈60s en estar replicada. Tampering en esa ventana no se detecta vía cross-source check.
+  - Postgres sigue siendo el sistema de lectura primario (queries `GET /v1/audit/log`); el mirror S3 es defensa en profundidad, no replacement.
+  - Atacante con acceso al docker host ⇒ LocalStack persistence está en `/var/lib/localstack/cache/segurasist_localstack`, modificable a nivel filesystem. No es un escenario realista para dev local pero hay que documentarlo.
 
 ### 1.3 Logs
 
@@ -208,12 +217,13 @@ Bloqueos externos requeridos:
 
 Entregables Sprint 5 que cierran este riesgo:
 
-1. **S3 Object Lock COMPLIANCE** activado en buckets `audit`, `certificates`, `exports` con retención **730 días** (24 meses, alineado al Aviso de Privacidad).
+1. **S3 Object Lock COMPLIANCE en AWS real** para buckets `audit-v2`, `certificates`, `exports` con retención **730 días** (24 meses, alineado al Aviso de Privacidad). Sprint 2 ya entrega el equivalente local en LocalStack — Sprint 5 es la promoción a AWS S3 mx-central-1.
 2. **Replicación cross-region** mx-central-1 → us-east-1 para los mismos buckets (ADR-012 revisado).
-3. **CloudTrail multi-account** archivado en bucket protegido por Object Lock COMPLIANCE 7 años (estándar regulatorio mexicano).
-4. **CloudWatch Logs retention** 90 días en logs operativos, 365 días para auth/audit, cifrados con KMS por tenant.
-5. **RDS Postgres** con backups automáticos 35 días + snapshot manual previo a deploy.
-6. **Pentest externo** (proveedor TBD): primer informe con la postura ya endurecida — sólo entonces el `audit_log` cuenta como evidencia no-repudiable.
+3. **IAM policies que prohíben `s3:DeleteObjectVersion` y `s3:BypassGovernanceRetention`** en TODOS los principals (incluyendo root) sobre el bucket `audit-v2`. Esto cierra el footgun de un actor con credenciales válidas que intente borrar versiones.
+4. **CloudTrail multi-account** archivado en bucket protegido por Object Lock COMPLIANCE 7 años (estándar regulatorio mexicano).
+5. **CloudWatch Logs retention** 90 días en logs operativos, 365 días para auth/audit, cifrados con KMS por tenant.
+6. **RDS Postgres** con backups automáticos 35 días + snapshot manual previo a deploy.
+7. **Pentest externo** (proveedor TBD): primer informe con la postura ya endurecida — sólo entonces el `audit_log` cuenta como evidencia no-repudiable.
 
 Una vez cerrado Sprint 5, este documento se archiva (mover a `docs/archive/INTERIM_RISKS-2026.md`) y se elimina la sección de "Riesgos operativos vigentes" de `PROGRESS.md`.
 

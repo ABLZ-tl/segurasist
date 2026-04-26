@@ -12,6 +12,7 @@
     "./hooks/certificates": "./src/hooks/certificates.ts",
     "./hooks/packages": "./src/hooks/packages.ts",
     "./hooks/reports": "./src/hooks/reports.ts",
+    "./hooks/dashboard": "./src/hooks/dashboard.ts",
     "./hooks/chat": "./src/hooks/chat.ts",
     "./hooks/auth": "./src/hooks/auth.ts"
   },

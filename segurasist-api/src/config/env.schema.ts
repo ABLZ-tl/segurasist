@@ -80,6 +80,33 @@ export const EnvSchema = z
     SES_SENDER_DOMAIN: z.string().min(1),
     SES_CONFIGURATION_SET: z.string().min(1),
 
+    /**
+     * Adapter SES — `smtp` usa nodemailer apuntando a `SMTP_HOST:SMTP_PORT`
+     * (Mailpit en dev). `aws` usa SES real (`@aws-sdk/client-ses`). Default
+     * `smtp` en development/test, `aws` en staging/production. Resolución
+     * en `SesService` según NODE_ENV; este flag es override explícito.
+     */
+    EMAIL_TRANSPORT: z.enum(['smtp', 'aws']).optional(),
+    SMTP_HOST: z.string().optional(),
+    SMTP_PORT: z.coerce.number().int().min(1).max(65535).optional(),
+
+    /**
+     * Base URL pública del API — se incrusta en el QR de los certificados
+     * (`https://{CERT_BASE_URL}/v1/certificates/verify/{hash}`). En dev:
+     * `http://localhost:3000`. En prod: `https://api.segurasist.app`.
+     */
+    CERT_BASE_URL: z.string().url().default('http://localhost:3000'),
+
+    /** From de los emails de certificado (override por tenant si está set). */
+    EMAIL_FROM_CERT: z.string().email().default('cert@segurasist.app'),
+
+    /**
+     * Re-emisión a demanda + tracking Mailpit son sólo dev. En prod no se
+     * arranca el polling tracker (SES → SNS webhook real). Flag opcional
+     * para matar el tracker manualmente sin cambiar NODE_ENV.
+     */
+    MAILPIT_API_URL: z.string().url().default('http://localhost:8025'),
+
     // KMS
     KMS_KEY_ID: z.string().min(1),
 

@@ -32,12 +32,12 @@ import {
 } from './dto/batch.dto';
 import { INSUREDS_TEMPLATE_FILENAME, INSUREDS_TEMPLATE_MIME, LayoutsService } from './layouts.service';
 
+const ERRORS_XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+
 // El layout XLSX vive en este controller (en lugar de un módulo `layouts/`
 // dedicado) porque es un asset estrechamente acoplado al flujo de batches:
 // mismos roles que pueden subir batches lo descargan, y el contenido define
-// las columnas que `BatchesService.upload` validará. Cuando MAC-002 desbloquee
-// las columnas oficiales, solo cambia `LayoutsService` — contrato del endpoint
-// y RBAC se mantienen.
+// las columnas que `BatchesService.upload` validará.
 @Controller({ path: 'batches', version: '1' })
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class BatchesController {
@@ -116,6 +116,12 @@ export class BatchesController {
     return this.batches.findOne(id, tenant);
   }
 
+  @Get(':id/preview')
+  @Roles('admin_mac', 'operator', 'admin_segurasist', 'supervisor')
+  preview(@Param('id', new ParseUUIDPipe()) id: string, @Tenant() tenant: TenantCtx) {
+    return this.batches.preview(id, tenant);
+  }
+
   @Get(':id/errors')
   @Roles('admin_mac', 'operator', 'admin_segurasist', 'supervisor')
   listErrors(
@@ -124,6 +130,22 @@ export class BatchesController {
     @Tenant() tenant: TenantCtx,
   ) {
     return this.batches.listErrors(id, q, tenant);
+  }
+
+  @Get(':id/errors.xlsx')
+  @Roles('admin_mac', 'operator', 'admin_segurasist')
+  async errorsXlsx(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Tenant() tenant: TenantCtx,
+    @Res({ passthrough: false }) reply: FastifyReply,
+  ): Promise<void> {
+    const { filename, buffer } = await this.batches.errorsXlsx(id, tenant);
+    void reply
+      .header('Content-Type', ERRORS_XLSX_MIME)
+      .header('Content-Disposition', `attachment; filename="${filename}"`)
+      .header('Content-Length', buffer.length)
+      .header('Cache-Control', 'no-store')
+      .send(buffer);
   }
 
   @Post(':id/confirm')

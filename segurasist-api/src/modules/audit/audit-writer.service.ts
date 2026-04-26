@@ -19,6 +19,31 @@ export interface AuditChainVerification {
 }
 
 /**
+ * Discrepancia detectada en `verifyChain(source='both')` — una fila existe
+ * en DB y/o S3 con `row_hash` distinto, o una fila falta en uno de los
+ * lados. El cliente puede usar esta info para forensics.
+ */
+export interface AuditChainDiscrepancy {
+  rowId: string;
+  /** Razón legible: `'row_hash_mismatch' | 'missing_in_s3' | 'missing_in_db'`. */
+  reason: 'row_hash_mismatch' | 'missing_in_s3' | 'missing_in_db';
+  db?: { rowHash: string };
+  s3?: { rowHash: string };
+}
+
+/**
+ * Resultado extendido de `verifyChain` cuando se pide cross-source check.
+ * Compatible con `AuditChainVerification` para clientes que sólo miran
+ * `valid` y `totalRows`.
+ */
+export interface AuditChainVerificationExtended extends AuditChainVerification {
+  source: 'db' | 's3' | 'both';
+  /** Solo presente en `source='both'`. Lista de filas con discrepancia. */
+  discrepancies?: AuditChainDiscrepancy[];
+  checkedAt: string;
+}
+
+/**
  * Evento estructurado que la API quiere persistir en `audit_log`.
  *
  * `payloadDiff` es JSON arbitrario; el llamador (interceptor) ya hizo el
@@ -210,32 +235,98 @@ export class AuditWriterService implements OnModuleInit, OnModuleDestroy {
       where: { tenantId },
       orderBy: [{ occurredAt: 'asc' }, { id: 'asc' }],
     });
-
-    let prevExpected = GENESIS_HASH;
-    for (const row of rows) {
-      // 1) prev_hash debe matchear el row_hash de la fila previa (o GENESIS).
-      if (row.prevHash !== prevExpected) {
-        return { valid: false, brokenAtId: row.id, totalRows: rows.length };
-      }
-      // 2) row_hash debe matchear el recompute de los campos persistidos.
-      const recomputed = computeRowHash({
-        prevHash: row.prevHash,
-        tenantId: row.tenantId,
-        actorId: row.actorId,
-        action: row.action,
-        resourceType: row.resourceType,
-        resourceId: row.resourceId,
-        // payloadDiff puede ser null o JsonValue. Normalizamos null para que
-        // el canonical JSON matchee el insert (que pasó `event.payloadDiff ?? null`).
-        payloadDiff: row.payloadDiff ?? null,
-        occurredAt: row.occurredAt,
-      });
-      if (recomputed !== row.rowHash) {
-        return { valid: false, brokenAtId: row.id, totalRows: rows.length };
-      }
-      prevExpected = row.rowHash;
-    }
-
-    return { valid: true, totalRows: rows.length };
+    return runVerification(rows);
   }
+
+  /**
+   * Devuelve las filas del audit_log de un tenant en orden cronológico — para
+   * que `AuditChainVerifierService` pueda hacer cross-check fila a fila contra
+   * la copia en S3. Incluye `mirroredToS3` para que el cross-check ignore las
+   * filas aún no replicadas (mirror eventual de 60s).
+   */
+  async verifyChainRows(tenantId: string): Promise<{
+    rows: Array<{
+      id: string;
+      tenantId: string;
+      actorId: string | null;
+      action: string;
+      resourceType: string;
+      resourceId: string | null;
+      payloadDiff: unknown;
+      occurredAt: Date;
+      prevHash: string;
+      rowHash: string;
+      mirroredToS3: boolean;
+    }>;
+  }> {
+    if (!this.client) {
+      throw new NotImplementedException(
+        'AuditWriter sin BD configurada (DATABASE_URL_AUDIT ausente); verify-chain no aplicable.',
+      );
+    }
+    const rows = await this.client.auditLog.findMany({
+      where: { tenantId },
+      orderBy: [{ occurredAt: 'asc' }, { id: 'asc' }],
+    });
+    return {
+      rows: rows.map((r) => ({
+        id: r.id,
+        tenantId: r.tenantId,
+        actorId: r.actorId,
+        action: r.action,
+        resourceType: r.resourceType,
+        resourceId: r.resourceId,
+        payloadDiff: r.payloadDiff,
+        occurredAt: r.occurredAt,
+        prevHash: r.prevHash,
+        rowHash: r.rowHash,
+        mirroredToS3: r.mirroredToS3,
+      })),
+    };
+  }
+}
+
+/**
+ * Helper interno reutilizable. Idéntico al loop original de `verifyChain`,
+ * extraído para que `verifyChainRows` no duplique la lógica.
+ */
+function runVerification(
+  rows: Array<{
+    id: string;
+    tenantId: string;
+    actorId: string | null;
+    action: string;
+    resourceType: string;
+    resourceId: string | null;
+    payloadDiff: unknown;
+    occurredAt: Date;
+    prevHash: string;
+    rowHash: string;
+  }>,
+): AuditChainVerification {
+  let prevExpected = GENESIS_HASH;
+  for (const row of rows) {
+    // 1) prev_hash debe matchear el row_hash de la fila previa (o GENESIS).
+    if (row.prevHash !== prevExpected) {
+      return { valid: false, brokenAtId: row.id, totalRows: rows.length };
+    }
+    // 2) row_hash debe matchear el recompute de los campos persistidos.
+    const recomputed = computeRowHash({
+      prevHash: row.prevHash,
+      tenantId: row.tenantId,
+      actorId: row.actorId,
+      action: row.action,
+      resourceType: row.resourceType,
+      resourceId: row.resourceId,
+      // payloadDiff puede ser null o JsonValue. Normalizamos null para que
+      // el canonical JSON matchee el insert (que pasó `event.payloadDiff ?? null`).
+      payloadDiff: row.payloadDiff ?? null,
+      occurredAt: row.occurredAt,
+    });
+    if (recomputed !== row.rowHash) {
+      return { valid: false, brokenAtId: row.id, totalRows: rows.length };
+    }
+    prevExpected = row.rowHash;
+  }
+  return { valid: true, totalRows: rows.length };
 }

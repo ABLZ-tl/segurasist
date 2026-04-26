@@ -280,6 +280,9 @@ importers:
       typescript:
         specifier: 5.4.5
         version: 5.4.5
+      vitest:
+        specifier: 2.0.4
+        version: 2.0.4(@types/node@20.14.10)(jsdom@24.1.1)
 
   packages/config:
     devDependencies:

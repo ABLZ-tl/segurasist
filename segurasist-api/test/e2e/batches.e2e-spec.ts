@@ -1,9 +1,15 @@
 /**
- * E2E batches — L4 magic-bytes rejection.
+ * E2E batches — L4 magic-bytes rejection + flujo template/preview/errors.xlsx.
  *
  * Habla contra cognito-local (puerto 9229) para autenticarse como `admin_mac`.
- * Sube un archivo con extensión .xlsx pero contenido EXE → debe responder
- * 415 con Problem Details `UNSUPPORTED_FILE`.
+ *
+ * Casos:
+ *   1) Sube archivo EXE renombrado .xlsx → 415 UNSUPPORTED_FILE.
+ *   2) GET /v1/batches/template → XLSX válido descargable.
+ *   3) POST /v1/batches con archivo válido → 202/200 + batchId.
+ *   4) GET /v1/batches/{id}/preview tras 5s → preview con conteos (skipped
+ *      si Postgres no está disponible).
+ *   5) GET /v1/batches/{id}/errors.xlsx → XLSX válido descargable.
  *
  * Pre-requisitos: mismos que `auth.e2e-spec.ts` y `rbac.e2e-spec.ts`:
  *   - cognito-local arriba (`./scripts/cognito-local-bootstrap.sh`)
@@ -79,6 +85,28 @@ describe('Batches E2E — L4 magic bytes', () => {
   afterAll(async () => {
     if (app) await app.close();
   });
+
+  it('GET /v1/batches/template → 200 + XLSX descargable (firma ZIP)', async () => {
+    // .buffer(true) + .parse fuerza supertest a entregar el body como Buffer
+    // crudo en vez de intentar parsearlo como JSON/string (XLSX es binario).
+    const res = await request(server)
+      .get('/v1/batches/template')
+      .set('Authorization', `Bearer ${idToken}`)
+      .buffer(true)
+      .parse((response, callback) => {
+        const chunks: Buffer[] = [];
+        response.on('data', (chunk: Buffer) => chunks.push(chunk));
+        response.on('end', () => callback(null, Buffer.concat(chunks)));
+      });
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toContain('spreadsheetml.sheet');
+    expect(res.headers['content-disposition']).toMatch(/attachment;.*\.xlsx/);
+    const body = res.body as Buffer;
+    expect(Buffer.isBuffer(body)).toBe(true);
+    // Firma ZIP — XLSX es ZIP.
+    expect(body[0]).toBe(0x50);
+    expect(body[1]).toBe(0x4b);
+  }, 30_000);
 
   it('POST /v1/batches con archivo EXE renombrado a .xlsx → 415 UNSUPPORTED_FILE', async () => {
     // Construir un buffer "EXE" mínimo: cabecera MZ + basura.
