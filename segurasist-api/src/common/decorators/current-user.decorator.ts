@@ -10,6 +10,13 @@ export interface AuthUser {
   scopes: string[];
   mfaEnrolled: boolean;
   /**
+   * MFA verificado en el token actual (`amr` claim contiene `'mfa'`, o
+   * `cognito:mfa_enabled=true`). Distinto a `mfaEnrolled` (que es el flag
+   * persistente del usuario en la BD). El `JwtAuthGuard` enforza esto
+   * según `MFA_ENFORCEMENT` para roles admin.
+   */
+  mfaVerified?: boolean;
+  /**
    * Cognito user-pool de origen del token validado (defensa en profundidad
    * H3). El `RolesGuard` puede usarlo para rechazar privilege escalation
    * cross-pool: un token con `custom:role=admin_segurasist` pero

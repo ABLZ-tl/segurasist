@@ -10,6 +10,13 @@ name: CI
 #   - changes: detecta qué sub-proyecto cambió (paths-filter) para no correr
 #     todo el pipeline en cambios menores de docs/infra
 #   - api-lint-typecheck / api-unit / api-e2e: para segurasist-api
+#   - api-security-scan / web-security-scan: npm/pnpm audit + Semgrep
+#     (rulesets OWASP Top 10, JWT, secrets, runtime). Modo `--error` para que
+#     findings hagan fail del pipeline. Sólo `--audit-level=high` (low/moderate
+#     descartados por ruido — Sprint 5 va a endurecer la barra).
+#   - dependency-review: sólo PR; usa actions/dependency-review-action@v4 para
+#     bloquear vulns nuevos introducidos por el diff y deny-list de licencias
+#     copyleft fuertes (GPL-3.0 / AGPL-3.0) que rompen el modelo SaaS.
 #   - web-lint-typecheck / web-unit: para segurasist-web (admin + ui + auth)
 #   - ci-success: gate agregada — falla el pipeline si cualquier job requerido
 #     no pasó (incluye skipped por path-filter como pass implícito)
@@ -94,6 +101,47 @@ jobs:
           name: api-unit-coverage
           path: segurasist-api/coverage
           retention-days: 7
+
+  api-security-scan:
+    needs: changes
+    if: ${{ needs.changes.outputs.api == 'true' }}
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: segurasist-api
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: segurasist-api/package-lock.json
+      - run: npm ci
+
+      - name: npm audit (high+critical)
+        # Excluye low/moderate por ruido. Sprint 5: endurecer a moderate
+        # cuando esté la lista de excepciones revisada.
+        run: npm audit --audit-level=high
+
+      - name: Semgrep CI scan
+        # Rulesets:
+        #   - p/typescript: lints específicos del lenguaje
+        #   - p/owasp-top-ten: cobertura A01..A10
+        #   - p/jwt: malos usos de tokens (alg=none, etc.)
+        #   - p/secrets: credenciales hardcoded
+        #   - p/nodejs: patrones inseguros runtime (child_process, eval...)
+        # `--error` hace que el job falle si hay findings.
+        run: |
+          docker run --rm -v "${GITHUB_WORKSPACE}/segurasist-api:/src" \
+            returntocorp/semgrep:latest \
+            semgrep ci \
+              --config p/typescript \
+              --config p/owasp-top-ten \
+              --config p/jwt \
+              --config p/secrets \
+              --config p/nodejs \
+              --error
+        working-directory: ${{ github.workspace }}
 
   api-e2e:
     needs: changes
@@ -252,6 +300,68 @@ jobs:
             segurasist-web/packages/auth/coverage
           retention-days: 7
 
+  web-security-scan:
+    needs: changes
+    if: ${{ needs.changes.outputs.web == 'true' }}
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: segurasist-web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v3
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+          cache-dependency-path: segurasist-web/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+
+      - name: pnpm audit (prod, high+critical)
+        # Sólo prod deps — devDeps tienden a tener CVE noisy de tooling
+        # (eslint plugins, etc.) que no llegan al runtime.
+        run: pnpm audit --audit-level=high --prod
+
+      - name: Semgrep CI scan
+        # Rulesets:
+        #   - p/react: hooks, refs, dangerouslySetInnerHTML, etc.
+        #   - p/nextjs: SSR/SSG injection patterns
+        #   - p/typescript: idem api
+        #   - p/owasp-top-ten: cobertura cross-cutting
+        run: |
+          docker run --rm -v "${GITHUB_WORKSPACE}/segurasist-web:/src" \
+            returntocorp/semgrep:latest \
+            semgrep ci \
+              --config p/react \
+              --config p/nextjs \
+              --config p/typescript \
+              --config p/owasp-top-ten \
+              --error
+        working-directory: ${{ github.workspace }}
+
+  # ----------------------------------------------------------------------
+  # Dependency review — sólo en PRs (compara base..HEAD)
+  # ----------------------------------------------------------------------
+
+  dependency-review:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: high
+          comment-summary-in-pr: always
+          # Licencias copyleft fuertes incompatibles con modelo SaaS
+          # propietario (la integración con un componente AGPL nos
+          # forzaría a liberar el backend). MIT/Apache/BSD permitidas.
+          deny-licenses: GPL-3.0, AGPL-3.0
+
   # ----------------------------------------------------------------------
   # Aggregate gate — un solo check requerido en branch protection
   # ----------------------------------------------------------------------
@@ -261,23 +371,38 @@ jobs:
       - api-lint-typecheck
       - api-unit
       - api-e2e
+      - api-security-scan
       - web-lint-typecheck
       - web-unit
+      - web-security-scan
+      - dependency-review
     if: always()
     runs-on: ubuntu-latest
     steps:
       - name: Verify all required jobs passed (or were skipped by path-filter)
         run: |
           fail=0
+          # Jobs que aplican a todos los eventos (push y pull_request).
+          # `skipped` se trata como pass (paths-filter excluyó el subproyecto).
           for r in \
             "${{ needs.api-lint-typecheck.result }}" \
             "${{ needs.api-unit.result }}" \
             "${{ needs.api-e2e.result }}" \
+            "${{ needs.api-security-scan.result }}" \
             "${{ needs.web-lint-typecheck.result }}" \
-            "${{ needs.web-unit.result }}"; do
+            "${{ needs.web-unit.result }}" \
+            "${{ needs.web-security-scan.result }}"; do
             case "$r" in
               success|skipped) ;;
               *) echo "Job result '$r' failed gate"; fail=1 ;;
             esac
           done
+          # dependency-review sólo es required en PR. En push a main su
+          # resultado es 'skipped' por la guard `if: github.event_name == ...`.
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            case "${{ needs.dependency-review.result }}" in
+              success) ;;
+              *) echo "dependency-review failed (PR-only gate)"; fail=1 ;;
+            esac
+          fi
           exit "$fail"

@@ -81,6 +81,93 @@ Mientras Sprint 5 no entregue RDS + backups automáticos, programar `pg_dump` lo
 > Tech Lead / DevOps, no en máquinas de devs individuales (los datos seed son
 > ficticios pero el proceso instituye la disciplina).
 
+### 3.1.1 Operativa de backups (interim)
+
+> Owner: Tech Lead. Vigente desde Sprint 1 hasta el provisioning de RDS en
+> Sprint 5. Reemplaza al ejemplo crontab de [3.1](#31-backups-postgres-diarios)
+> con un script versionado.
+
+**Comando**:
+
+```bash
+cd segurasist-api
+./scripts/backup.sh
+```
+
+**Qué hace**:
+
+1. Verifica que el container `segurasist-postgres` esté `healthy`.
+2. `pg_dump --format=custom --compress=9 --no-owner --no-privileges` contra el
+   stack local.
+3. Calcula `sha256sum` del dump.
+4. Sube `<file>.dump` y `<file>.dump.sha256` a
+   `s3://segurasist-dev-audit/backups/YYYY/MM/DD/segurasist-<TS>.dump`
+   (LocalStack hoy, S3 mx-central-1 en Sprint 5).
+5. Imprime metadata firmada (timestamp UTC, tamaño, sha256, S3 URI, restore
+   command) y limpia el archivo temporal local (trap EXIT).
+
+El sha256 funciona como **interim audit-trail firmado**: dado que hoy el
+bucket no tiene Object Lock COMPLIANCE, la firma no es no-repudiable, pero sí
+permite detectar tampering posterior si el dump se conserva offline.
+
+**Frecuencia recomendada**: diaria, fuera de horario laboral.
+
+macOS (`launchd`, `~/Library/LaunchAgents/com.segurasist.backup.plist`):
+
+```xml
+<!-- Cada día a las 02:15 local. Loguea a ~/Library/Logs/segurasist-backup.log -->
+<key>Label</key><string>com.segurasist.backup</string>
+<key>ProgramArguments</key>
+<array>
+  <string>/bin/bash</string>
+  <string>-lc</string>
+  <string>cd /Users/&lt;dev&gt;/SaaS/segurasist-api &amp;&amp; ./scripts/backup.sh</string>
+</array>
+<key>StartCalendarInterval</key><dict>
+  <key>Hour</key><integer>2</integer>
+  <key>Minute</key><integer>15</integer>
+</dict>
+<key>StandardOutPath</key><string>/Users/&lt;dev&gt;/Library/Logs/segurasist-backup.log</string>
+<key>StandardErrorPath</key><string>/Users/&lt;dev&gt;/Library/Logs/segurasist-backup.log</string>
+```
+
+Linux (`/etc/cron.d/segurasist-backup`):
+
+```cron
+15 2 * * * <user> cd /opt/segurasist/segurasist-api && ./scripts/backup.sh \
+  >> /var/log/segurasist-backup.log 2>&1
+```
+
+**Restore**:
+
+```bash
+# Desde S3 (con confirmación interactiva 'yes' antes de wipe)
+./scripts/restore.sh s3://segurasist-dev-audit/backups/2026/04/26/segurasist-20260426T181310Z.dump
+
+# Desde archivo local (requiere el .sha256 paralelo)
+./scripts/restore.sh /tmp/segurasist-20260426T181310Z.dump
+```
+
+El script verifica el sha256 antes de tocar la BD y pide confirmación
+explícita (`yes`) antes de `pg_restore --clean --if-exists`.
+
+**Retención**: hoy NO se aplica retención automática (variable
+`RETENTION_DAYS=14` reservada). Sprint 5 lo cierra con S3 Lifecycle real.
+En el interim: rotación manual del bucket cada release o por incidente.
+
+**Plan de cierre — Sprint 5 (ADR-012)**:
+
+| Hoy (interim) | Sprint 5 (target) |
+| --- | --- |
+| Dump local + LocalStack S3 | RDS Postgres con automated daily backups |
+| Versioning ON, Object Lock OFF | Object Lock COMPLIANCE (audit), Lifecycle (uploads) |
+| Sin replicación | Cross-region replica mx-central-1 → us-east-1 |
+| Retención manual | 35 días automáticos + snapshot manual pre-deploy |
+| sha256 paralelo (interim integrity) | KMS-signed CloudTrail + RDS PITR |
+
+Mientras tanto, el dump + sha256 + bucket versioned cubren la disciplina
+operativa y dejan trazabilidad mínima auditable.
+
 ### 3.2 Snapshot inmediato ante hallazgos
 
 **Disparador**: cualquier hallazgo de seguridad (gitleaks pre-commit en CI, alerta de gh advanced security, comportamiento anómalo en `npm run dev`, etc.).

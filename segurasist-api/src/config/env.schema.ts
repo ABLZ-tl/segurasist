@@ -97,6 +97,23 @@ export const EnvSchema = z
     // Optional
     AWS_ENDPOINT_URL: z.string().url().optional(),
     ENABLE_SWAGGER: booleanString.optional().default('false'),
+
+    /**
+     * Política de enforcement de MFA en `JwtAuthGuard` para roles admin
+     * (`admin_segurasist`/`admin_mac`).
+     *
+     *  - `'strict'`: rechaza tokens admin sin `amr=['mfa']` (o `cognito:mfa_enabled=true`).
+     *    Default en `NODE_ENV=production`.
+     *  - `'log'`: solo loguea warning cuando un admin entra sin MFA — útil en
+     *    `development`/`test` porque cognito-local NO emite `amr` claim.
+     *    Default fuera de producción.
+     *  - `'off'`: ningún check (escape hatch). Logged on guard init.
+     *
+     * El default lo decide el código según `NODE_ENV` cuando el var no está
+     * definido (Zod marca opcional). Cuando está definido, gana el valor
+     * explícito.
+     */
+    MFA_ENFORCEMENT: z.enum(['strict', 'log', 'off']).optional(),
   })
   .superRefine((env, ctx) => {
     // M4 — Cross-validation: en producción no se permite un COGNITO_ENDPOINT

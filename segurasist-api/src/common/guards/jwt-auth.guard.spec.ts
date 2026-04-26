@@ -1,11 +1,11 @@
 import type { Env } from '@config/env.schema';
-import { ForbiddenException, UnauthorizedException } from '@nestjs/common';
+import { ForbiddenException, Logger, UnauthorizedException } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import * as jose from 'jose';
 import type * as JoseTypes from 'jose';
 import { mockHttpContext } from '../../../test/mocks/execution-context.mock';
 import { PUBLIC_KEY } from '../decorators/roles.decorator';
-import { JwtAuthGuard } from './jwt-auth.guard';
+import { JwtAuthGuard, resolveMfaEnforcement, type MfaEnforcement } from './jwt-auth.guard';
 
 jest.mock('jose', () => {
   const actual = jest.requireActual<typeof JoseTypes>('jose');
@@ -137,6 +137,7 @@ describe('JwtAuthGuard (basics)', () => {
       role: 'admin_mac',
       scopes: ['read:insureds', 'write:insureds'],
       mfaEnrolled: true,
+      mfaVerified: false,
       pool: 'admin',
     });
     expect(req.tenant).toEqual({ id: tenantId });
@@ -194,5 +195,165 @@ describe('JwtAuthGuard (basics)', () => {
     await guard.canActivate(mockHttpContext(req));
     expect((req.user as { role: string; scopes: string[] }).role).toBe('insured');
     expect((req.user as { role: string; scopes: string[] }).scopes).toEqual([]);
+  });
+});
+
+describe('resolveMfaEnforcement', () => {
+  it('respeta el override explícito independientemente del NODE_ENV', () => {
+    expect(resolveMfaEnforcement({ NODE_ENV: 'production', MFA_ENFORCEMENT: 'log' })).toBe('log');
+    expect(resolveMfaEnforcement({ NODE_ENV: 'development', MFA_ENFORCEMENT: 'strict' })).toBe('strict');
+    expect(resolveMfaEnforcement({ NODE_ENV: 'test', MFA_ENFORCEMENT: 'off' })).toBe('off');
+  });
+  it('default = strict en production', () => {
+    expect(resolveMfaEnforcement({ NODE_ENV: 'production', MFA_ENFORCEMENT: undefined })).toBe('strict');
+  });
+  it('default = log en development/test/staging', () => {
+    expect(resolveMfaEnforcement({ NODE_ENV: 'development', MFA_ENFORCEMENT: undefined })).toBe('log');
+    expect(resolveMfaEnforcement({ NODE_ENV: 'test', MFA_ENFORCEMENT: undefined })).toBe('log');
+    expect(resolveMfaEnforcement({ NODE_ENV: 'staging', MFA_ENFORCEMENT: undefined })).toBe('log');
+  });
+});
+
+describe('JwtAuthGuard MFA enforcement', () => {
+  const TENANT = '11111111-1111-1111-1111-111111111111';
+  let reflector: Reflector;
+  let warnSpy: jest.SpyInstance;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    reflector = new Reflector();
+    // Silenciar el warn del guard init (off mode) y capturarlo donde haga falta.
+    warnSpy = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+  });
+
+  afterEach(() => {
+    warnSpy.mockRestore();
+  });
+
+  function buildGuard(mode: MfaEnforcement | undefined): JwtAuthGuard {
+    return new JwtAuthGuard(makeEnv({ MFA_ENFORCEMENT: mode }), reflector);
+  }
+
+  function adminClaims(extra: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      sub: 'admin-1',
+      email: 'admin@mac.local',
+      aud: ADMIN_CLIENT,
+      token_use: 'id',
+      'custom:tenant_id': TENANT,
+      'custom:role': 'admin_mac',
+      ...extra,
+    };
+  }
+
+  function mockClaims(claims: Record<string, unknown>): void {
+    jwtVerifyMock.mockResolvedValue({
+      payload: claims,
+      protectedHeader: { alg: 'RS256' },
+    } as unknown as Awaited<ReturnType<typeof jose.jwtVerify>>);
+  }
+
+  it("strict + admin sin amr → 403 'MFA required for admin role'", async () => {
+    const guard = buildGuard('strict');
+    mockClaims(adminClaims());
+    const ctx = mockHttpContext({ headers: { authorization: 'Bearer x' } });
+    await expect(guard.canActivate(ctx)).rejects.toThrow(ForbiddenException);
+    await expect(guard.canActivate(ctx)).rejects.toThrow('MFA required for admin role');
+  });
+
+  it("strict + admin con amr=['mfa'] → 200, mfaVerified=true", async () => {
+    const guard = buildGuard('strict');
+    mockClaims(adminClaims({ amr: ['pwd', 'mfa'] }));
+    const req: Record<string, unknown> = { headers: { authorization: 'Bearer x' } };
+    await expect(guard.canActivate(mockHttpContext(req))).resolves.toBe(true);
+    expect((req.user as { mfaVerified?: boolean }).mfaVerified).toBe(true);
+  });
+
+  it('strict + admin con cognito:mfa_enabled=true → 200, mfaVerified=true (alternativa)', async () => {
+    const guard = buildGuard('strict');
+    mockClaims(adminClaims({ 'cognito:mfa_enabled': true }));
+    const req: Record<string, unknown> = { headers: { authorization: 'Bearer x' } };
+    await expect(guard.canActivate(mockHttpContext(req))).resolves.toBe(true);
+    expect((req.user as { mfaVerified?: boolean }).mfaVerified).toBe(true);
+  });
+
+  it("log + admin sin amr → 200 + warning logged 'admin sin amr=mfa'", async () => {
+    const guard = buildGuard('log');
+    mockClaims(adminClaims());
+    const req: Record<string, unknown> = { headers: { authorization: 'Bearer x' } };
+    await expect(guard.canActivate(mockHttpContext(req))).resolves.toBe(true);
+    expect((req.user as { mfaVerified?: boolean }).mfaVerified).toBe(false);
+    // Cualquier warn con 'admin sin amr=mfa' es suficiente.
+    const matched = warnSpy.mock.calls.some((call: unknown[]) =>
+      call.some((arg: unknown) => typeof arg === 'string' && arg.includes('admin sin amr=mfa')),
+    );
+    expect(matched).toBe(true);
+  });
+
+  it('off + admin sin amr → 200 sin warning de enforcement (init log es separado)', async () => {
+    const guard = buildGuard('off');
+    // El constructor ya emitió un warn `MFA_ENFORCEMENT=off`. Limpiamos para
+    // sólo inspeccionar warns de canActivate.
+    warnSpy.mockClear();
+    mockClaims(adminClaims());
+    const req: Record<string, unknown> = { headers: { authorization: 'Bearer x' } };
+    await expect(guard.canActivate(mockHttpContext(req))).resolves.toBe(true);
+    expect((req.user as { mfaVerified?: boolean }).mfaVerified).toBe(false);
+    const matched = warnSpy.mock.calls.some((call: unknown[]) =>
+      call.some(
+        (arg: unknown) =>
+          typeof arg === 'string' && (arg.includes('admin sin amr=mfa') || arg.includes('MFA missing')),
+      ),
+    );
+    expect(matched).toBe(false);
+  });
+
+  it('strict + operator sin amr → 200, sin warning, sin rechazo (operator no MFA-required)', async () => {
+    const guard = buildGuard('strict');
+    mockClaims(adminClaims({ 'custom:role': 'operator' }));
+    const req: Record<string, unknown> = { headers: { authorization: 'Bearer x' } };
+    warnSpy.mockClear();
+    await expect(guard.canActivate(mockHttpContext(req))).resolves.toBe(true);
+    expect((req.user as { role: string }).role).toBe('operator');
+    const matched = warnSpy.mock.calls.some((call: unknown[]) =>
+      call.some(
+        (arg: unknown) =>
+          typeof arg === 'string' && (arg.includes('admin sin amr=mfa') || arg.includes('MFA missing')),
+      ),
+    );
+    expect(matched).toBe(false);
+  });
+
+  it('strict + insured sin amr → 200 (todos los modos no aplican)', async () => {
+    for (const mode of ['strict', 'log', 'off'] as const) {
+      const guard = buildGuard(mode);
+      jwtVerifyMock.mockResolvedValueOnce({
+        payload: {
+          sub: 'insured-1',
+          aud: INSURED_CLIENT,
+          token_use: 'id',
+          'custom:tenant_id': TENANT,
+          'custom:role': 'insured',
+        },
+        protectedHeader: { alg: 'RS256' },
+      } as unknown as Awaited<ReturnType<typeof jose.jwtVerify>>);
+      const req: Record<string, unknown> = { headers: { authorization: 'Bearer x' } };
+      await expect(guard.canActivate(mockHttpContext(req))).resolves.toBe(true);
+      expect((req.user as { role: string }).role).toBe('insured');
+    }
+  });
+
+  it("strict + admin_segurasist sin amr (pool=admin) → 403 'MFA required'", async () => {
+    const guard = buildGuard('strict');
+    // Superadmin no necesita custom:tenant_id.
+    mockClaims({
+      sub: 'super-1',
+      email: 'super@segurasist.local',
+      aud: ADMIN_CLIENT,
+      token_use: 'id',
+      'custom:role': 'admin_segurasist',
+    });
+    const ctx = mockHttpContext({ headers: { authorization: 'Bearer x' } });
+    await expect(guard.canActivate(ctx)).rejects.toThrow('MFA required for admin role');
   });
 });

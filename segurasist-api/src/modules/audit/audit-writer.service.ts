@@ -1,5 +1,22 @@
-import { Injectable, Logger, OnModuleDestroy, OnModuleInit, Optional } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  NotImplementedException,
+  OnModuleDestroy,
+  OnModuleInit,
+  Optional,
+} from '@nestjs/common';
 import { Prisma, PrismaClient } from '@prisma/client';
+import { GENESIS_HASH, computeRowHash } from './audit-hash';
+
+/** Resultado de `verifyChain`. */
+export interface AuditChainVerification {
+  valid: boolean;
+  /** ID de la primera fila donde la cadena se rompe (si valid=false). */
+  brokenAtId?: string;
+  /** Total de filas evaluadas para el tenant. */
+  totalRows: number;
+}
 
 /**
  * Evento estructurado que la API quiere persistir en `audit_log`.
@@ -104,19 +121,60 @@ export class AuditWriterService implements OnModuleInit, OnModuleDestroy {
 
     if (!this.client) return;
 
+    const client = this.client;
+
     try {
-      const data = {
-        tenantId: event.tenantId,
-        actorId: event.actorId ?? null,
-        action: event.action,
-        resourceType: event.resourceType,
-        resourceId: event.resourceId ?? null,
-        ip: event.ip ?? null,
-        userAgent: event.userAgent ?? null,
-        payloadDiff: (event.payloadDiff as Prisma.InputJsonValue | null | undefined) ?? Prisma.JsonNull,
-        traceId: event.traceId ?? null,
-      };
-      await this.client.auditLog.create({ data });
+      // Hash chain: la fila a insertar debe enlazar con la fila previa más
+      // reciente del MISMO tenant. Hacemos SELECT ... FOR UPDATE dentro de
+      // una transacción para serializar writes concurrentes del mismo tenant
+      // (dos requests paralelos del mismo tenant insertando en milisegundos).
+      //
+      // Para tenants distintos no hay contención: el lock filtra por tenant_id.
+      await client.$transaction(async (tx) => {
+        const prev = await tx.$queryRaw<Array<{ row_hash: string }>>(
+          Prisma.sql`SELECT row_hash FROM audit_log
+                     WHERE tenant_id = ${event.tenantId}::uuid
+                     ORDER BY occurred_at DESC, id DESC
+                     LIMIT 1
+                     FOR UPDATE`,
+        );
+        const prevHash = prev.length > 0 && prev[0] ? prev[0].row_hash : GENESIS_HASH;
+
+        // occurredAt: usamos `new Date()` aquí porque la fila aún no existe;
+        // pasamos el mismo timestamp al `data` y al hash, sincronizándolos.
+        // Importante: si dejáramos que Postgres asigne `occurred_at = now()`
+        // como default, el hash computado en app sería distinto al timestamp
+        // persisted (clock skew app↔db). Lo seteamos explícito.
+        const occurredAt = new Date();
+
+        const rowHash = computeRowHash({
+          prevHash,
+          tenantId: event.tenantId,
+          actorId: event.actorId ?? null,
+          action: event.action,
+          resourceType: event.resourceType,
+          resourceId: event.resourceId ?? null,
+          payloadDiff: event.payloadDiff ?? null,
+          occurredAt,
+        });
+
+        await tx.auditLog.create({
+          data: {
+            tenantId: event.tenantId,
+            actorId: event.actorId ?? null,
+            action: event.action,
+            resourceType: event.resourceType,
+            resourceId: event.resourceId ?? null,
+            ip: event.ip ?? null,
+            userAgent: event.userAgent ?? null,
+            payloadDiff: (event.payloadDiff as Prisma.InputJsonValue | null | undefined) ?? Prisma.JsonNull,
+            traceId: event.traceId ?? null,
+            occurredAt,
+            prevHash,
+            rowHash,
+          },
+        });
+      });
     } catch (err) {
       // Aislado del pipeline HTTP. Aún así el evento queda en CloudWatch.
       this.log.warn(
@@ -129,5 +187,55 @@ export class AuditWriterService implements OnModuleInit, OnModuleDestroy {
         'AuditWriter.record persist failed',
       );
     }
+  }
+
+  /**
+   * Verifica la integridad de la cadena de hashes para un tenant. Lee todas
+   * las filas ordenadas por (occurred_at, id) y recomputa cada `row_hash`
+   * desde el génesis. Detecta:
+   *   - Tampering en cualquier campo (cambio de payloadDiff, action, etc).
+   *   - prev_hash que no matchee el row_hash de la fila anterior.
+   *   - row_hash adulterado.
+   *
+   * Devuelve la primera fila rota como `brokenAtId`. Si todas las filas
+   * verifican, `valid=true`.
+   */
+  async verifyChain(tenantId: string): Promise<AuditChainVerification> {
+    if (!this.client) {
+      throw new NotImplementedException(
+        'AuditWriter sin BD configurada (DATABASE_URL_AUDIT ausente); verify-chain no aplicable.',
+      );
+    }
+    const rows = await this.client.auditLog.findMany({
+      where: { tenantId },
+      orderBy: [{ occurredAt: 'asc' }, { id: 'asc' }],
+    });
+
+    let prevExpected = GENESIS_HASH;
+    for (const row of rows) {
+      // 1) prev_hash debe matchear el row_hash de la fila previa (o GENESIS).
+      if (row.prevHash !== prevExpected) {
+        return { valid: false, brokenAtId: row.id, totalRows: rows.length };
+      }
+      // 2) row_hash debe matchear el recompute de los campos persistidos.
+      const recomputed = computeRowHash({
+        prevHash: row.prevHash,
+        tenantId: row.tenantId,
+        actorId: row.actorId,
+        action: row.action,
+        resourceType: row.resourceType,
+        resourceId: row.resourceId,
+        // payloadDiff puede ser null o JsonValue. Normalizamos null para que
+        // el canonical JSON matchee el insert (que pasó `event.payloadDiff ?? null`).
+        payloadDiff: row.payloadDiff ?? null,
+        occurredAt: row.occurredAt,
+      });
+      if (recomputed !== row.rowHash) {
+        return { valid: false, brokenAtId: row.id, totalRows: rows.length };
+      }
+      prevExpected = row.rowHash;
+    }
+
+    return { valid: true, totalRows: rows.length };
   }
 }

@@ -6,6 +6,7 @@ import {
   ForbiddenException,
   Inject,
   Injectable,
+  Logger,
   UnauthorizedException,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
@@ -33,7 +34,21 @@ interface CognitoClaims extends JWTPayload {
    */
   token_use?: 'access' | 'id';
   client_id?: string;
+  /**
+   * MFA assurance. Cognito emite `amr: ['pwd', 'mfa', ...]` cuando el flow MFA
+   * fue completado (e.g. SMS/TOTP). En cognito-local este claim NO se emite,
+   * por eso el modo `'log'` es default fuera de producción.
+   * Fallback alternativo: `cognito:mfa_enabled` boolean (claim "Number" en
+   * algunos entornos managed). Aceptamos ambos.
+   */
+  amr?: string[];
+  'cognito:mfa_enabled'?: boolean;
 }
+
+export type MfaEnforcement = 'strict' | 'log' | 'off';
+
+/** Roles para los que la política MFA aplica (admin pool). */
+const MFA_REQUIRED_ROLES = new Set(['admin_segurasist', 'admin_mac']);
 
 export type AuthPool = 'admin' | 'insured';
 
@@ -51,12 +66,14 @@ export interface PoolVerified {
 // Cache de JWKS por user-pool (24h con stale-while-revalidate, gestionado por jose).
 @Injectable()
 export class JwtAuthGuard implements CanActivate {
+  private readonly logger = new Logger(JwtAuthGuard.name);
   private readonly jwks: JWTVerifyGetKey;
   private readonly issuer: string;
   private readonly insuredIssuer: string;
   private readonly insuredJwks: JWTVerifyGetKey;
   private readonly adminClientId: string;
   private readonly insuredClientId: string;
+  private readonly mfaEnforcement: MfaEnforcement;
 
   constructor(
     @Inject(ENV_TOKEN) env: Env,
@@ -82,6 +99,12 @@ export class JwtAuthGuard implements CanActivate {
     });
     this.adminClientId = env.COGNITO_CLIENT_ID_ADMIN;
     this.insuredClientId = env.COGNITO_CLIENT_ID_INSURED;
+    this.mfaEnforcement = resolveMfaEnforcement(env);
+    if (this.mfaEnforcement === 'off') {
+      this.logger.warn(
+        'MFA_ENFORCEMENT=off: enforcement de MFA deshabilitado para roles admin (escape hatch).',
+      );
+    }
   }
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -117,6 +140,22 @@ export class JwtAuthGuard implements CanActivate {
     const scopes = typeof claims.scope === 'string' && claims.scope.length > 0 ? claims.scope.split(' ') : [];
     const tenantId = claims['custom:tenant_id'];
 
+    // MFA enforcement — solo aplica a admins (admin_segurasist/admin_mac).
+    // Operator/supervisor/insured: bypass (insured tiene OTP de email separado;
+    // operator/supervisor recomendado pero no enforced en MVP).
+    const mfaVerified = this.detectMfa(claims);
+    if (MFA_REQUIRED_ROLES.has(role) && pool === 'admin' && !mfaVerified) {
+      const traceId = (req.id as string | undefined) ?? undefined;
+      if (this.mfaEnforcement === 'strict') {
+        this.logger.warn({ traceId, role, sub: claims.sub }, 'MFA missing for admin role (strict)');
+        throw new ForbiddenException('MFA required for admin role');
+      }
+      if (this.mfaEnforcement === 'log') {
+        this.logger.warn({ traceId, role, sub: claims.sub }, 'admin sin amr=mfa');
+      }
+      // 'off' → silencio (init log ya marcó el escape hatch).
+    }
+
     // M2 — Branch superadmin: cross-tenant. NO se setea app.current_tenant
     // (el RLS bypass se hace al nivel de rol DB, ver PrismaBypassRlsService).
     // Defensa en profundidad: el rol superadmin SÓLO se acepta si el token
@@ -130,6 +169,7 @@ export class JwtAuthGuard implements CanActivate {
         role,
         scopes,
         mfaEnrolled: true,
+        mfaVerified,
         pool,
       };
       // No tenant context: superadmin lee con PrismaBypassRlsService (BYPASSRLS).
@@ -153,10 +193,23 @@ export class JwtAuthGuard implements CanActivate {
       role,
       scopes,
       mfaEnrolled: true,
+      mfaVerified,
       pool,
     };
     req.tenant = { id: tenantId };
     return true;
+  }
+
+  /**
+   * MFA detection helper. Acepta dos shapes (Cognito real vs cognito-local):
+   *  - `amr: string[]` con `'mfa'` presente (lo que Cognito emite tras MFA).
+   *  - `cognito:mfa_enabled: true` boolean (alternativa managed).
+   * No lee otros heuristics (e.g. `event_id`) — ambiguos.
+   */
+  private detectMfa(claims: CognitoClaims): boolean {
+    if (Array.isArray(claims.amr) && claims.amr.includes('mfa')) return true;
+    if (claims['cognito:mfa_enabled'] === true) return true;
+    return false;
   }
 
   /**
@@ -224,4 +277,15 @@ export class JwtAuthGuard implements CanActivate {
     }
     return undefined;
   }
+}
+
+/**
+ * Resuelve el modo de enforcement MFA. El env explícito siempre gana; en su
+ * ausencia: `'strict'` en producción, `'log'` en development/test/staging.
+ * Justificación: cognito-local NO emite `amr` claim, así que en dev/test
+ * no podemos enforcar `'strict'` sin romper auth real local.
+ */
+export function resolveMfaEnforcement(env: Pick<Env, 'NODE_ENV' | 'MFA_ENFORCEMENT'>): MfaEnforcement {
+  if (env.MFA_ENFORCEMENT) return env.MFA_ENFORCEMENT;
+  return env.NODE_ENV === 'production' ? 'strict' : 'log';
 }

@@ -504,6 +504,13 @@ model AuditLog {
   payloadDiff  Json?       @map("payload_diff")
   traceId      String?     @map("trace_id") @db.VarChar(64)
   occurredAt   DateTime    @default(now()) @map("occurred_at")
+  /// Hash chain — `prev_hash` apunta al `row_hash` de la fila anterior por
+  /// tenant. La primera fila usa `'0' * 64` como génesis. `row_hash` es
+  /// SHA-256 de `prev_hash || tenantId || actorId || action || resourceType
+  /// || resourceId || JSON canónico(payloadDiff) || occurredAt.toISOString()`.
+  /// Tampering detection: `GET /v1/audit/verify-chain` recomputa la cadena.
+  prevHash     String      @map("prev_hash") @db.Char(64)
+  rowHash      String      @map("row_hash") @db.Char(64)
 
   tenant Tenant @relation(fields: [tenantId], references: [id])
 
