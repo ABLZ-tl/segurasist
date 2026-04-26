@@ -1,3 +1,5 @@
+import type { PrismaBypassRlsService } from '@common/prisma/prisma-bypass-rls.service';
+import { mockDeep, type DeepMockProxy } from 'jest-mock-extended';
 import { mockPrismaService } from '../../../test/mocks/prisma.mock';
 import { ReportsService } from './reports.service';
 
@@ -7,16 +9,18 @@ describe('ReportsService', () => {
   function build(): {
     svc: ReportsService;
     prisma: ReturnType<typeof mockPrismaService>;
+    bypass: DeepMockProxy<PrismaBypassRlsService>;
     redis: { get: jest.Mock; set: jest.Mock; del: jest.Mock };
   } {
     const prisma = mockPrismaService();
+    const bypass = mockDeep<PrismaBypassRlsService>();
     const redis = {
       get: jest.fn().mockResolvedValue(null),
       set: jest.fn().mockResolvedValue(undefined),
       del: jest.fn().mockResolvedValue(0),
     };
-    const svc = new ReportsService(prisma, redis as never);
-    return { svc, prisma, redis };
+    const svc = new ReportsService(prisma, bypass, redis as never);
+    return { svc, prisma, bypass, redis };
   }
 
   describe('cache behaviour', () => {
@@ -101,6 +105,50 @@ describe('ReportsService', () => {
       expect(out[0]?.altas).toBe(0);
       expect(out[0]?.bajas).toBe(0);
       expect(out[0]?.certs).toBe(0);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // M2 — superadmin cross-tenant.
+  // -------------------------------------------------------------------------
+  describe('platformAdmin (cross-tenant)', () => {
+    it('getActiveInsuredsCount con scope.platformAdmin=true usa bypass client', async () => {
+      const { svc, prisma, bypass } = build();
+      bypass.client.insured.count.mockResolvedValue(123 as never);
+      await svc.getActiveInsuredsCount({ platformAdmin: true, actorId: 'super-1' });
+      expect(prisma.client.insured.count).not.toHaveBeenCalled();
+      expect(bypass.client.insured.count).toHaveBeenCalledTimes(2);
+    });
+
+    it('getActiveInsuredsCount con scope.platformAdmin=true + tenantId aplica filtro', async () => {
+      const { svc, bypass } = build();
+      bypass.client.insured.count.mockResolvedValue(0 as never);
+      const t = '66666666-6666-6666-6666-666666666666';
+      await svc.getActiveInsuredsCount({ platformAdmin: true, tenantId: t, actorId: 'super-1' });
+      const firstCall = bypass.client.insured.count.mock.calls[0]?.[0];
+      expect((firstCall?.where as { tenantId?: string }).tenantId).toBe(t);
+    });
+
+    it('cache key usa _global_ cuando platformAdmin=true sin tenantId', async () => {
+      const { svc, bypass, redis } = build();
+      bypass.client.insured.count.mockResolvedValue(0 as never);
+      await svc.getActiveInsuredsCount({ platformAdmin: true, actorId: 'super-1' });
+      const setKey = (redis.set.mock.calls[0]?.[0] ?? '') as string;
+      expect(setKey).toBe('dashboard:_global_:activeInsureds');
+    });
+
+    it('getDashboard acepta ReportsScope (path superadmin) sin lanzar', async () => {
+      const { svc, bypass } = build();
+      bypass.client.insured.count.mockResolvedValue(0 as never);
+      bypass.client.certificate.count.mockResolvedValue(0 as never);
+      bypass.client.claim.count.mockResolvedValue(0 as never);
+      bypass.client.coverage.findMany.mockResolvedValue([] as never);
+      bypass.client.$queryRaw.mockResolvedValue([] as never);
+      bypass.client.batch.findMany.mockResolvedValue([] as never);
+      bypass.client.certificate.findMany.mockResolvedValue([] as never);
+      const out = await svc.getDashboard({ platformAdmin: true, actorId: 'super-1' });
+      expect(out.kpis.activeInsureds.value).toBe(0);
+      expect(out.volumetry).toHaveLength(12);
     });
   });
 });

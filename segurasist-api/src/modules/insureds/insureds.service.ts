@@ -23,14 +23,28 @@
  * el alta unitaria queda para sprint 3.
  */
 import { TenantCtx } from '@common/decorators/tenant.decorator';
+import { PrismaBypassRlsService } from '@common/prisma/prisma-bypass-rls.service';
 import { PrismaService } from '@common/prisma/prisma.service';
-import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { Prisma, type PrismaClient } from '@prisma/client';
 import { decodeCursor, encodeCursor } from './cursor';
 import { CreateInsuredDto, ListInsuredsQuery, UpdateInsuredDto } from './dto/insured.dto';
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 200;
+
+/**
+ * Contexto de scope para los métodos de lectura. Permite que el mismo service
+ * sirva al path tenant-scoped (`platformAdmin=false`, requiere tenantId del JWT)
+ * y al path superadmin cross-tenant (`platformAdmin=true`, lee con BYPASSRLS).
+ */
+export interface InsuredsScope {
+  platformAdmin: boolean;
+  /** Tenant a filtrar. En path RLS, lo provee el JWT. En path superadmin, opcional. */
+  tenantId?: string;
+  /** id del actor — sólo usado para logging del bypass. */
+  actorId?: string;
+}
 
 export interface InsuredListItem {
   id: string;
@@ -52,14 +66,56 @@ export interface InsuredListResult {
   prevCursor: string | null;
 }
 
+type InsuredFindMany = PrismaClient['insured']['findMany'];
+type CertificateFindMany = PrismaClient['certificate']['findMany'];
+type EmailEventFindMany = PrismaClient['emailEvent']['findMany'];
+type InsuredFindFirst = PrismaClient['insured']['findFirst'];
+
+interface ReadClient {
+  insured: { findMany: InsuredFindMany; findFirst: InsuredFindFirst };
+  certificate: { findMany: CertificateFindMany };
+  emailEvent: { findMany: EmailEventFindMany };
+}
+
 @Injectable()
 export class InsuredsService {
-  constructor(private readonly prisma: PrismaService) {}
+  private readonly log = new Logger(InsuredsService.name);
 
-  async list(query: ListInsuredsQuery, _tenant: TenantCtx): Promise<InsuredListResult> {
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly bypass: PrismaBypassRlsService,
+  ) {}
+
+  /**
+   * Selecciona el cliente Prisma adecuado según el scope:
+   *   - `platformAdmin=true`  → bypass (segurasist_admin BYPASSRLS, cross-tenant)
+   *   - `platformAdmin=false` → request-scoped (segurasist_app NOBYPASSRLS, RLS)
+   *
+   * El path bypass se loguea para auditabilidad — `actor` y `tenantQuery`
+   * (filtro opcional pasado como query param) quedan en el log estructurado.
+   */
+  private clientFor(scope: InsuredsScope): ReadClient {
+    if (scope.platformAdmin) {
+      this.log.log(
+        { msg: 'platform admin bypass', actor: scope.actorId ?? null, query: scope.tenantId ?? null },
+        'platform admin bypass',
+      );
+      return this.bypass.client as unknown as ReadClient;
+    }
+    return this.prisma.client as unknown as ReadClient;
+  }
+
+  async list(query: ListInsuredsQuery, scope: InsuredsScope): Promise<InsuredListResult> {
     const limit = Math.min(query.limit ?? DEFAULT_LIMIT, MAX_LIMIT);
+    const client = this.clientFor(scope);
 
     const where: Prisma.InsuredWhereInput = { deletedAt: null };
+    // Path superadmin: tenantId opcional (cross-tenant si no se pasa).
+    // Path RLS: el filtro lo aplica `app.current_tenant`; el tenantId del scope
+    // (que viene del JWT) ya está implícito y no necesita where adicional.
+    if (scope.platformAdmin && scope.tenantId) {
+      where.tenantId = scope.tenantId;
+    }
     if (query.status) where.status = query.status;
     if (query.packageId) where.packageId = query.packageId;
     if (query.q) {
@@ -100,7 +156,7 @@ export class InsuredsService {
       }
     }
 
-    const rows = await this.prisma.client.insured.findMany({
+    const rows = await client.insured.findMany({
       where,
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: limit + 1,
@@ -116,7 +172,7 @@ export class InsuredsService {
       // EmailEvent no liga a insured directamente sino a certificate; así que
       // resolvemos por insured → certificates → email_events. Hacemos una sola
       // ronda con groupBy para minimizar overhead.
-      const certs = await this.prisma.client.certificate.findMany({
+      const certs = await client.certificate.findMany({
         where: { insuredId: { in: ids } },
         select: { id: true, insuredId: true },
       });
@@ -128,7 +184,7 @@ export class InsuredsService {
       }
       const allCertIds = certs.map((c) => c.id);
       if (allCertIds.length > 0) {
-        const bouncedEvents = await this.prisma.client.emailEvent.findMany({
+        const bouncedEvents = await client.emailEvent.findMany({
           where: {
             certificateId: { in: allCertIds },
             eventType: 'bounced',
@@ -178,9 +234,12 @@ export class InsuredsService {
     };
   }
 
-  async findOne(id: string, _tenant: TenantCtx): Promise<unknown> {
-    const row = await this.prisma.client.insured.findFirst({
-      where: { id, deletedAt: null },
+  async findOne(id: string, scope: InsuredsScope): Promise<unknown> {
+    const client = this.clientFor(scope);
+    const where: Prisma.InsuredWhereInput = { id, deletedAt: null };
+    if (scope.platformAdmin && scope.tenantId) where.tenantId = scope.tenantId;
+    const row = await client.insured.findFirst({
+      where,
       include: { package: true, beneficiaries: { where: { deletedAt: null } } },
     });
     if (!row) throw new NotFoundException('Insured not found');

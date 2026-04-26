@@ -1,3 +1,4 @@
+import type { AuthUser } from '@common/decorators/current-user.decorator';
 import { Roles } from '@common/decorators/roles.decorator';
 import { Tenant, TenantCtx } from '@common/decorators/tenant.decorator';
 import { JwtAuthGuard } from '@common/guards/jwt-auth.guard';
@@ -15,9 +16,11 @@ import {
   Patch,
   Post,
   Query,
+  Req,
   UseGuards,
   UsePipes,
 } from '@nestjs/common';
+import type { FastifyRequest } from 'fastify';
 import {
   CreateInsuredSchema,
   ListInsuredsQuerySchema,
@@ -26,26 +29,48 @@ import {
   type ListInsuredsQuery,
   type UpdateInsuredDto,
 } from './dto/insured.dto';
-import { InsuredsService } from './insureds.service';
+import { InsuredsService, type InsuredsScope } from './insureds.service';
 
 @Controller({ path: 'insureds', version: '1' })
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class InsuredsController {
   constructor(private readonly insureds: InsuredsService) {}
 
+  /**
+   * M2 — extrae el scope (platformAdmin + tenantId) leyendo `req.user`
+   * (lo pobló `JwtAuthGuard`). Para superadmin: `tenantId` viene del query
+   * (opcional). Para roles tenant-scoped: `tenantId` viene del JWT vía
+   * `req.tenant` y el query param se ignora silenciosamente (RLS lo enforza).
+   */
+  private buildScope(
+    req: FastifyRequest & { user?: AuthUser; tenant?: TenantCtx },
+    queryTenantId: string | undefined,
+  ): InsuredsScope {
+    const platformAdmin = req.user?.platformAdmin === true;
+    return {
+      platformAdmin,
+      tenantId: platformAdmin ? queryTenantId : req.tenant?.id,
+      actorId: req.user?.id,
+    };
+  }
+
   @Get()
   @Roles('admin_mac', 'operator', 'admin_segurasist', 'supervisor')
   list(
     @Query(new ZodValidationPipe(ListInsuredsQuerySchema)) q: ListInsuredsQuery,
-    @Tenant() tenant: TenantCtx,
+    @Req() req: FastifyRequest & { user?: AuthUser; tenant?: TenantCtx },
   ) {
-    return this.insureds.list(q, tenant);
+    return this.insureds.list(q, this.buildScope(req, q.tenantId));
   }
 
   @Get(':id')
   @Roles('admin_mac', 'operator', 'admin_segurasist', 'supervisor')
-  findOne(@Param('id', new ParseUUIDPipe()) id: string, @Tenant() tenant: TenantCtx) {
-    return this.insureds.findOne(id, tenant);
+  findOne(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Query() q: { tenantId?: string },
+    @Req() req: FastifyRequest & { user?: AuthUser; tenant?: TenantCtx },
+  ) {
+    return this.insureds.findOne(id, this.buildScope(req, q.tenantId));
   }
 
   @Post()

@@ -1,3 +1,4 @@
+import type { AuthUser } from '@common/decorators/current-user.decorator';
 import { Roles } from '@common/decorators/roles.decorator';
 import { Tenant, TenantCtx } from '@common/decorators/tenant.decorator';
 import { JwtAuthGuard } from '@common/guards/jwt-auth.guard';
@@ -16,13 +17,26 @@ import {
   Post,
   Put,
   Query,
+  Req,
   UseGuards,
 } from '@nestjs/common';
+import type { FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { CoverageInputSchema } from '../packages/dto/package.dto';
-import { CoveragesService } from './coverages.service';
+import { CoveragesService, type CoveragesScope } from './coverages.service';
 
-const PackageIdQuerySchema = z.object({ packageId: z.string().uuid() });
+/**
+ * M2 — `packageId` ahora es opcional. Usos:
+ *   - tenant-scoped + sin packageId: lista todas las coverages del tenant (RLS).
+ *   - tenant-scoped + packageId: filtra por el paquete.
+ *   - superadmin (platformAdmin=true): cross-tenant; respeta tenantId opcional.
+ * `tenantId` lo respetamos sólo para superadmin (RolesGuard); el resto
+ * lo ignora silenciosamente — RLS lo enforza.
+ */
+const ListCoveragesQuerySchema = z.object({
+  packageId: z.string().uuid().optional(),
+  tenantId: z.string().uuid().optional(),
+});
 const UpsertCoveragesSchema = z.object({
   coverages: z.array(CoverageInputSchema).max(40),
 });
@@ -47,10 +61,17 @@ export class CoveragesController {
   @Get()
   @Roles('admin_segurasist', 'admin_mac', 'operator', 'supervisor')
   list(
-    @Query(new ZodValidationPipe(PackageIdQuerySchema)) q: { packageId: string },
-    @Tenant() tenant: TenantCtx,
+    @Query(new ZodValidationPipe(ListCoveragesQuerySchema))
+    q: { packageId?: string; tenantId?: string },
+    @Req() req: FastifyRequest & { user?: AuthUser; tenant?: TenantCtx },
   ) {
-    return this.coverages.list(q.packageId, tenant);
+    const platformAdmin = req.user?.platformAdmin === true;
+    const scope: CoveragesScope = {
+      platformAdmin,
+      tenantId: platformAdmin ? q.tenantId : req.tenant?.id,
+      actorId: req.user?.id,
+    };
+    return this.coverages.list(q.packageId ?? null, scope);
   }
 
   @Put(':packageId')

@@ -65,5 +65,12 @@ export const ListInsuredsQuerySchema = z.object({
     .optional(),
   limit: z.coerce.number().int().min(1).max(200).default(50),
   cursor: z.string().optional(),
+  /**
+   * M2 — Sólo respetado si el caller es `admin_segurasist` (platformAdmin).
+   * Para los demás roles, el tenant lo determina el JWT (`custom:tenant_id`)
+   * vía RLS y este parámetro queda ignorado: filtrar por otro tenant es
+   * imposible porque el rol DB es NOBYPASSRLS.
+   */
+  tenantId: z.string().uuid().optional(),
 });
 export type ListInsuredsQuery = z.infer<typeof ListInsuredsQuerySchema>;

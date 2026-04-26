@@ -10,6 +10,8 @@ export const ErrorCodes = {
   RESOURCE_NOT_FOUND: { status: 404, title: 'Recurso no encontrado' },
   VALIDATION_ERROR: { status: 422, title: 'Validación fallida' },
   INSURED_DUPLICATED: { status: 409, title: 'Asegurado duplicado' },
+  USER_EMAIL_EXISTS: { status: 409, title: 'Email ya registrado en este tenant' },
+  USER_CANNOT_DELETE_SELF: { status: 422, title: 'No puedes deshabilitarte a ti mismo' },
   BATCH_TOO_LARGE: { status: 413, title: 'Archivo demasiado grande' },
   UNSUPPORTED_FILE: { status: 415, title: 'Tipo de archivo no soportado' },
   RATE_LIMITED: { status: 429, title: 'Cuota excedida' },

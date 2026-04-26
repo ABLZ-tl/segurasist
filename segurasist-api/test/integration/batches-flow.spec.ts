@@ -21,6 +21,7 @@
  *   - duplicates.xlsx: <30s sync.
  *   - renewal_overlap.xlsx: <30s sync (depende del seed de insureds activos).
  */
+import type { PrismaBypassRlsService } from '@common/prisma/prisma-bypass-rls.service';
 import type { PrismaService } from '@common/prisma/prisma.service';
 import type { Env } from '@config/env.schema';
 import type { S3Service } from '@infra/aws/s3.service';
@@ -98,7 +99,8 @@ function makeService() {
   const sqs = mock<SqsService>();
   const parser = new BatchesParserService();
   const validator = new BatchesValidatorService();
-  const svc = new BatchesService(prisma, s3, sqs, parser, validator, ENV);
+  const bypass = mockDeep<PrismaBypassRlsService>();
+  const svc = new BatchesService(prisma, bypass, s3, sqs, parser, validator, ENV);
   return { svc, prisma, s3, sqs };
 }
 

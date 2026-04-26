@@ -6,6 +6,11 @@ export const ListBatchesQuerySchema = z.object({
     .optional(),
   limit: z.coerce.number().int().min(1).max(200).default(50),
   cursor: z.string().optional(),
+  /**
+   * M2 — Sólo respetado si el caller es `admin_segurasist` (platformAdmin).
+   * Para los demás roles está limitado por su JWT y se ignora.
+   */
+  tenantId: z.string().uuid().optional(),
 });
 export type ListBatchesQuery = z.infer<typeof ListBatchesQuerySchema>;
 

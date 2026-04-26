@@ -7,12 +7,15 @@
  * tocar PG. La verificación contra PG real vive en e2e/dashboard.e2e-spec.ts
  * cuando esté wired.
  */
+import { mockDeep } from 'jest-mock-extended';
+import type { PrismaBypassRlsService } from '../../src/common/prisma/prisma-bypass-rls.service';
 import { ReportsService } from '../../src/modules/reports/reports.service';
 import { mockPrismaService } from '../mocks/prisma.mock';
 
 describe('Dashboard cache hit performance (integration mock)', () => {
   it('2da request resuelve desde Redis sin tocar Prisma', async () => {
     const prisma = mockPrismaService();
+    const bypass = mockDeep<PrismaBypassRlsService>();
     const cache = new Map<string, string>();
     const redis = {
       get: jest.fn(async (k: string) => cache.get(k) ?? null),
@@ -22,7 +25,7 @@ describe('Dashboard cache hit performance (integration mock)', () => {
       del: jest.fn(async () => 0),
     };
     prisma.client.insured.count.mockResolvedValueOnce(100).mockResolvedValueOnce(80);
-    const svc = new ReportsService(prisma, redis as never);
+    const svc = new ReportsService(prisma, bypass, redis as never);
     const tenantId = '11111111-1111-1111-1111-111111111111';
 
     const t0 = Date.now();

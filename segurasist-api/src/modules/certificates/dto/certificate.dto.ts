@@ -6,6 +6,11 @@ export const ListCertificatesQuerySchema = z
     status: z.enum(['issued', 'reissued', 'revoked']).optional(),
     limit: z.coerce.number().int().min(1).max(100).default(20),
     cursor: z.string().uuid().optional(),
+    /**
+     * M2 — Sólo respetado si el caller es `admin_segurasist` (platformAdmin).
+     * Ignorado para roles tenant-scoped.
+     */
+    tenantId: z.string().uuid().optional(),
   })
   .strict();
 export type ListCertificatesQuery = z.infer<typeof ListCertificatesQuerySchema>;

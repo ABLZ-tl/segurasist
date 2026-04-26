@@ -61,5 +61,10 @@ export const ListPackagesQuerySchema = z.object({
   status: PackageStatusSchema.optional(),
   cursor: z.string().optional(),
   limit: z.coerce.number().int().min(1).max(100).default(50),
+  /**
+   * M2 — Sólo respetado si el caller es `admin_segurasist` (platformAdmin).
+   * Para los demás roles está limitado por su JWT y se ignora.
+   */
+  tenantId: z.string().uuid().optional(),
 });
 export type ListPackagesQuery = z.infer<typeof ListPackagesQuerySchema>;

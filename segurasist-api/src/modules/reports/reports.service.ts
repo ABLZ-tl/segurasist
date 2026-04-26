@@ -18,10 +18,11 @@
  * por week directamente en findMany).
  */
 import { TenantCtx } from '@common/decorators/tenant.decorator';
+import { PrismaBypassRlsService } from '@common/prisma/prisma-bypass-rls.service';
 import { PrismaService } from '@common/prisma/prisma.service';
 import { RedisService } from '@infra/cache/redis.service';
 import { Injectable, Logger } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { Prisma, type PrismaClient } from '@prisma/client';
 import type {
   DashboardKpi,
   DashboardResponse,
@@ -33,14 +34,53 @@ import type {
 const CACHE_TTL_SECONDS = 60;
 const VOLUMETRY_WEEKS = 12;
 
+/**
+ * M2 — Scope polimórfico. Para superadmin (platformAdmin=true), agregamos
+ * KPIs cross-tenant (o filtrados a un tenant específico si se pasa). El
+ * cache key incluye el tenantId resuelto (o `_global_` cuando es null) para
+ * que el agregado global no se mezcle con un tenant específico.
+ */
+export interface ReportsScope {
+  platformAdmin: boolean;
+  tenantId?: string;
+  actorId?: string;
+}
+
 @Injectable()
 export class ReportsService {
   private readonly log = new Logger(ReportsService.name);
 
   constructor(
     private readonly prisma: PrismaService,
+    private readonly bypass: PrismaBypassRlsService,
     private readonly redis: RedisService,
   ) {}
+
+  /**
+   * Selecciona el cliente Prisma. Para platformAdmin → bypass (cross-tenant).
+   * Logueamos cada uso del bypass para auditabilidad.
+   */
+  private clientFor(scope: ReportsScope): PrismaClient {
+    if (scope.platformAdmin) {
+      this.log.log(
+        { msg: 'platform admin bypass', actor: scope.actorId ?? null, query: scope.tenantId ?? null },
+        'platform admin bypass',
+      );
+      return this.bypass.client;
+    }
+    return this.prisma.client as unknown as PrismaClient;
+  }
+
+  /**
+   * Cache key prefix por scope. Para superadmin sin tenantId el prefix es
+   * `_global_` para no mezclar con caches por tenant específico.
+   */
+  private cacheTenantKey(scope: ReportsScope): string {
+    if (scope.platformAdmin) {
+      return scope.tenantId ?? '_global_';
+    }
+    return scope.tenantId ?? 'unknown';
+  }
 
   // ---- legacy stub endpoints (pending) ------------------------------------
   conciliation(): never {
@@ -57,18 +97,27 @@ export class ReportsService {
   }
   // -------------------------------------------------------------------------
 
-  async getDashboard(tenant: TenantCtx): Promise<DashboardResponse> {
+  /**
+   * Lectura del dashboard. Acepta dos shapes:
+   *   - `TenantCtx` (path legacy, tenant-scoped): equivale a scope con
+   *     `platformAdmin=false`.
+   *   - `ReportsScope` (path M2): superadmin (platformAdmin=true) puede pedir
+   *     agregado global o filtrar por tenantId.
+   */
+  async getDashboard(arg: TenantCtx | ReportsScope): Promise<DashboardResponse> {
+    const scope: ReportsScope = isScope(arg) ? arg : { platformAdmin: false, tenantId: arg.id };
+
     const [activeInsureds, certificates30d, claims30d, coverageConsumedPct, volumetry] = await Promise.all([
-      this.getActiveInsuredsCount(tenant.id),
-      this.getCertificatesIssued30d(tenant.id),
-      this.getClaims30d(tenant.id),
-      this.getCoverageConsumedPct(tenant.id),
-      this.getVolumetrySeries(tenant.id),
+      this.getActiveInsuredsCount(scope),
+      this.getCertificatesIssued30d(scope),
+      this.getClaims30d(scope),
+      this.getCoverageConsumedPct(scope),
+      this.getVolumetrySeries(scope),
     ]);
 
     const [recentBatches, recentCertificates] = await Promise.all([
-      this.getRecentBatches(),
-      this.getRecentCertificates(),
+      this.getRecentBatches(scope),
+      this.getRecentCertificates(scope),
     ]);
 
     return {
@@ -85,19 +134,28 @@ export class ReportsService {
     };
   }
 
-  async getActiveInsuredsCount(tenantId: string): Promise<DashboardKpi> {
-    return this.cached(`dashboard:${tenantId}:activeInsureds`, async () => {
+  /**
+   * KPI: insureds activos. Acepta `tenantId: string` (back-compat tests) o
+   * `ReportsScope` (M2). Cuando recibe string, asume path RLS tenant-scoped.
+   */
+  async getActiveInsuredsCount(arg: string | ReportsScope): Promise<DashboardKpi> {
+    const scope: ReportsScope = typeof arg === 'string' ? { platformAdmin: false, tenantId: arg } : arg;
+    const cacheKey = `dashboard:${this.cacheTenantKey(scope)}:activeInsureds`;
+    const client = this.clientFor(scope);
+    return this.cached(cacheKey, async () => {
       const now = new Date();
       const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+      const tenantWhere = scope.platformAdmin && scope.tenantId ? { tenantId: scope.tenantId } : {};
       const [current, previous] = await Promise.all([
-        this.prisma.client.insured.count({
-          where: { status: 'active', deletedAt: null },
+        client.insured.count({
+          where: { status: 'active', deletedAt: null, ...tenantWhere },
         }),
-        this.prisma.client.insured.count({
+        client.insured.count({
           where: {
             status: 'active',
             deletedAt: null,
             createdAt: { lte: thirtyDaysAgo },
+            ...tenantWhere,
           },
         }),
       ]);
@@ -105,19 +163,24 @@ export class ReportsService {
     });
   }
 
-  async getCertificatesIssued30d(tenantId: string): Promise<DashboardKpi> {
-    return this.cached(`dashboard:${tenantId}:certificates30d`, async () => {
+  async getCertificatesIssued30d(arg: string | ReportsScope): Promise<DashboardKpi> {
+    const scope: ReportsScope = typeof arg === 'string' ? { platformAdmin: false, tenantId: arg } : arg;
+    const cacheKey = `dashboard:${this.cacheTenantKey(scope)}:certificates30d`;
+    const client = this.clientFor(scope);
+    return this.cached(cacheKey, async () => {
       const now = new Date();
       const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
       const sixtyDaysAgo = new Date(now.getTime() - 60 * 24 * 60 * 60 * 1000);
+      const tenantWhere = scope.platformAdmin && scope.tenantId ? { tenantId: scope.tenantId } : {};
       const [current, previous] = await Promise.all([
-        this.prisma.client.certificate.count({
-          where: { issuedAt: { gte: thirtyDaysAgo }, deletedAt: null },
+        client.certificate.count({
+          where: { issuedAt: { gte: thirtyDaysAgo }, deletedAt: null, ...tenantWhere },
         }),
-        this.prisma.client.certificate.count({
+        client.certificate.count({
           where: {
             issuedAt: { gte: sixtyDaysAgo, lt: thirtyDaysAgo },
             deletedAt: null,
+            ...tenantWhere,
           },
         }),
       ]);
@@ -125,19 +188,24 @@ export class ReportsService {
     });
   }
 
-  async getClaims30d(tenantId: string): Promise<DashboardKpi> {
-    return this.cached(`dashboard:${tenantId}:claims30d`, async () => {
+  async getClaims30d(arg: string | ReportsScope): Promise<DashboardKpi> {
+    const scope: ReportsScope = typeof arg === 'string' ? { platformAdmin: false, tenantId: arg } : arg;
+    const cacheKey = `dashboard:${this.cacheTenantKey(scope)}:claims30d`;
+    const client = this.clientFor(scope);
+    return this.cached(cacheKey, async () => {
       const now = new Date();
       const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
       const sixtyDaysAgo = new Date(now.getTime() - 60 * 24 * 60 * 60 * 1000);
+      const tenantWhere = scope.platformAdmin && scope.tenantId ? { tenantId: scope.tenantId } : {};
       const [current, previous] = await Promise.all([
-        this.prisma.client.claim.count({
-          where: { reportedAt: { gte: thirtyDaysAgo }, deletedAt: null },
+        client.claim.count({
+          where: { reportedAt: { gte: thirtyDaysAgo }, deletedAt: null, ...tenantWhere },
         }),
-        this.prisma.client.claim.count({
+        client.claim.count({
           where: {
             reportedAt: { gte: sixtyDaysAgo, lt: thirtyDaysAgo },
             deletedAt: null,
+            ...tenantWhere,
           },
         }),
       ]);
@@ -145,12 +213,16 @@ export class ReportsService {
     });
   }
 
-  async getCoverageConsumedPct(tenantId: string): Promise<DashboardKpi> {
-    return this.cached(`dashboard:${tenantId}:coverageConsumedPct`, async () => {
+  async getCoverageConsumedPct(arg: string | ReportsScope): Promise<DashboardKpi> {
+    const scope: ReportsScope = typeof arg === 'string' ? { platformAdmin: false, tenantId: arg } : arg;
+    const cacheKey = `dashboard:${this.cacheTenantKey(scope)}:coverageConsumedPct`;
+    const client = this.clientFor(scope);
+    return this.cached(cacheKey, async () => {
       // Promedio de consumo = sum(usages count or amount) / sum(limit) por
       // cada coverage activa, ponderado por número de coverages.
-      const coverages = await this.prisma.client.coverage.findMany({
-        where: { deletedAt: null },
+      const tenantWhere = scope.platformAdmin && scope.tenantId ? { tenantId: scope.tenantId } : {};
+      const coverages = await client.coverage.findMany({
+        where: { deletedAt: null, ...tenantWhere },
         select: {
           id: true,
           limitCount: true,
@@ -159,7 +231,7 @@ export class ReportsService {
         },
       });
       if (coverages.length === 0) return { value: 0, trend: 0 };
-      const usageRows = await this.prisma.client.coverageUsage.groupBy({
+      const usageRows = await client.coverageUsage.groupBy({
         by: ['coverageId'],
         _sum: { amount: true },
         _count: { _all: true },
@@ -196,31 +268,42 @@ export class ReportsService {
    * Una sola query SQL crudo agrupa por week + métrica.
    * Devuelve siempre las 12 buckets — los faltantes se rellenan con 0.
    */
-  async getVolumetrySeries(tenantId: string): Promise<VolumetryWeek[]> {
-    return this.cached(`dashboard:${tenantId}:volumetry`, async () => {
+  async getVolumetrySeries(arg: string | ReportsScope): Promise<VolumetryWeek[]> {
+    const scope: ReportsScope = typeof arg === 'string' ? { platformAdmin: false, tenantId: arg } : arg;
+    const cacheKey = `dashboard:${this.cacheTenantKey(scope)}:volumetry`;
+    const client = this.clientFor(scope);
+    return this.cached(cacheKey, async () => {
       const now = new Date();
       const startDate = new Date(now);
       startDate.setUTCDate(startDate.getUTCDate() - VOLUMETRY_WEEKS * 7);
       const startIso = startDate.toISOString();
 
+      // Para superadmin con tenantId filter, agregamos AND tenant_id = ...
+      // Para platformAdmin sin tenantId: agregado global.
+      // Para path RLS: las policies filtran automáticamente.
+      const tenantFilter =
+        scope.platformAdmin && scope.tenantId
+          ? Prisma.sql`AND tenant_id = ${scope.tenantId}::uuid `
+          : Prisma.sql``;
+
       // Altas: insureds.created_at; Bajas: insureds donde status='cancelled'
       // con updated_at en la semana; Certs: certificates.issued_at.
-      const altas = await this.prisma.client.$queryRaw<Array<{ week: Date; n: bigint }>>(
+      const altas = await client.$queryRaw<Array<{ week: Date; n: bigint }>>(
         Prisma.sql`SELECT date_trunc('week', created_at) AS week, COUNT(*)::bigint AS n
                    FROM insureds
-                   WHERE created_at >= ${startIso}::timestamp AND deleted_at IS NULL
+                   WHERE created_at >= ${startIso}::timestamp AND deleted_at IS NULL ${tenantFilter}
                    GROUP BY 1 ORDER BY 1`,
       );
-      const bajas = await this.prisma.client.$queryRaw<Array<{ week: Date; n: bigint }>>(
+      const bajas = await client.$queryRaw<Array<{ week: Date; n: bigint }>>(
         Prisma.sql`SELECT date_trunc('week', updated_at) AS week, COUNT(*)::bigint AS n
                    FROM insureds
-                   WHERE updated_at >= ${startIso}::timestamp AND status = 'cancelled'
+                   WHERE updated_at >= ${startIso}::timestamp AND status = 'cancelled' ${tenantFilter}
                    GROUP BY 1 ORDER BY 1`,
       );
-      const certs = await this.prisma.client.$queryRaw<Array<{ week: Date; n: bigint }>>(
+      const certs = await client.$queryRaw<Array<{ week: Date; n: bigint }>>(
         Prisma.sql`SELECT date_trunc('week', issued_at) AS week, COUNT(*)::bigint AS n
                    FROM certificates
-                   WHERE issued_at >= ${startIso}::timestamp AND deleted_at IS NULL
+                   WHERE issued_at >= ${startIso}::timestamp AND deleted_at IS NULL ${tenantFilter}
                    GROUP BY 1 ORDER BY 1`,
       );
 
@@ -246,9 +329,12 @@ export class ReportsService {
     });
   }
 
-  private async getRecentBatches(): Promise<RecentBatch[]> {
-    const rows = await this.prisma.client.batch.findMany({
-      where: { deletedAt: null },
+  private async getRecentBatches(scope: ReportsScope): Promise<RecentBatch[]> {
+    const client = this.clientFor(scope);
+    const where: { deletedAt: null; tenantId?: string } = { deletedAt: null };
+    if (scope.platformAdmin && scope.tenantId) where.tenantId = scope.tenantId;
+    const rows = await client.batch.findMany({
+      where,
       orderBy: { createdAt: 'desc' },
       take: 5,
       select: {
@@ -268,9 +354,12 @@ export class ReportsService {
     }));
   }
 
-  private async getRecentCertificates(): Promise<RecentCertificate[]> {
-    const rows = await this.prisma.client.certificate.findMany({
-      where: { deletedAt: null },
+  private async getRecentCertificates(scope: ReportsScope): Promise<RecentCertificate[]> {
+    const client = this.clientFor(scope);
+    const where: { deletedAt: null; tenantId?: string } = { deletedAt: null };
+    if (scope.platformAdmin && scope.tenantId) where.tenantId = scope.tenantId;
+    const rows = await client.certificate.findMany({
+      where,
       orderBy: { issuedAt: 'desc' },
       take: 5,
       include: {
@@ -303,6 +392,10 @@ export class ReportsService {
     }
     return value;
   }
+}
+
+function isScope(arg: TenantCtx | ReportsScope): arg is ReportsScope {
+  return typeof (arg as ReportsScope).platformAdmin === 'boolean';
 }
 
 function pctChange(current: number, previous: number): number {

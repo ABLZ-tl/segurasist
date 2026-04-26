@@ -1,13 +1,23 @@
+import { CurrentUser, type AuthUser } from '@common/decorators/current-user.decorator';
 import { Roles } from '@common/decorators/roles.decorator';
 import { JwtAuthGuard } from '@common/guards/jwt-auth.guard';
 import { RolesGuard } from '@common/guards/roles.guard';
-import { BadRequestException, Controller, Get, Query, UseGuards } from '@nestjs/common';
+import { ZodValidationPipe } from '@common/pipes/zod-validation.pipe';
+import { BadRequestException, Controller, Get, Query, Req, UseGuards } from '@nestjs/common';
+import type { FastifyRequest } from 'fastify';
 import { AuditChainVerifierService } from './audit-chain-verifier.service';
 import { type AuditChainVerificationExtended } from './audit-writer.service';
-import { AuditService } from './audit.service';
+import { AuditService, type AuditCallerCtx } from './audit.service';
+import { AuditLogQuerySchema, type AuditLogQuery } from './dto/audit.dto';
 
 const UUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 const VALID_SOURCES = new Set(['db', 's3', 'both']);
+
+type ReqWithCtx = FastifyRequest & {
+  user?: AuthUser & { platformAdmin?: boolean };
+  tenant?: { id: string };
+  bypassRls?: boolean;
+};
 
 @Controller({ path: 'audit', version: '1' })
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -19,8 +29,17 @@ export class AuditController {
 
   @Get('log')
   @Roles('admin_segurasist', 'admin_mac', 'supervisor')
-  list() {
-    return this.audit.list();
+  list(
+    @Query(new ZodValidationPipe(AuditLogQuerySchema)) q: AuditLogQuery,
+    @Req() req: ReqWithCtx,
+    @CurrentUser() user: AuthUser & { platformAdmin?: boolean },
+  ) {
+    const ctx: AuditCallerCtx = {
+      platformAdmin:
+        user.platformAdmin === true || (user.role === 'admin_segurasist' && req.bypassRls === true),
+      tenantId: req.tenant?.id,
+    };
+    return this.audit.query(q, ctx);
   }
 
   /**

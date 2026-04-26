@@ -54,8 +54,16 @@ export class HttpExceptionFilter implements ExceptionFilter {
 
     if (exception instanceof HttpException) {
       const status = exception.getStatus();
-      const code = mapHttpStatusToCode(status);
       const response = exception.getResponse();
+      // Permitimos que el thrower especifique un `code` custom del catálogo
+      // (e.g. `USER_EMAIL_EXISTS`, `USER_CANNOT_DELETE_SELF`) vía la response
+      // shape `{ message, code }`. Si no, mapeamos por status como siempre.
+      const customCode =
+        typeof response === 'object' && response !== null
+          ? ((response as { code?: unknown }).code as string | undefined)
+          : undefined;
+      const code: ErrorCode =
+        customCode && customCode in ErrorCodes ? (customCode as ErrorCode) : mapHttpStatusToCode(status);
       const detail =
         typeof response === 'string'
           ? response

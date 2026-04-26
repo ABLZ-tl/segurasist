@@ -180,6 +180,33 @@ describe('JwtAuthGuard (basics)', () => {
     await expect(guard.canActivate(ctx)).rejects.toThrow('custom:tenant_id');
   });
 
+  it('admin_segurasist (pool=admin) → platformAdmin=true, sin req.tenant, bypassRls=true (M2)', async () => {
+    // Caso del bug deferred audit Sprint 1: superadmin sin custom:tenant_id
+    // (o con sentinel "GLOBAL"). El guard NO debe poblar req.tenant — debe
+    // marcar req.user.platformAdmin=true y req.bypassRls=true.
+    jwtVerifyMock.mockResolvedValueOnce({
+      payload: {
+        sub: 'super-1',
+        email: 'super@segurasist.local',
+        aud: ADMIN_CLIENT,
+        token_use: 'id',
+        // Sin custom:tenant_id (o con valor sentinel "GLOBAL"). Tampoco
+        // necesitamos amr=mfa porque MFA_ENFORCEMENT default en test es 'log'.
+        'custom:role': 'admin_segurasist',
+      },
+      protectedHeader: { alg: 'RS256' },
+    } as unknown as Awaited<ReturnType<typeof jose.jwtVerify>>);
+
+    const req: Record<string, unknown> = { headers: { authorization: 'Bearer t' } };
+    await expect(guard.canActivate(mockHttpContext(req))).resolves.toBe(true);
+    const user = req.user as { role: string; platformAdmin?: boolean; pool?: string };
+    expect(user.role).toBe('admin_segurasist');
+    expect(user.platformAdmin).toBe(true);
+    expect(user.pool).toBe('admin');
+    expect(req.tenant).toBeUndefined();
+    expect(req.bypassRls).toBe(true);
+  });
+
   it('default role=insured y scopes=[] cuando claims no los traen', async () => {
     jwtVerifyMock.mockResolvedValueOnce({
       payload: {

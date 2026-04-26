@@ -17,9 +17,10 @@
  *    (Sprint 5), un `EventPublisher` dedicado tomará estos shapes.
  */
 import { TenantCtx } from '@common/decorators/tenant.decorator';
+import { PrismaBypassRlsService } from '@common/prisma/prisma-bypass-rls.service';
 import { PrismaService } from '@common/prisma/prisma.service';
 import { ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { Prisma, type PrismaClient } from '@prisma/client';
 import {
   PACKAGE_ARCHIVED_KIND,
   PACKAGE_CREATED_KIND,
@@ -60,18 +61,46 @@ export interface PackageListResult {
   nextCursor: string | null;
 }
 
+/**
+ * M2 — scope polimórfico para reads. `platformAdmin=true` enruta al bypass
+ * client (cross-tenant); el resto pasa por RLS.
+ */
+export interface PackagesScope {
+  platformAdmin: boolean;
+  tenantId?: string;
+  actorId?: string;
+}
+
+type PackageReadClient = Pick<PrismaClient, 'package'>;
+
 @Injectable()
 export class PackagesService {
   private readonly log = new Logger(PackagesService.name);
 
   constructor(
     private readonly prisma: PrismaService,
+    private readonly bypass: PrismaBypassRlsService,
     private readonly coverages: CoveragesService,
   ) {}
 
-  async list(query: ListPackagesQuery, _tenant: TenantCtx): Promise<PackageListResult> {
+  private clientFor(scope: PackagesScope): PackageReadClient {
+    if (scope.platformAdmin) {
+      this.log.log(
+        { msg: 'platform admin bypass', actor: scope.actorId ?? null, query: scope.tenantId ?? null },
+        'platform admin bypass',
+      );
+      return this.bypass.client as unknown as PackageReadClient;
+    }
+    return this.prisma.client as unknown as PackageReadClient;
+  }
+
+  async list(query: ListPackagesQuery, scope: PackagesScope): Promise<PackageListResult> {
     const limit = query.limit ?? DEFAULT_LIMIT;
+    const client = this.clientFor(scope);
     const where: Prisma.PackageWhereInput = { deletedAt: null };
+    if (scope.platformAdmin && scope.tenantId) {
+      where.tenantId = scope.tenantId;
+    }
     if (query.status) {
       where.status = query.status;
     } else if (typeof query.active === 'boolean') {
@@ -84,7 +113,7 @@ export class PackagesService {
       where.id = { lt: query.cursor };
     }
 
-    const rows = await this.prisma.client.package.findMany({
+    const rows = await client.package.findMany({
       where,
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: limit + 1,
@@ -113,9 +142,12 @@ export class PackagesService {
     return { items, nextCursor };
   }
 
-  async findOne(id: string, _tenant: TenantCtx): Promise<PackageDetail> {
-    const row = await this.prisma.client.package.findFirst({
-      where: { id, deletedAt: null },
+  async findOne(id: string, scope: PackagesScope): Promise<PackageDetail> {
+    const client = this.clientFor(scope);
+    const where: Prisma.PackageWhereInput = { id, deletedAt: null };
+    if (scope.platformAdmin && scope.tenantId) where.tenantId = scope.tenantId;
+    const row = await client.package.findFirst({
+      where,
       include: {
         coverages: { where: { deletedAt: null }, orderBy: { createdAt: 'asc' } },
         _count: {
@@ -154,7 +186,7 @@ export class PackagesService {
         coveragesCount: dto.coverages.length,
         occurredAt: new Date().toISOString(),
       });
-      return this.findOne(created.id, tenant);
+      return this.findOne(created.id, { platformAdmin: false, tenantId: tenant.id });
     } catch (e) {
       if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
         throw new ConflictException('Package name already exists in this tenant');
@@ -196,7 +228,7 @@ export class PackagesService {
         },
         occurredAt: new Date().toISOString(),
       });
-      return this.findOne(id, tenant);
+      return this.findOne(id, { platformAdmin: false, tenantId: tenant.id });
     } catch (e) {
       if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
         throw new ConflictException('Package name already exists in this tenant');
@@ -244,7 +276,7 @@ export class PackagesService {
       occurredAt: new Date().toISOString(),
     });
 
-    return this.findOne(id, tenant);
+    return this.findOne(id, { platformAdmin: false, tenantId: tenant.id });
   }
 
   /**

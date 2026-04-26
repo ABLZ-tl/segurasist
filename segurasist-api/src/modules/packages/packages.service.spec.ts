@@ -1,25 +1,30 @@
+import type { PrismaBypassRlsService } from '@common/prisma/prisma-bypass-rls.service';
 import { ConflictException, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
+import { mockDeep, type DeepMockProxy } from 'jest-mock-extended';
 import { mockPrismaService } from '../../../test/mocks/prisma.mock';
 import type { CoveragesService } from '../coverages/coverages.service';
-import { PackagesService } from './packages.service';
+import { PackagesService, type PackagesScope } from './packages.service';
 
 describe('PackagesService', () => {
   const tenant = { id: '11111111-1111-1111-1111-111111111111' };
+  const scope: PackagesScope = { platformAdmin: false, tenantId: tenant.id, actorId: 'u1' };
 
   function build(): {
     svc: PackagesService;
     prisma: ReturnType<typeof mockPrismaService>;
+    bypass: DeepMockProxy<PrismaBypassRlsService>;
     coverages: jest.Mocked<CoveragesService>;
   } {
     const prisma = mockPrismaService();
+    const bypass = mockDeep<PrismaBypassRlsService>();
     const coverages = {
       list: jest.fn(),
       upsertForPackage: jest.fn(),
       upsertForPackageWithTx: jest.fn().mockResolvedValue([]),
     } as unknown as jest.Mocked<CoveragesService>;
-    const svc = new PackagesService(prisma, coverages);
-    return { svc, prisma, coverages };
+    const svc = new PackagesService(prisma, bypass, coverages);
+    return { svc, prisma, bypass, coverages };
   }
 
   it('list devuelve cursor-paginated y mapea counts', async () => {
@@ -36,7 +41,7 @@ describe('PackagesService', () => {
         _count: { insureds: 5 },
       },
     ] as never);
-    const out = await svc.list({ limit: 50 }, tenant);
+    const out = await svc.list({ limit: 50 }, scope);
     expect(out.items).toHaveLength(1);
     expect(out.items[0]).toMatchObject({
       id: 'p1',
@@ -61,7 +66,7 @@ describe('PackagesService', () => {
         _count: { insureds: 0 },
       })) as never,
     );
-    const out = await svc.list({ limit: 2 }, tenant);
+    const out = await svc.list({ limit: 2 }, scope);
     expect(out.items).toHaveLength(2);
     expect(out.nextCursor).toBe('p1');
   });
@@ -69,7 +74,7 @@ describe('PackagesService', () => {
   it('findOne lanza NotFound si el package no existe', async () => {
     const { svc, prisma } = build();
     prisma.client.package.findFirst.mockResolvedValue(null);
-    await expect(svc.findOne('missing', tenant)).rejects.toThrow(NotFoundException);
+    await expect(svc.findOne('missing', scope)).rejects.toThrow(NotFoundException);
   });
 
   it('findOne devuelve detalle con coverages decodificadas', async () => {
@@ -93,7 +98,7 @@ describe('PackagesService', () => {
       ],
       _count: { insureds: 3 },
     } as never);
-    const out = await svc.findOne('p1', tenant);
+    const out = await svc.findOne('p1', scope);
     expect(out.coverages).toHaveLength(1);
     expect(out.coverages[0]).toMatchObject({
       type: 'count',
@@ -164,6 +169,28 @@ describe('PackagesService', () => {
       _count: { insureds: 3 },
     } as never);
     await expect(svc.archive('p1', tenant)).rejects.toThrow(ConflictException);
+  });
+
+  // -------------------------------------------------------------------------
+  // M2 — superadmin cross-tenant: bypass client.
+  // -------------------------------------------------------------------------
+  it('list con platformAdmin=true sin tenantId usa bypass client (cross-tenant)', async () => {
+    const { svc, prisma, bypass } = build();
+    bypass.client.package.findMany.mockResolvedValue([] as never);
+    await svc.list({ limit: 50 }, { platformAdmin: true, actorId: 'super-1' });
+    expect(prisma.client.package.findMany).not.toHaveBeenCalled();
+    expect(bypass.client.package.findMany).toHaveBeenCalledTimes(1);
+    const call = bypass.client.package.findMany.mock.calls[0]?.[0];
+    expect((call?.where as { tenantId?: unknown }).tenantId).toBeUndefined();
+  });
+
+  it('list con platformAdmin=true + tenantId aplica el filtro', async () => {
+    const { svc, bypass } = build();
+    bypass.client.package.findMany.mockResolvedValue([] as never);
+    const t = '88888888-8888-8888-8888-888888888888';
+    await svc.list({ limit: 50 }, { platformAdmin: true, tenantId: t, actorId: 'super-1' });
+    const call = bypass.client.package.findMany.mock.calls[0]?.[0];
+    expect((call?.where as { tenantId?: string }).tenantId).toBe(t);
   });
 
   it('archive marca status=archived y archiva coverages cuando no hay insureds activos', async () => {

@@ -23,6 +23,19 @@ export interface AuthUser {
    * `pool=insured` no debe poder operar como admin.
    */
   pool?: 'admin' | 'insured';
+  /**
+   * M2 (Bug deferred audit Sprint 1) — flag de superadmin cross-tenant.
+   *
+   * Lo setea `JwtAuthGuard` cuando el token es `custom:role=admin_segurasist`
+   * y `pool=admin`. Indica al controller / service que debe usar
+   * `PrismaBypassRlsService` (rol DB BYPASSRLS) en lugar de `PrismaService`
+   * (request-scoped, NOBYPASSRLS) y que `req.tenant` NO existe (cross-tenant).
+   *
+   * Equivalencia con `req.bypassRls`: ambos marcadores conviven; este flag
+   * vive en `AuthUser` para que los controllers decidan el path con el
+   * `@CurrentUser()` decorator sin tocar `@Req()`.
+   */
+  platformAdmin?: boolean;
 }
 
 export const CurrentUser = createParamDecorator((_data: unknown, ctx: ExecutionContext): AuthUser => {

@@ -171,6 +171,10 @@ export class JwtAuthGuard implements CanActivate {
         mfaEnrolled: true,
         mfaVerified,
         pool,
+        // Flag explícito que los controllers usan para decidir bypass vs RLS.
+        // Equivalente a req.bypassRls (ya seteado abajo) pero accesible desde
+        // `@CurrentUser()` sin tener que inyectar `@Req()`.
+        platformAdmin: true,
       };
       // No tenant context: superadmin lee con PrismaBypassRlsService (BYPASSRLS).
       req.bypassRls = true;

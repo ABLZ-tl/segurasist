@@ -1,3 +1,4 @@
+import type { AuthUser } from '@common/decorators/current-user.decorator';
 import { Roles } from '@common/decorators/roles.decorator';
 import { Tenant, TenantCtx } from '@common/decorators/tenant.decorator';
 import { JwtAuthGuard } from '@common/guards/jwt-auth.guard';
@@ -15,8 +16,10 @@ import {
   Patch,
   Post,
   Query,
+  Req,
   UseGuards,
 } from '@nestjs/common';
+import type { FastifyRequest } from 'fastify';
 import {
   CreatePackageSchema,
   ListPackagesQuerySchema,
@@ -25,26 +28,42 @@ import {
   type ListPackagesQuery,
   type UpdatePackageDto,
 } from './dto/package.dto';
-import { PackagesService } from './packages.service';
+import { PackagesService, type PackagesScope } from './packages.service';
 
 @Controller({ path: 'packages', version: '1' })
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class PackagesController {
   constructor(private readonly packages: PackagesService) {}
 
+  private buildScope(
+    req: FastifyRequest & { user?: AuthUser; tenant?: TenantCtx },
+    queryTenantId: string | undefined,
+  ): PackagesScope {
+    const platformAdmin = req.user?.platformAdmin === true;
+    return {
+      platformAdmin,
+      tenantId: platformAdmin ? queryTenantId : req.tenant?.id,
+      actorId: req.user?.id,
+    };
+  }
+
   @Get()
   @Roles('admin_segurasist', 'admin_mac', 'operator', 'supervisor')
   list(
     @Query(new ZodValidationPipe(ListPackagesQuerySchema)) q: ListPackagesQuery,
-    @Tenant() tenant: TenantCtx,
+    @Req() req: FastifyRequest & { user?: AuthUser; tenant?: TenantCtx },
   ) {
-    return this.packages.list(q, tenant);
+    return this.packages.list(q, this.buildScope(req, q.tenantId));
   }
 
   @Get(':id')
   @Roles('admin_segurasist', 'admin_mac', 'operator', 'supervisor')
-  findOne(@Param('id', new ParseUUIDPipe()) id: string, @Tenant() tenant: TenantCtx) {
-    return this.packages.findOne(id, tenant);
+  findOne(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Query() q: { tenantId?: string },
+    @Req() req: FastifyRequest & { user?: AuthUser; tenant?: TenantCtx },
+  ) {
+    return this.packages.findOne(id, this.buildScope(req, q.tenantId));
   }
 
   @Post()

@@ -19,13 +19,23 @@
  *    JSON envelope (ver coverage-storage.ts).
  */
 import { TenantCtx } from '@common/decorators/tenant.decorator';
+import { PrismaBypassRlsService } from '@common/prisma/prisma-bypass-rls.service';
 import { PrismaService } from '@common/prisma/prisma.service';
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import type { Prisma, PrismaClient } from '@prisma/client';
 import { CoverageInputDto } from '../packages/dto/package.dto';
 import { decodeDescription, encodeDescription, toDbType } from './dto/coverage-storage';
 
 type TxClient = Omit<PrismaClient, '$connect' | '$disconnect' | '$on' | '$transaction' | '$use' | '$extends'>;
+
+/**
+ * M2 — scope polimórfico para reads.
+ */
+export interface CoveragesScope {
+  platformAdmin: boolean;
+  tenantId?: string;
+  actorId?: string;
+}
 
 export interface CoverageView {
   id: string;
@@ -42,11 +52,32 @@ export interface CoverageView {
 
 @Injectable()
 export class CoveragesService {
-  constructor(private readonly prisma: PrismaService) {}
+  private readonly log = new Logger(CoveragesService.name);
 
-  async list(packageId: string, _tenant: TenantCtx): Promise<CoverageView[]> {
-    const rows = await this.prisma.client.coverage.findMany({
-      where: { packageId, deletedAt: null },
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly bypass: PrismaBypassRlsService,
+  ) {}
+
+  /**
+   * Lista coverages. Acepta `packageId` opcional (cuando es null, devuelve
+   * todas las coverages activas del scope — usado por superadmin para listado
+   * cross-tenant).
+   */
+  async list(packageId: string | null, scope: CoveragesScope): Promise<CoverageView[]> {
+    const where: Prisma.CoverageWhereInput = { deletedAt: null };
+    if (packageId) where.packageId = packageId;
+    if (scope.platformAdmin && scope.tenantId) where.tenantId = scope.tenantId;
+
+    const client = scope.platformAdmin ? this.bypass.client : this.prisma.client;
+    if (scope.platformAdmin) {
+      this.log.log(
+        { msg: 'platform admin bypass', actor: scope.actorId ?? null, query: scope.tenantId ?? null },
+        'platform admin bypass',
+      );
+    }
+    const rows = await client.coverage.findMany({
+      where,
       orderBy: { createdAt: 'asc' },
     });
     return rows.map(toView);

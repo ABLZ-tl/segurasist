@@ -1,8 +1,9 @@
+import type { PrismaBypassRlsService } from '@common/prisma/prisma-bypass-rls.service';
 import type { Env } from '@config/env.schema';
 import type { S3Service } from '@infra/aws/s3.service';
 import type { SqsService } from '@infra/aws/sqs.service';
 import { BadRequestException, NotFoundException } from '@nestjs/common';
-import { mock } from 'jest-mock-extended';
+import { mock, mockDeep } from 'jest-mock-extended';
 import { mockPrismaService } from '../../../test/mocks/prisma.mock';
 import { BatchesService } from './batches.service';
 import { BatchesParserService } from './parser/batches-parser.service';
@@ -18,12 +19,13 @@ const ENV: Env = {
 describe('BatchesService', () => {
   function makeService() {
     const prisma = mockPrismaService();
+    const bypass = mockDeep<PrismaBypassRlsService>();
     const s3 = mock<S3Service>();
     const sqs = mock<SqsService>();
     const parser = new BatchesParserService();
     const validator = new BatchesValidatorService();
-    const svc = new BatchesService(prisma, s3, sqs, parser, validator, ENV);
-    return { svc, prisma, s3, sqs, parser, validator };
+    const svc = new BatchesService(prisma, bypass, s3, sqs, parser, validator, ENV);
+    return { svc, prisma, bypass, s3, sqs, parser, validator };
   }
 
   describe('upload — guardas básicas', () => {

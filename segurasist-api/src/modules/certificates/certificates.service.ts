@@ -39,6 +39,15 @@ import {
  */
 type UserCertScopeFilter = { insuredId: string } | null;
 
+/**
+ * M2 — Scope polimórfico para reads cross-tenant.
+ */
+export interface CertificatesScope {
+  platformAdmin: boolean;
+  tenantId?: string;
+  actorId?: string;
+}
+
 @Injectable()
 export class CertificatesService {
   private readonly log = new Logger(CertificatesService.name);
@@ -51,6 +60,19 @@ export class CertificatesService {
     @Inject(ENV_TOKEN) private readonly env: Env,
   ) {}
 
+  private readClientFor(
+    scope: CertificatesScope,
+  ): PrismaService['client'] | PrismaBypassRlsService['client'] {
+    if (scope.platformAdmin) {
+      this.log.log(
+        { msg: 'platform admin bypass', actor: scope.actorId ?? null, query: scope.tenantId ?? null },
+        'platform admin bypass',
+      );
+      return this.prismaBypass.client;
+    }
+    return this.prisma.client;
+  }
+
   /**
    * Lista paginada con cursor (UUID-based). El cursor es el ID del último
    * cert de la página previa; usamos `cursor` + `take=limit+1` para
@@ -58,7 +80,7 @@ export class CertificatesService {
    */
   async list(
     query: ListCertificatesQuery,
-    _tenant: TenantCtx,
+    arg: TenantCtx | CertificatesScope,
     user: AuthUser,
   ): Promise<{
     items: Array<{
@@ -72,13 +94,16 @@ export class CertificatesService {
     }>;
     nextCursor: string | null;
   }> {
-    const scope = this.scopeForUser(user);
+    const certScope: CertificatesScope = isCertScope(arg) ? arg : { platformAdmin: false, tenantId: arg.id };
+    const userScope = this.scopeForUser(user);
+    const client = this.readClientFor(certScope);
     const where: Record<string, unknown> = { deletedAt: null };
     if (query.insuredId) where.insuredId = query.insuredId;
     if (query.status) where.status = query.status;
-    if (scope) where.insuredId = scope.insuredId;
+    if (userScope) where.insuredId = userScope.insuredId;
+    if (certScope.platformAdmin && certScope.tenantId) where.tenantId = certScope.tenantId;
 
-    const items = await this.prisma.client.certificate.findMany({
+    const items = await client.certificate.findMany({
       where,
       orderBy: [{ issuedAt: 'desc' }, { id: 'desc' }],
       take: query.limit + 1,
@@ -100,13 +125,15 @@ export class CertificatesService {
     return { items: trimmed, nextCursor };
   }
 
-  async findOne(id: string, _tenant: TenantCtx, user: AuthUser): Promise<unknown> {
-    const cert = await this.prisma.client.certificate.findFirst({
-      where: { id, deletedAt: null },
-    });
+  async findOne(id: string, arg: TenantCtx | CertificatesScope, user: AuthUser): Promise<unknown> {
+    const certScope: CertificatesScope = isCertScope(arg) ? arg : { platformAdmin: false, tenantId: arg.id };
+    const client = this.readClientFor(certScope);
+    const where: Record<string, unknown> = { id, deletedAt: null };
+    if (certScope.platformAdmin && certScope.tenantId) where.tenantId = certScope.tenantId;
+    const cert = await client.certificate.findFirst({ where });
     if (!cert) throw new NotFoundException('Certificate not found');
     this.assertUserCanReadCert(user, cert.insuredId);
-    const emailEvents = await this.prisma.client.emailEvent.findMany({
+    const emailEvents = await client.emailEvent.findMany({
       where: { certificateId: id },
       orderBy: { occurredAt: 'desc' },
       take: 50,
@@ -311,4 +338,8 @@ export class CertificatesService {
       throw new ForbiddenException('Certificate belongs to another insured');
     }
   }
+}
+
+function isCertScope(arg: TenantCtx | CertificatesScope): arg is CertificatesScope {
+  return typeof (arg as CertificatesScope).platformAdmin === 'boolean';
 }

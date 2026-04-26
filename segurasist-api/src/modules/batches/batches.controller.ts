@@ -105,15 +105,29 @@ export class BatchesController {
   @Roles('admin_mac', 'operator', 'admin_segurasist', 'supervisor')
   list(
     @Query(new ZodValidationPipe(ListBatchesQuerySchema)) q: ListBatchesQuery,
-    @Tenant() tenant: TenantCtx,
+    @Req() req: FastifyRequest & { user?: AuthUser; tenant?: TenantCtx },
   ) {
-    return this.batches.list(q, tenant);
+    const platformAdmin = req.user?.platformAdmin === true;
+    return this.batches.list(q, {
+      platformAdmin,
+      tenantId: platformAdmin ? q.tenantId : req.tenant?.id,
+      actorId: req.user?.id,
+    });
   }
 
   @Get(':id')
   @Roles('admin_mac', 'operator', 'admin_segurasist', 'supervisor')
-  findOne(@Param('id', new ParseUUIDPipe()) id: string, @Tenant() tenant: TenantCtx) {
-    return this.batches.findOne(id, tenant);
+  findOne(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Query() q: { tenantId?: string },
+    @Req() req: FastifyRequest & { user?: AuthUser; tenant?: TenantCtx },
+  ) {
+    const platformAdmin = req.user?.platformAdmin === true;
+    return this.batches.findOne(id, {
+      platformAdmin,
+      tenantId: platformAdmin ? q.tenantId : req.tenant?.id,
+      actorId: req.user?.id,
+    });
   }
 
   @Get(':id/preview')

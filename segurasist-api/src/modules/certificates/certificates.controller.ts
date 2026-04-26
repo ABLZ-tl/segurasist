@@ -5,8 +5,9 @@ import { JwtAuthGuard } from '@common/guards/jwt-auth.guard';
 import { RolesGuard } from '@common/guards/roles.guard';
 import { ZodValidationPipe } from '@common/pipes/zod-validation.pipe';
 import { Throttle } from '@common/throttler/throttler.decorators';
-import { Body, Controller, Get, Param, ParseUUIDPipe, Post, Query, UseGuards } from '@nestjs/common';
-import { CertificatesService } from './certificates.service';
+import { Body, Controller, Get, Param, ParseUUIDPipe, Post, Query, Req, UseGuards } from '@nestjs/common';
+import type { FastifyRequest } from 'fastify';
+import { CertificatesService, type CertificatesScope } from './certificates.service';
 import {
   ListCertificatesQuerySchema,
   ListEmailEventsQuerySchema,
@@ -42,15 +43,27 @@ export class CertificatesController {
    * Endpoints autenticados. Todos requieren tenant context (excepto
    * verify arriba). El insured solo ve los suyos (filter en service).
    */
+  private buildScope(
+    req: FastifyRequest & { user?: AuthUser; tenant?: TenantCtx },
+    queryTenantId: string | undefined,
+  ): CertificatesScope {
+    const platformAdmin = req.user?.platformAdmin === true;
+    return {
+      platformAdmin,
+      tenantId: platformAdmin ? queryTenantId : req.tenant?.id,
+      actorId: req.user?.id,
+    };
+  }
+
   @Get()
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('admin_segurasist', 'admin_mac', 'operator', 'supervisor', 'insured')
   list(
     @Query(new ZodValidationPipe(ListCertificatesQuerySchema)) q: ListCertificatesQuery,
-    @Tenant() tenant: TenantCtx,
     @CurrentUser() user: AuthUser,
+    @Req() req: FastifyRequest & { user?: AuthUser; tenant?: TenantCtx },
   ) {
-    return this.certs.list(q, tenant, user);
+    return this.certs.list(q, this.buildScope(req, q.tenantId), user);
   }
 
   @Get(':id')
@@ -58,10 +71,11 @@ export class CertificatesController {
   @Roles('admin_segurasist', 'admin_mac', 'operator', 'supervisor', 'insured')
   findOne(
     @Param('id', new ParseUUIDPipe()) id: string,
-    @Tenant() tenant: TenantCtx,
+    @Query() q: { tenantId?: string },
     @CurrentUser() user: AuthUser,
+    @Req() req: FastifyRequest & { user?: AuthUser; tenant?: TenantCtx },
   ) {
-    return this.certs.findOne(id, tenant, user);
+    return this.certs.findOne(id, this.buildScope(req, q.tenantId), user);
   }
 
   @Get(':id/url')

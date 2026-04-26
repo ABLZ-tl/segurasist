@@ -1,19 +1,26 @@
+import type { PrismaBypassRlsService } from '@common/prisma/prisma-bypass-rls.service';
 import { ConflictException, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
+import { mockDeep, type DeepMockProxy } from 'jest-mock-extended';
 import { mockPrismaService } from '../../../test/mocks/prisma.mock';
 import { decodeCursor, encodeCursor } from './cursor';
-import { InsuredsService } from './insureds.service';
+import { InsuredsService, type InsuredsScope } from './insureds.service';
 
 describe('InsuredsService', () => {
   const tenant = { id: '11111111-1111-1111-1111-111111111111' };
+  // Scope tenant-scoped por defecto para preservar behaviour de los tests
+  // existentes (path RLS, no platformAdmin).
+  const scope: InsuredsScope = { platformAdmin: false, tenantId: tenant.id, actorId: 'u1' };
 
   function build(): {
     svc: InsuredsService;
     prisma: ReturnType<typeof mockPrismaService>;
+    bypass: DeepMockProxy<PrismaBypassRlsService>;
   } {
     const prisma = mockPrismaService();
-    const svc = new InsuredsService(prisma);
-    return { svc, prisma };
+    const bypass = mockDeep<PrismaBypassRlsService>();
+    const svc = new InsuredsService(prisma, bypass);
+    return { svc, prisma, bypass };
   }
 
   describe('cursor codec', () => {
@@ -41,7 +48,7 @@ describe('InsuredsService', () => {
           status: 'active',
           packageId: '22222222-2222-2222-2222-222222222222',
         },
-        tenant,
+        scope,
       );
       const call = prisma.client.insured.findMany.mock.calls[0]?.[0];
       expect(call?.where).toMatchObject({
@@ -56,7 +63,7 @@ describe('InsuredsService', () => {
       const { svc, prisma } = build();
       prisma.client.insured.findMany.mockResolvedValue([] as never);
       prisma.client.certificate.findMany.mockResolvedValue([] as never);
-      await svc.list({ limit: 50, q: 'lopez' }, tenant);
+      await svc.list({ limit: 50, q: 'lopez' }, scope);
       const call = prisma.client.insured.findMany.mock.calls[0]?.[0];
       expect((call?.where as { OR?: unknown }).OR).toBeDefined();
       const or = (call?.where as { OR: Array<Record<string, unknown>> }).OR;
@@ -83,7 +90,7 @@ describe('InsuredsService', () => {
         })) as never,
       );
       prisma.client.certificate.findMany.mockResolvedValue([] as never);
-      const out = await svc.list({ limit: 2 }, tenant);
+      const out = await svc.list({ limit: 2 }, scope);
       expect(out.items).toHaveLength(2);
       expect(out.nextCursor).not.toBeNull();
       expect(out.items[0]?.packageName).toBe('Básico');
@@ -94,7 +101,7 @@ describe('InsuredsService', () => {
       prisma.client.insured.findMany.mockResolvedValue([] as never);
       prisma.client.certificate.findMany.mockResolvedValue([] as never);
       const cursor = encodeCursor({ id: 'iX', createdAt: '2026-04-15T00:00:00.000Z' });
-      await svc.list({ limit: 50, cursor }, tenant);
+      await svc.list({ limit: 50, cursor }, scope);
       const call = prisma.client.insured.findMany.mock.calls[0]?.[0];
       const ANDcond = (call?.where as { AND?: Array<unknown> }).AND;
       expect(Array.isArray(ANDcond)).toBe(true);
@@ -120,7 +127,7 @@ describe('InsuredsService', () => {
       ] as never);
       prisma.client.certificate.findMany.mockResolvedValue([{ id: 'cert1', insuredId: 'i1' }] as never);
       prisma.client.emailEvent.findMany.mockResolvedValue([{ certificateId: 'cert1' }] as never);
-      const out = await svc.list({ limit: 50 }, tenant);
+      const out = await svc.list({ limit: 50 }, scope);
       expect(out.items[0]?.hasBounce).toBe(true);
     });
 
@@ -157,7 +164,7 @@ describe('InsuredsService', () => {
       ] as never);
       prisma.client.certificate.findMany.mockResolvedValue([{ id: 'cert1', insuredId: 'i1' }] as never);
       prisma.client.emailEvent.findMany.mockResolvedValue([{ certificateId: 'cert1' }] as never);
-      const out = await svc.list({ limit: 50, bouncedOnly: true }, tenant);
+      const out = await svc.list({ limit: 50, bouncedOnly: true }, scope);
       expect(out.items.map((i) => i.id)).toEqual(['i1']);
     });
   });
@@ -166,7 +173,7 @@ describe('InsuredsService', () => {
     it('findOne lanza NotFound si no existe', async () => {
       const { svc, prisma } = build();
       prisma.client.insured.findFirst.mockResolvedValue(null);
-      await expect(svc.findOne('missing', tenant)).rejects.toThrow(NotFoundException);
+      await expect(svc.findOne('missing', scope)).rejects.toThrow(NotFoundException);
     });
 
     it('create lanza Conflict en P2002 (CURP duplicado)', async () => {
@@ -203,6 +210,44 @@ describe('InsuredsService', () => {
           data: expect.objectContaining({ status: 'cancelled' }),
         }),
       );
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // M2 — Bug deferred audit Sprint 1: superadmin cross-tenant.
+  // El service expone un path polimórfico via `InsuredsScope.platformAdmin`:
+  // true → bypass client (cross-tenant), false → request-scoped (RLS).
+  // -------------------------------------------------------------------------
+  describe('platformAdmin (cross-tenant bypass)', () => {
+    it('list con platformAdmin=true sin tenantId usa el bypass client y NO filtra por tenant', async () => {
+      const { svc, prisma, bypass } = build();
+      bypass.client.insured.findMany.mockResolvedValue([] as never);
+      bypass.client.certificate.findMany.mockResolvedValue([] as never);
+      await svc.list({ limit: 50 }, { platformAdmin: true, actorId: 'super-1' });
+      // No usa el client request-scoped:
+      expect(prisma.client.insured.findMany).not.toHaveBeenCalled();
+      expect(bypass.client.insured.findMany).toHaveBeenCalledTimes(1);
+      const call = bypass.client.insured.findMany.mock.calls[0]?.[0];
+      // Sin tenantId: el WHERE no debe restringir por tenant.
+      expect((call?.where as { tenantId?: unknown }).tenantId).toBeUndefined();
+    });
+
+    it('list con platformAdmin=true + tenantId aplica el filtro tenantId', async () => {
+      const { svc, bypass } = build();
+      bypass.client.insured.findMany.mockResolvedValue([] as never);
+      bypass.client.certificate.findMany.mockResolvedValue([] as never);
+      const someTenant = '99999999-9999-9999-9999-999999999999';
+      await svc.list({ limit: 50 }, { platformAdmin: true, tenantId: someTenant, actorId: 'super-1' });
+      const call = bypass.client.insured.findMany.mock.calls[0]?.[0];
+      expect((call?.where as { tenantId?: string }).tenantId).toBe(someTenant);
+    });
+
+    it('findOne con platformAdmin=true usa bypass client', async () => {
+      const { svc, prisma, bypass } = build();
+      bypass.client.insured.findFirst.mockResolvedValue({ id: 'i1' } as never);
+      await svc.findOne('i1', { platformAdmin: true, actorId: 'super-1' });
+      expect(prisma.client.insured.findFirst).not.toHaveBeenCalled();
+      expect(bypass.client.insured.findFirst).toHaveBeenCalledTimes(1);
     });
   });
 });

@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { TenantCtx } from '@common/decorators/tenant.decorator';
+import { PrismaBypassRlsService } from '@common/prisma/prisma-bypass-rls.service';
 import { PrismaService } from '@common/prisma/prisma.service';
 import { ENV_TOKEN } from '@config/config.module';
 import type { Env } from '@config/env.schema';
@@ -68,18 +69,39 @@ export interface PreviewResponse {
  * se fija automáticamente. Los workers consumen mensajes de SQS con tenantId
  * explícito y deben usar `PrismaBypassRlsService` o crear un contexto manual.
  */
+/**
+ * M2 — Scope polimórfico para read paths.
+ */
+export interface BatchesScope {
+  platformAdmin: boolean;
+  tenantId?: string;
+  actorId?: string;
+}
+
 @Injectable()
 export class BatchesService {
   private readonly log = new Logger(BatchesService.name);
 
   constructor(
     private readonly prisma: PrismaService,
+    private readonly bypass: PrismaBypassRlsService,
     private readonly s3: S3Service,
     private readonly sqs: SqsService,
     private readonly parser: BatchesParserService,
     private readonly validator: BatchesValidatorService,
     @Inject(ENV_TOKEN) private readonly env: Env,
   ) {}
+
+  private readClientFor(scope: BatchesScope): PrismaService['client'] | PrismaBypassRlsService['client'] {
+    if (scope.platformAdmin) {
+      this.log.log(
+        { msg: 'platform admin bypass', actor: scope.actorId ?? null, query: scope.tenantId ?? null },
+        'platform admin bypass',
+      );
+      return this.bypass.client;
+    }
+    return this.prisma.client;
+  }
 
   // ---------------------------------------------------------------------
   // upload
@@ -214,9 +236,14 @@ export class BatchesService {
   // ---------------------------------------------------------------------
   // list / findOne / listErrors
   // ---------------------------------------------------------------------
+  /**
+   * M2 — Acepta `BatchesScope` o `TenantCtx` (back-compat). En el path
+   * superadmin, lee con bypass client (cross-tenant) y respeta `tenantId`
+   * opcional.
+   */
   async list(
     q: ListBatchesQuery,
-    _tenant: TenantCtx,
+    arg: TenantCtx | BatchesScope,
   ): Promise<{
     items: Array<{
       id: string;
@@ -229,9 +256,12 @@ export class BatchesService {
     }>;
     nextCursor: string | null;
   }> {
+    const scope: BatchesScope = isBatchesScope(arg) ? arg : { platformAdmin: false, tenantId: arg.id };
+    const client = this.readClientFor(scope);
     const where: Record<string, unknown> = { deletedAt: null };
     if (q.status) where.status = q.status;
-    const items = await this.prisma.client.batch.findMany({
+    if (scope.platformAdmin && scope.tenantId) where.tenantId = scope.tenantId;
+    const items = await client.batch.findMany({
       where,
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: q.limit + 1,
@@ -252,10 +282,12 @@ export class BatchesService {
     return { items: trimmed, nextCursor };
   }
 
-  async findOne(id: string, _tenant: TenantCtx): Promise<unknown> {
-    const batch = await this.prisma.client.batch.findFirst({
-      where: { id, deletedAt: null },
-    });
+  async findOne(id: string, arg: TenantCtx | BatchesScope): Promise<unknown> {
+    const scope: BatchesScope = isBatchesScope(arg) ? arg : { platformAdmin: false, tenantId: arg.id };
+    const client = this.readClientFor(scope);
+    const where: Record<string, unknown> = { id, deletedAt: null };
+    if (scope.platformAdmin && scope.tenantId) where.tenantId = scope.tenantId;
+    const batch = await client.batch.findFirst({ where });
     if (!batch) throw new NotFoundException('Batch no encontrado');
     return batch;
   }
@@ -593,4 +625,8 @@ export class BatchesService {
    * desde aquí para que workers tengan un solo punto de import.
    */
   static buildInsuredCreatedEvent = buildInsuredCreatedEvent;
+}
+
+function isBatchesScope(arg: TenantCtx | BatchesScope): arg is BatchesScope {
+  return typeof (arg as BatchesScope).platformAdmin === 'boolean';
 }
