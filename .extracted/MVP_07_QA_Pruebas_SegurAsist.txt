@@ -1,0 +1,530 @@
+Plan QA y Estrategia de Pruebas — MVP SegurAsist
+Pirámide de pruebas · Casos críticos · Cross-tenant gate · DAST · Performance · UAT con MAC · Release gates
+Campo
+Valor
+Documento
+Plan QA y Estrategia de Pruebas — MVP SegurAsist
+Versión
+v1.0 – Abril 2026
+Audiencia
+QA, Tech Lead, Backend, Frontend, DevOps, PO, CISO
+Clasificación
+Interno – Confidencial
+Cliente ancla
+Hospitales MAC – Roy / Innovación Segura
+Fecha
+2026-04-25
+
+1. Estrategia general
+La calidad del MVP de SegurAsist se construye con una pirámide de pruebas balanceada (60% unitarios, 25% integración, 10% E2E, 5% manual exploratorio), pruebas de seguridad continuas (SAST, SCA, DAST, cross-tenant gate), pruebas de rendimiento por release y un proceso UAT con MAC en sprint 6.
+QA es responsabilidad compartida: cada developer es dueño de los tests de su código; el rol QA dedicado lidera estrategia, automatiza E2E, ejecuta pruebas de seguridad y rendimiento, y valida criterios de release. La filosofía es shift-left: cada bug encontrado en staging tiene que generar un test que lo previene a futuro.
+1.1 Objetivos de calidad
+	•	Cobertura unitaria backend ≥70%, frontend ≥60%.
+	•	100% de endpoints con tests cross-tenant (gate de PR).
+	•	0 defectos Críticos/Altos abiertos al Go-Live.
+	•	0 hallazgos High/Critical de SAST/SCA/DAST sin remediación al Go-Live.
+	•	100% historias del PRD con E2E happy path verde.
+	•	Lighthouse Accessibility ≥90 portal asegurado, ≥85 admin.
+	•	Performance: API p95 ≤500 ms, portal LCP ≤2.0 s, admin LCP ≤2.5 s.
+
+2. Pirámide de pruebas
+Capa
+% del esfuerzo
+Herramienta
+Quien escribe
+Cuándo corre
+Unit (puro)
+60%
+Vitest (FE), Jest (BE)
+Developer del feature
+Local + cada PR
+Integración (módulo + dependencias reales)
+25%
+Jest + supertest + testcontainers; Vitest + MSW
+Developer + QA en críticos
+Cada PR
+Cross-tenant security gate
+incluido en integración
+Jest spec dedicada
+QA + Backend lead
+Cada PR (bloqueante)
+Contract (API vs OpenAPI)
+incluido
+openapi-validator-middleware
+Backend dev
+Cada PR
+E2E happy path
+10%
+Playwright
+QA con apoyo del feature owner
+Push main, nightly, pre-release
+Visual regression
+incluido en E2E
+Playwright snapshots
+QA
+Push main
+Performance
+3%
+k6, Lighthouse CI, JMeter
+QA + DevOps
+Pre-release; semanal
+Seguridad (DAST)
+1%
+OWASP ZAP
+QA + Security
+Cada PR contra staging + nightly
+Manual exploratorio
+1%
+Charters + Notion
+QA con stakeholder
+Por sprint review
+UAT
+<1%
+Scripts en Notion
+PO + MAC + QA
+Sprint 6
+
+3. Casos de prueba críticos por funcionalidad
+Subset bloqueante para liberar a staging y a producción. Cada caso incluye precondiciones, pasos, datos y expectativa. Cobertura completa en TestRail / Notion.
+3.1 F1 — Carga masiva de asegurados
+ID
+Caso
+Datos
+Resultado esperado
+TC-101
+Subir layout válido 1k filas
+1000 filas correctas
+Preview en ≤30 s; 1000 válidas, 0 error
+TC-102
+Subir layout con 50 filas con CURP inválida
+1000 filas; 50 con CURP malformada
+950 válidas, 50 errores con código CURP_INVALID
+TC-103
+Subir layout con duplicados intra-archivo
+100 filas, 10 duplicadas en CURP
+10 marcadas DUPLICATED_IN_FILE
+TC-104
+Subir layout con duplicados contra BD
+10 CURPs ya existentes activos
+10 marcadas DUPLICATED_IN_TENANT
+TC-105
+Subir layout con package_id inexistente
+5 filas con paquete inválido
+5 marcadas PACKAGE_NOT_FOUND
+TC-106
+Confirmar lote y verificar generación de certificados
+Lote válido 100
+100 certificados generados ≤5 min, 100 emails enviados
+TC-107
+Subir archivo > 25 MB
+Archivo 30 MB
+HTTP 413 con código BATCH_TOO_LARGE
+TC-108
+Subir archivo MIME inválido
+.pdf renombrado a .xlsx
+Rechazo con código UNSUPPORTED_FILE
+TC-109
+Subir archivo corrupto
+Bytes aleatorios
+Estado batch failed con detalle
+TC-110
+Operador A no ve lote de operador del tenant B
+Sesión tenant A
+GET /batches no incluye lote tenant B
+3.2 F2 — Dashboard administración
+ID
+Caso
+Datos
+Resultado esperado
+TC-201
+KPIs reflejan último alta
+Alta hace 30s
+Asegurados activos +1 en ≤60 s
+TC-202
+Listado paginado 60k registros
+60k insureds en BD
+Primer scroll ≤2 s p95
+TC-203
+Filtro paquete + estado
+Combinación
+Resultados consistentes con BD
+TC-204
+Búsqueda por CURP parcial
+"PEPM" devuelve N
+Resultados ≤500 ms
+TC-205
+Vista 360 con asegurado sin certificados
+Borde
+Tab certificados vacío con EmptyState
+TC-206
+Exportar XLSX 50k filas
+Filtro amplio
+Descarga ≤30 s, archivo válido
+TC-207
+Cambio de tenant Admin SegurAsist
+Sesión multi-tenant
+Repinta sin mezcla; tests 0 cross-tenant
+3.3 F3 — Certificados
+ID
+Caso
+Datos
+Resultado esperado
+TC-301
+Generación PDF estándar
+Insured nuevo
+PDF en S3 ≤10 s; metadata presente; QR válido
+TC-302
+Email entregado
+SES sandbox out
+Estado delivered en ≤2 min; visible en UI
+TC-303
+Hard bounce
+Email inválido
+Estado bounced; alerta si rate > 5%
+TC-304
+URL S3 expira en 7 días
+URL emitida
+Día 8: 403
+TC-305
+Reemisión preserva versión anterior
+Reissue 1→2
+Ambas versiones consultables
+TC-306
+Plantilla con branding tenant aplicado
+Tenant MAC
+Logo + colores MAC visibles
+TC-307
+QR de verificación funciona
+Escanear QR
+Endpoint /verify/{hash} responde 200 con datos
+3.4 F4 — Portal asegurado
+ID
+Caso
+Datos
+Resultado esperado
+TC-401
+Login OTP email
+CURP existente
+OTP llega ≤60 s; verificación abre Home
+TC-402
+5 intentos fallidos OTP
+Códigos incorrectos
+Lockout temporal 5 min; mensaje claro
+TC-403
+Vigencia mostrada correctamente
+Insured vigente
+Badge VIGENTE verde, fecha exacta
+TC-404
+Vigencia próxima a vencer (7 días)
+Insured con expira en 5d
+Badge AMBER PRÓXIMA A VENCER
+TC-405
+Vigencia vencida
+Insured con valid_to ayer
+Badge VENCIDA roja
+TC-406
+Coberturas con consumo
+Insured con uso
+Barra refleja usado/total
+TC-407
+Descarga PDF certificado
+Insured con certificado
+PDF se sirve correctamente
+TC-408
+Botón llamar a MAC en mobile
+Viewport 360px
+Dispara dialer tel:
+TC-409
+Reportar siniestro
+Form completo
+Ticket creado; acuse mostrado
+TC-410
+Lighthouse a11y
+Audit
+Score ≥90
+TC-411
+Asegurado A no ve datos de B
+Sesión A
+API /me devuelve solo datos de A
+3.5 F5 — Chatbot
+ID
+Caso
+Datos
+Resultado esperado
+TC-501
+Pregunta sobre vigencia personalizada
+"¿hasta cuándo es mi póliza?"
+Responde con fecha real del asegurado
+TC-502
+Pregunta KB genérica
+"¿qué cubre Premium?"
+Responde con info de paquete
+TC-503
+Pregunta sin match
+"¿cuál es el clima?"
+Fallback con sugerencias / escalar
+TC-504
+Escalar a humano
+"hablar con asesor"
+Ofrece llamar y crear ticket
+TC-505
+Histórico persistente
+Sesión nueva mismo asegurado
+Ve conversaciones de los últimos 30 días
+TC-506
+Admin edita KB y refleja
+Cambio en backoffice
+Visible en portal en ≤5 min
+3.6 F6 — Reportes
+ID
+Caso
+Datos
+Resultado esperado
+TC-601
+Conciliación mensual cerrada
+Mes pasado completo
+PDF + XLSX generados; cifras cuadran con BD
+TC-602
+Volumetría rango grande (90 d)
+Filtro 90d
+Render ≤3 s
+TC-603
+Utilización por paquete
+Premium con consumo
+Top-N consumidores correcto
+TC-604
+Schedule envío automático
+Cron 1° hábil 9 AM
+Email llega; PDF correcto
+TC-605
+Reporte tenant A no incluye datos B
+Multi-tenant
+Filas exclusivamente de A
+
+4. Gate cross-tenant — el más importante
+Aislamiento multi-tenant es controles V2 "AppSec – Aislamiento Multitenant" + "IAM – RBAC/ABAC". Es el único control donde una falla pasa de Medio a Crítico instantáneamente. Por eso tiene una suite dedicada que corre en cada PR y bloquea merge.
+4.1 Suite test/security/cross-tenant.spec.ts
+Para cada endpoint que recibe tenant_id implícito (es decir, todos excepto /v1/auth/*), se prueba que un usuario autenticado en tenant A intentando operar sobre recurso que pertenece a tenant B obtenga 404 (preferido) o 403, NUNCA 200 ni datos.
+4.2 Patrones cubiertos
+	•	GET /resource/{id} con id de otro tenant → 404.
+	•	GET /resource?filter=X devuelve únicamente recursos del tenant del JWT (count en BD vs count en respuesta).
+	•	PATCH /resource/{id} con id de otro tenant → 404 + sin modificación BD.
+	•	DELETE /resource/{id} con id de otro tenant → 404 + sin modificación BD.
+	•	Cross-tenant via filtros: ?tenantId=B en query string ignorado/rechazado.
+	•	Cross-tenant via SQL injection: payloads conocidos OWASP rechazados.
+	•	RLS efectiva: query directa con usuario app sin SET app.current_tenant devuelve 0 filas.
+	•	Bucket S3 prefijo de tenant respetado en URLs presigned.
+Si cualquier test pasa filas/ids del otro tenant, la build falla en rojo. PagerDuty P1 si llega a main de algún modo.
+
+5. Pruebas de seguridad continuas
+5.1 SAST — Semgrep
+	•	Ruleset: p/owasp-top-ten + p/typescript + p/javascript + reglas custom para Prisma sin tenantId.
+	•	Falla PR si findings High o Critical.
+	•	Findings Medium → ticket Linear con SLA 30 d.
+	•	Falsos positivos: marcados con // semgrep-disable-next-line con justificación obligatoria.
+5.2 SCA — Dependabot + npm audit + Trivy
+	•	Dependabot semanal en ambos repos para npm + GitHub Actions.
+	•	npm audit en CI; falla si severity ≥ high.
+	•	Trivy escanea imágenes Docker en build-image; falla si CVE Critical o High sin fix disponible (excepción documentada).
+	•	Renovate para Terraform providers semanal.
+5.3 DAST — OWASP ZAP
+	•	ZAP Baseline scan corre en cada deploy a staging contra api.staging.segurasist.mx + portal.
+	•	ZAP Full scan nightly contra staging.
+	•	Falla deploy si hallazgos High; Medium genera ticket.
+	•	Reglas custom: chequeo de headers de seguridad, JWT en URLs, secretos en HTML.
+5.4 IAST y otros (futuro)
+	•	BurpSuite manual en sprint 5 por QA + CISO sobre flujos críticos.
+	•	Checkov en Terraform PRs (chequeos IaC).
+	•	gitleaks pre-commit hook + en CI.
+	•	Pentest externo formal Q3-2026 (post Go-Live).
+5.5 Pentest interno (sprint 5)
+Caja blanca por equipo QA + CISO con apoyo de Backend Sr. Cobertura mínima:
+	•	OWASP API Security Top 10 sobre /v1/* completo.
+	•	OWASP Web Top 10 sobre admin y portal asegurado.
+	•	Auth: brute force, JWT replay, JWT alg=none, kid manipulation, OTP race condition.
+	•	Authz: IDOR (insureds, certificates, batches, claims), elevación de privilegios.
+	•	Multi-tenant: 30 escenarios cross-tenant manuales adicionales a los automatizados.
+	•	Storage: enumeración de buckets, URLs presigned forjadas, path traversal.
+	•	Email: spoofing, reinjection en campos.
+	•	PDF: XSS persistido en plantilla, exfiltración de cookie.
+	•	WAF: bypass de rate limit, payloads SQL/XSS conocidos.
+
+6. Pruebas de rendimiento
+6.1 Cargas objetivo
+Escenario
+Carga
+Métrica clave
+Pasa si
+API CRUD listados
+100 VU sostenidos 10 min
+p95 latencia, error rate
+p95 ≤500 ms; errores ≤0.5%
+API export XLSX 50k
+10 concurrent
+Tiempo total
+≤30 s p95; sin OOM
+Carga masiva 10k filas
+5 lotes en paralelo
+Latencia confirm + tiempo procesamiento
+Confirm ≤2 s; processing ≤15 min
+Generación PDF burst
+200 invocaciones/min
+Tiempo p95 + cold starts
+p95 ≤10 s; cold start ≤2 s con provisioned concurrency
+Portal asegurado login
+1000 VU rampa 5 min
+p95 OTP delivery + verify
+OTP ≤60 s; verify ≤500 ms
+Dashboard admin home
+100 VU
+LCP, INP
+LCP ≤2.5 s; INP ≤300 ms
+6.2 Herramientas y cadencia
+	•	k6 para API tests; scripts en repo /tests/perf/.
+	•	Lighthouse CI con budgets en lighthouse.config.js; corre en cada deploy a staging.
+	•	JMeter opcional para escenarios complejos multipaso.
+	•	Resultados archivados como artifacts del workflow + tendencia en dashboard CloudWatch.
+6.3 Capacity test (sprint 5)
+Validar que la arquitectura sostiene 60k MAU y 3× tráfico esperado año 1: 300 VU sostenidos 30 min, picos 800 VU 5 min, 50k filas/día agregados. Documentar saturación.
+
+7. Datos de prueba y ambientes
+7.1 Generación de datos sintéticos
+	•	Faker.js con localización es-MX para nombres y direcciones.
+	•	CURP/RFC generados con dígitos verificadores válidos (no extraídos de personas reales).
+	•	Email/teléfono dirigidos a dominios sandbox (segurasist.test, +52 555 000 0000).
+	•	Seeds reproducibles con semilla configurable; dataset de 10k, 100k, 1M para distintos escenarios.
+	•	Limpieza automática nightly en dev.
+7.2 Datos en staging
+Staging usa anonimización del subset productivo aprobado: nombres reemplazados, CURPs falsificados, fechas desplazadas. Pipeline de scrubbing corre semanal.
+7.3 Reglas absolutas
+	•	PROHIBIDO copiar datos productivos a dev/staging sin scrubbing.
+	•	PROHIBIDO usar emails reales en pruebas (riesgo de envío accidental por SES).
+	•	PROHIBIDO compartir cookies/tokens de prod.
+
+8. User Acceptance Testing (UAT) con MAC
+UAT formal en sprint 6, días 27–28 (los dos días previos al Go-Live). Sesiones presenciales en oficinas MAC con Lucía + Mario + Roy.
+8.1 Scripts de UAT
+Script
+Persona
+Duración
+Cobertura
+UAT-OPER-01 — Operador completo
+Lucía (MAC)
+90 min
+Login SSO → Carga masiva 200 reales → Confirmar → Verificar certificados → Conciliación parcial → Export
+UAT-ADMIN-01 — Admin SegurAsist
+Mario (SegurAsist)
+60 min
+Crear nuevo paquete + cobertura → Cambiar branding → Crear usuario nuevo → Reasignar roles
+UAT-ASEG-01 — Asegurado feliz
+5 voluntarios MAC
+30 min cada uno
+Login OTP → Ver vigencia → Descargar certificado → Reportar siniestro → Chatbot 3 preguntas
+UAT-SUP-01 — Sponsor / supervisor
+Roy
+45 min
+Login Supervisor → Generar 3 reportes → Validar números contra muestra MAC → Programar envío automático
+8.2 Criterios de aceptación UAT
+	•	Cada script ejecutado de principio a fin sin defecto Crítico ni Alto.
+	•	Defectos Medium pueden ser aceptados con plan de remediación post Go-Live.
+	•	Firma formal de aprobación en acta UAT por Lucía, Mario, Roy.
+	•	Si Roy o Alejandro lo solicitan, se incluye observador externo (auditor).
+
+9. Gestión de defectos
+9.1 Severidad
+Sev
+Definición
+Ejemplo
+SLA
+S1 Crítico
+Bloquea funcionalidad nuclear; pérdida o exposición de datos
+Carga masiva no funciona; cross-tenant leak
+≤4 h en staging; bloquea release
+S2 Alto
+Funcionalidad importante degradada; workaround complejo
+Reporte no genera; certificado sin firmar
+≤2 días; bloquea release
+S3 Medio
+Funcionalidad menor o UX afectada; workaround simple
+Filtro mal ordenado; mensaje confuso
+Próximo sprint
+S4 Bajo / cosmético
+Visual o no funcional
+Texto truncado en hover
+Backlog
+9.2 Flujo
+	•	QA o developer descubre el defecto y lo registra en Linear con plantilla (pasos, esperado, real, evidencia, severidad propuesta).
+	•	Triage diario por QA + Tech Lead define severidad final y owner.
+	•	Owner crea PR con fix + test que reproduce el bug primero (red), luego lo arregla (green).
+	•	QA valida en staging y cierra; mantiene el test en suite.
+
+10. Release gates
+10.1 Gate de PR a main
+	•	Lint + typecheck verdes.
+	•	Test unit + integración + cross-tenant verdes.
+	•	SAST sin findings High/Critical.
+	•	SCA sin CVE High/Critical sin fix.
+	•	Coverage no decrece bajo umbral.
+	•	Aprobación de al menos 1 reviewer distinto al autor.
+10.2 Gate de deploy a staging
+	•	Build de imagen + scan Trivy verdes.
+	•	Migraciones aplicables (prisma migrate diff).
+	•	Smoke tests (Playwright) post-deploy verdes.
+	•	DAST OWASP ZAP Baseline sin High.
+	•	Lighthouse Performance/Accessibility no decrece.
+10.3 Gate de Go-Live (release-ready)
+	•	Todos los gates anteriores verdes.
+	•	Pentest interno con 0 findings High/Critical abiertos.
+	•	DR drill ejecutado y RTO/RPO confirmados.
+	•	UAT firmada por MAC + Roy.
+	•	Backups verificados por restauración real.
+	•	Plan de rollback documentado y ensayado.
+	•	Comunicación a usuarios MAC preparada.
+	•	Hypercare on-call programado 48 h.
+	•	Aprobación firmada Tech Lead + DevOps + QA + PO + CISO.
+
+11. Métricas QA
+Métrica
+Objetivo MVP
+Cómo se mide
+Reporta
+Defects escapados a staging por sprint
+≤3 High
+Linear filtro Sev≥High creado en staging
+QA semanal
+Defects escapados a prod (post Go-Live)
+0 Crítico, ≤2 Alto en hypercare
+Linear filtro env=prod
+QA + PM diario en hypercare
+Test coverage backend
+≥70%
+Reporte Jest
+QA en cada PR
+Test coverage frontend
+≥60%
+Reporte Vitest
+QA en cada PR
+Tiempo medio de resolución defectos S1
+≤4 h
+Linear timestamps
+QA mensual
+E2E pass rate
+≥98%
+Playwright report
+QA por sprint
+Hallazgos seguridad nuevos por sprint
+Tendencia decreciente
+Conteo Semgrep + ZAP
+CISO mensual
+MTTR de fallos en staging
+≤2 h
+PagerDuty + Linear
+DevOps mensual
+
+12. Roles QA y comunicación
+	•	QA Lead: estrategia, escribir E2E críticos, ejecutar pentest interno, owner de release gates.
+	•	Cada developer: dueño de unit + integración de su código; corrige defectos asignados.
+	•	Tech Lead: backstop técnico; revisa tests críticos.
+	•	CISO: aprueba gates de seguridad.
+	•	PO: aprueba UAT.
+	•	PM: estatus diario de defectos en hypercare; reporta a Roy.

@@ -1,0 +1,22 @@
+version: 1.0
+runtime: docker
+build:
+  commands:
+    pre-build: []
+run:
+  runtime-version: latest
+  command: node dist/main.js
+  network:
+    port: 3000
+  env:
+    - name: NODE_ENV
+      value: production
+    - name: AWS_REGION
+      value: mx-central-1
+    - name: LOG_LEVEL
+      value: info
+  secrets:
+    - name: DATABASE_URL
+      value-from: arn:aws:secretsmanager:mx-central-1:000000000000:secret:rds/segurasist/prod-XXXXXX:url::
+    - name: REDIS_URL
+      value-from: arn:aws:secretsmanager:mx-central-1:000000000000:secret:redis/segurasist/prod-XXXXXX:url::

@@ -1,0 +1,478 @@
+Especificación Frontend (Next.js) — MVP SegurAsist
+Monorepo Next.js 14 · Admin + Portal asegurado · Design system shadcn/ui · A11y AA
+Campo
+Valor
+Documento
+Especificación Frontend (Next.js) — MVP SegurAsist
+Versión
+v1.0 – Abril 2026
+Audiencia
+Frontend, UX, Tech Lead, QA
+Clasificación
+Interno – Confidencial
+Cliente ancla
+Hospitales MAC – Roy / Innovación Segura
+Fecha
+2026-04-25
+
+1. Resumen y stack frontend
+El frontend de SegurAsist es un monorepo Next.js 14 con App Router que aloja dos aplicaciones independientes pero coexistentes: el portal administrativo (admin.segurasist.mx) y el portal del asegurado (portal.segurasist.mx). Ambas comparten un design system y un cliente API tipado, y se despliegan en AWS Amplify Hosting con SSR + RSC + ISR según ruta.
+1.1 Stack
+Capa
+Decisión
+Notas
+Framework
+Next.js 14 (App Router, RSC)
+SSR para datos sensibles, CSR para interactividad
+Lenguaje
+TypeScript 5.4 strict
+noUncheckedIndexedAccess
+UI Library
+shadcn/ui + Radix UI
+Componentes accesibles, theming sencillo
+Estilo
+Tailwind CSS 3.4 + design tokens propios
+Tokens en CSS variables
+Estado servidor
+TanStack Query 5
+Caching, retries, mutations
+Estado cliente
+Zustand 4 (store mínimo)
+Sólo UI state global; resto local
+Forms
+React Hook Form + Zod resolver
+Mismos schemas que backend
+Tablas
+TanStack Table 8
+Server-side paginación, ordenamiento
+Charts
+Recharts (admin)
+Reportes y dashboards
+Iconos
+lucide-react
+
+Auth client
+@aws-amplify/auth o oidc-client-ts
+Federado con Cognito; tokens en cookies HttpOnly via API route
+i18n
+next-intl
+Inicial es-MX; pivotable a en-US
+Tests
+Vitest + Testing Library + Playwright
+Unit + E2E
+Linting
+ESLint + Prettier + import-sort + Tailwind plugin
+
+Build/Deploy
+Amplify Hosting con monorepo support
+Pipelines independientes por app
+Telemetría
+OpenTelemetry web SDK + propagación trace_id
+Logs + RUM básico CloudWatch
+
+2. Estructura del monorepo
+segurasist-web/
+├── apps/
+│   ├── admin/                      # admin.segurasist.mx
+│   │   ├── app/
+│   │   │   ├── (auth)/login/
+│   │   │   ├── (auth)/callback/
+│   │   │   ├── (app)/layout.tsx
+│   │   │   ├── (app)/dashboard/
+│   │   │   ├── (app)/insureds/
+│   │   │   │   ├── page.tsx
+│   │   │   │   └── [id]/
+│   │   │   │       ├── page.tsx
+│   │   │   │       ├── coverages/page.tsx
+│   │   │   │       ├── claims/page.tsx
+│   │   │   │       ├── certificates/page.tsx
+│   │   │   │       └── audit/page.tsx
+│   │   │   ├── (app)/batches/
+│   │   │   ├── (app)/packages/
+│   │   │   ├── (app)/reports/
+│   │   │   ├── (app)/users/
+│   │   │   ├── (app)/settings/
+│   │   │   ├── api/
+│   │   │   │   ├── auth/[...nextauth]/route.ts
+│   │   │   │   └── proxy/[...path]/route.ts
+│   │   │   └── layout.tsx
+│   │   ├── public/
+│   │   ├── next.config.mjs
+│   │   ├── tailwind.config.ts
+│   │   └── package.json
+│   └── portal/                     # portal.segurasist.mx
+│       ├── app/
+│       │   ├── (auth)/login/
+│       │   ├── (auth)/otp/
+│       │   ├── (app)/layout.tsx
+│       │   ├── (app)/page.tsx                # vigencia + paquete + nombre
+│       │   ├── (app)/coverages/page.tsx
+│       │   ├── (app)/certificate/page.tsx    # download
+│       │   ├── (app)/claim/new/page.tsx
+│       │   └── api/
+│       ├── public/
+│       └── next.config.mjs
+├── packages/
+│   ├── ui/                          # design system + componentes shadcn
+│   │   ├── src/
+│   │   │   ├── components/
+│   │   │   │   ├── button.tsx
+│   │   │   │   ├── input.tsx
+│   │   │   │   ├── select.tsx
+│   │   │   │   ├── data-table.tsx
+│   │   │   │   ├── card.tsx
+│   │   │   │   ├── badge.tsx
+│   │   │   │   └── ...
+│   │   │   ├── tokens.css           # CSS variables (colores, spacing)
+│   │   │   └── index.ts
+│   │   └── package.json
+│   ├── api-client/                  # cliente API tipado generado de OpenAPI
+│   │   ├── src/
+│   │   │   ├── generated/           # de openapi-typescript
+│   │   │   ├── client.ts            # fetch wrapper con auth + trace
+│   │   │   └── hooks/               # TanStack Query hooks por recurso
+│   │   └── package.json
+│   ├── auth/                        # helpers Cognito + middleware
+│   ├── config/                      # ESLint, TS, Tailwind compartidos
+│   └── i18n/                        # mensajes es-MX
+├── tests/e2e/                       # Playwright cross-app
+├── pnpm-workspace.yaml
+├── turbo.json                       # turbo build/test/lint
+└── package.json
+Decisión: pnpm + Turborepo para builds incrementales y deduplicación. Amplify soporta pnpm workspaces con configuración explícita en amplify.yml.
+
+3. Design system y tokens
+3.1 Tokens base
+Token
+Valor
+Uso
+--color-primary
+#1F3A5F
+Azul corporativo SegurAsist
+--color-primary-fg
+#FFFFFF
+Texto sobre primary
+--color-accent
+#2E75B6
+Hover, links, énfasis
+--color-bg
+#FFFFFF
+Background principal
+--color-surface
+#F5F7FA
+Cards, listas
+--color-border
+#D7DEE7
+Separadores
+--color-fg
+#1A1A1A
+Texto principal
+--color-fg-muted
+#5C6470
+Texto secundario
+--color-success
+#0F7B47
+Vigencia OK, entregado
+--color-warning
+#B58105
+Próximo a vencer, parcial
+--color-danger
+#B22222
+Vencido, error, bounce
+--radius-sm/md/lg
+4 / 8 / 16 px
+Border radius
+--space-1..-12
+4 / 8 / 12 / ... 48 px
+Espaciado consistente
+--font-sans
+Inter, ui-sans-serif
+UI
+--font-mono
+JetBrains Mono, ui-monospace
+Códigos, IDs
+El asegurado puede ver overrides de branding por tenant (logo + 1-2 colores) que se aplican en tiempo de runtime sin afectar accesibilidad.
+3.2 Componentes primitivos (packages/ui)
+Inventario mínimo para el MVP. Implementados sobre Radix UI / shadcn:
+	•	Button (primary, secondary, ghost, destructive, sizes sm/md/lg)
+	•	Input, Textarea, Select, Combobox, DatePicker
+	•	Form (con React Hook Form + Zod), FormField, FormError
+	•	Card, Section, EmptyState
+	•	Badge (status), Pill, Tag
+	•	Tabs (con keyboard nav)
+	•	Table (TanStack Table) con server-side state
+	•	Pagination (cursor-based controls)
+	•	Modal/Dialog, Sheet (drawer)
+	•	Toast (Sonner)
+	•	Avatar (con iniciales)
+	•	Skeleton (loading)
+	•	ProgressBar (consumo cobertura, lote)
+	•	Stat (KPI con label + value + trend)
+	•	FileDrop (área de carga drag&drop)
+	•	AlertBanner (informativo, advertencia, error)
+	•	Breadcrumbs
+	•	EmptyState (vacío con CTA)
+3.3 Storybook
+Storybook 8 con todos los componentes en estados (default, loading, error, disabled). Build de Storybook publicado en static.segurasist.mx/storybook (acceso interno).
+
+4. Pantallas — Portal admin
+4.1 /login
+Pantalla mínima: logo, botón "Iniciar sesión con MAC SSO" (SAML), opción avanzada "Acceso local" (email + password + MFA).
+Componentes: Card, Button, Input. A11y: orden tab correcto, label asociadas.
+4.2 /dashboard
+Layout 12 columnas con grid responsive. Top: 4 KPIs (Stat). Medio: gráficos de tendencia (Recharts). Bottom: tabla "Lotes recientes" + tabla "Últimos certificados".
+Sección
+Datos
+Componente
+Refresh
+KPI Asegurados activos
+GET /reports/volumetry?metric=active
+Stat con trend
+60 s
+KPI Certificados 30 d
+GET /reports/volumetry?metric=cert30
+Stat con trend
+60 s
+KPI Siniestros 30 d
+GET /reports/volumetry?metric=claims30
+Stat con trend
+60 s
+KPI % Cobertura consumida
+GET /reports/usage?summary
+Stat con %
+5 min
+Gráfico altas/bajas 90 d
+GET /reports/volumetry?from..to
+LineChart Recharts
+5 min
+Gráfico certificados/día
+GET /reports/volumetry?metric=cert
+BarChart Recharts
+5 min
+Tabla últimos lotes
+GET /batches?limit=5
+DataTable
+30 s
+Tabla últimos certificados
+GET /certificates?limit=5
+DataTable
+30 s
+4.3 /insureds
+Tabla principal con búsqueda global, filtros y paginación cursor-based.
+	•	Búsqueda: input con debounce 300 ms; busca por CURP, RFC, nombre, póliza.
+	•	Filtros: Multiselect Paquete; Select Estado (activo/cancelado/vencido); DateRange Vigencia; Switch Sólo con bounce.
+	•	Acciones por fila: Ver (vista 360), Editar, Reemitir certificado, Cancelar.
+	•	Acciones bulk: Exportar selección, Cancelar selección (con confirmación).
+	•	Botón principal: "+ Nuevo asegurado" (modal) y "Carga masiva" (link a /batches/new).
+4.4 /insureds/[id]
+Vista 360 con tabs:
+	•	Datos: información personal y de póliza.
+	•	Coberturas: lista con barra de consumo.
+	•	Eventos (siniestros): historial con estado.
+	•	Certificados: lista de versiones; download + reemitir.
+	•	Auditoría: timeline de acciones (quién, qué, cuándo, IP).
+4.5 /batches y /batches/new
+/batches: tabla con estado (validating, preview_ready, processing, completed, failed).
+/batches/new: wizard de 3 pasos:
+	•	Subir archivo (FileDrop, descargar layout plantilla).
+	•	Previsualización (resumen + tabla con filas, filtro "sólo errores", edición inline).
+	•	Confirmar (resumen final, opcional notificar al terminar).
+4.6 /packages y /coverages
+CRUD simple. Lista + drawer de creación/edición. Validaciones: nombre único por tenant, al menos una cobertura, límites coherentes.
+4.7 /reports
+Tres reportes:
+	•	Conciliación mensual: selector mes + entidad → genera y descarga (PDF + XLSX).
+	•	Volumetría: selector rango y granularidad → gráfica + tabla.
+	•	Utilización por cobertura: selector paquete → gráfica + top-N consumidores.
+Botón "Programar envío" abre modal: cron, recipientes, formato.
+4.8 /users
+Gestión de operadores y admins. Roles asignables. Lockout/reset MFA. Sólo Admin SegurAsist tiene acceso completo.
+4.9 /settings
+Configuración del tenant: branding (logo + colores), plantilla certificado (preview), datos legales, configuración de reportes automáticos, integraciones (SAML metadata, SCIM).
+
+5. Pantallas — Portal asegurado
+5.1 Diseño general
+Mobile-first (viewport target 360 px). 1 columna principal en mobile, 2 columnas en tablet/desktop. Toda la navegación cabe en una bottom-nav (Home, Coberturas, Certificado, Ayuda) en mobile y top-nav en desktop.
+Tipografía grande (16 px base mobile, 18 px desktop), contraste alto (verde de vigencia ≥ 7:1), botones de tap ≥ 44 px.
+5.2 /login y /otp
+/login: input CURP (placeholder explicativo), select de canal (Email / SMS), botón "Enviar código".
+/otp: input de 6 dígitos (autoFocus, paste-friendly), botón "Verificar", link "Reenviar código" (deshabilitado 30 s).
+5.3 / (Home / vigencia)
+Pantalla principal del asegurado. Above the fold:
+	•	Badge GRANDE de vigencia: VIGENTE (verde) o VENCIDA (rojo) o PRÓXIMA A VENCER (amber).
+	•	Texto "hasta DD-MMM-YYYY" debajo.
+	•	Nombre completo del titular.
+	•	Paquete ("Premium").
+	•	Botón primario "Descargar mi certificado".
+	•	Botón secundario "Ver coberturas".
+	•	Card pequeño "¿Necesitas ayuda?" con teléfono MAC y botón llamar.
+5.4 /coverages
+Lista de coberturas, una por card:
+	•	Nombre cobertura.
+	•	Barra de progreso usado / total.
+	•	Texto "Te quedan X de Y".
+	•	Si la cobertura es monetaria: monto disponible en MXN.
+5.5 /certificate
+Botón principal "Descargar PDF". Vista previa embebida (iframe) opcional. Botón "Compartir por correo" que dispara mailto: con asunto pre-llenado.
+5.6 /claim/new
+Formulario simple: tipo de siniestro (select), fecha (datepicker), descripción (textarea con contador), botón "Enviar". Confirmación con número de ticket y promesa de respuesta.
+5.7 Widget Chatbot (siempre presente)
+FAB esquina inferior derecha; al abrir, panel slide-up con historia de la conversación. Sugerencias rápidas ("¿hasta cuándo es mi póliza?", "¿qué cubre mi paquete?"). Si el chatbot no resuelve, ofrece llamar o crear ticket.
+
+6. Autenticación y seguridad en el cliente
+6.1 Flujo OAuth + manejo de tokens
+	•	Login redirige a Cognito Hosted UI (SAML/OIDC) o usa flujo CUSTOM_CHALLENGE para OTP.
+	•	Callback API route (/api/auth/callback) recibe code, intercambia por tokens en server, fija cookies HttpOnly Secure SameSite=Lax con accessToken (15 min) y refreshToken (7 d).
+	•	Middleware Next.js (middleware.ts) en cada request server: valida JWT contra JWKS (cache); si vencido, refresca usando refreshToken; redirige a /login si imposible.
+	•	API requests desde cliente usan fetch wrapper que añade Authorization desde la cookie via /api/proxy (server-to-server al backend).
+	•	Logout: borra cookies + GET /v1/auth/logout + redirect a /login.
+6.2 Headers de seguridad
+Configurados en next.config.mjs y reforzados por WAF:
+Header
+Valor
+Content-Security-Policy
+default-src 'self'; script-src 'self' 'sha256-...'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://*.amazonaws.com; connect-src 'self' https://api.segurasist.mx https://cognito-idp.us-east-1.amazonaws.com; frame-ancestors 'none'
+Strict-Transport-Security
+max-age=63072000; includeSubDomains; preload
+X-Frame-Options
+DENY
+X-Content-Type-Options
+nosniff
+Referrer-Policy
+strict-origin-when-cross-origin
+Permissions-Policy
+geolocation=(), microphone=(), camera=()
+Cross-Origin-Opener-Policy
+same-origin
+Cross-Origin-Embedder-Policy
+require-corp
+6.3 Manejo de errores y feedback
+	•	Toast de error con mensaje humano (mapeado de códigos backend); incluye traceId si severity ≥ error.
+	•	Boundary global captura errores de render y muestra fallback con botón "Reportar" (envía traceId + screenshot opcional).
+	•	Estados loading siempre con Skeleton o Spinner (no pantalla en blanco).
+	•	Estados vacíos siempre con EmptyState (icono, mensaje, CTA).
+
+7. Estado de datos y data fetching
+7.1 Reglas
+	•	Componentes Server (RSC) por default; pasan a Client Component sólo si necesitan interactividad o hooks.
+	•	Datos públicos cacheables: fetch nativo con revalidate.
+	•	Datos por usuario: TanStack Query con staleTime 60 s para listados, 0 para mutaciones.
+	•	Mutaciones: optimistic updates donde aplique; invalidación selectiva por queryKey.
+	•	WebSocket / SSE no para MVP; polling 2 s para batches en proceso.
+7.2 Cliente API tipado
+openapi-typescript genera tipos de OpenAPI del backend. Cliente fetch wrapper:
+export async function api<T>(path: string, init?: RequestInit): Promise<T> {
+  const traceId = crypto.randomUUID();
+  const res = await fetch(`/api/proxy${path}`, {
+    ...init,
+    headers: {
+      'content-type': 'application/json',
+      'x-trace-id': traceId,
+      ...(init?.headers ?? {})
+    }
+  });
+  if (!res.ok) throw await ProblemDetailsError.from(res, traceId);
+  return res.json();
+}
+Hooks por recurso (packages/api-client/hooks/insureds.ts):
+export const useInsureds = (params: ListParams) =>
+  useQuery({
+    queryKey: ['insureds', params],
+    queryFn: () => api<InsuredsList>(`/v1/insureds?${qs(params)}`),
+    staleTime: 60_000
+  });
+
+export const useCreateInsured = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (dto: CreateInsuredDto) =>
+      api<Insured>('/v1/insureds', { method: 'POST', body: JSON.stringify(dto) }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['insureds'] })
+  });
+};
+
+8. Accesibilidad (WCAG 2.1 AA)
+	•	Contraste mínimo 4.5:1 texto normal, 3:1 texto grande; verde vigencia 7:1 (mejor que mínimo).
+	•	Foco visible en todos los elementos interactivos (outline de 2 px accent color).
+	•	Navegación completa por teclado (Tab, Shift+Tab, Enter, Esc, flechas en menus/tabs).
+	•	ARIA labels en iconos sólos; aria-live="polite" para toast no críticos, "assertive" para críticos.
+	•	Forms: label asociada por htmlFor; mensajes de error vinculados con aria-describedby.
+	•	Tablas: scope="col" en th; resúmenes accesibles para tablas complejas.
+	•	Skip link "Saltar al contenido" al inicio del body.
+	•	Contenido oculto visualmente pero accesible para screen readers via clase sr-only.
+	•	prefers-reduced-motion respetado: animaciones reducidas a fade simples.
+	•	Audit Lighthouse en CI; falla si Accessibility < 90 en portal asegurado, < 85 en admin.
+
+9. Performance
+Métrica
+Objetivo portal asegurado
+Objetivo admin
+LCP
+≤2.0 s
+≤2.5 s
+INP
+≤200 ms
+≤300 ms
+CLS
+≤0.05
+≤0.1
+TTI
+≤3.0 s
+≤4.0 s
+Bundle JS inicial (gzip)
+≤120 KB
+≤180 KB
+Lighthouse Performance
+≥90
+≥85
+9.1 Tácticas
+	•	RSC para vistas con datos sensibles (vigencia, listados pre-renderizados).
+	•	Code splitting por ruta (Next.js automatic) + dynamic imports para gráficos pesados.
+	•	Image: next/image con AVIF/WebP, dimensiones explícitas para evitar CLS.
+	•	Fonts: next/font con variable y display swap.
+	•	Pre-fetch sólo de rutas con hover/visibility (no agresivo).
+	•	CDN CloudFront detrás de Amplify para estáticos.
+	•	HTTP/2 + brotli.
+
+10. Testing del frontend
+Capa
+Herramienta
+Cobertura objetivo
+Unit (componentes puros, hooks)
+Vitest + Testing Library
+≥60%
+Integración (componente + datos mock)
+Vitest + MSW
+≥70% pantallas críticas
+E2E happy path
+Playwright
+100% flujos del PRD
+Visual regression
+Playwright snapshots
+Componentes design system
+Accesibilidad
+@axe-core/playwright
+≥90% pantallas
+Lighthouse CI
+lhci
+Por release
+E2E suite cubre como mínimo: login admin SSO, carga masiva con preview, emisión de certificado, login asegurado OTP, descarga de certificado, generación de reporte mensual, conversación chatbot básica.
+
+11. Internacionalización
+Inicial: es-MX. Arquitectura con next-intl preparada para añadir en-US sin reescribir componentes.
+	•	Mensajes en JSON namespaced por feature (packages/i18n/messages/es-MX/insureds.json).
+	•	Formateo de fechas con date-fns y locale es-MX ("31 mar 2027").
+	•	Formateo de moneda Intl.NumberFormat MXN.
+	•	CURP/RFC NUNCA traducidos; mantienen mayúsculas.
+	•	Pluralización: ICU MessageFormat ("{count, plural, one {1 asegurado} other {# asegurados}}").
+
+12. Mockups por pantalla (descripción narrada)
+Los mockups visuales se entregan en Figma; aquí se describe la composición esperada para que cualquier diseñador o dev pueda partir.
+12.1 Dashboard admin
+Header fijo con logo, selector de tenant (sólo Admin SegurAsist), avatar con menú. Sidebar izquierdo colapsable con secciones: Inicio, Asegurados, Lotes, Paquetes, Reportes, Usuarios, Ajustes. Main: header con "Buenos días, Lucía" y fecha; grid de KPIs (4 stats), gráficos de tendencia (línea altas/bajas y barras certificados/día), 2 tablas resumidas en columnas.
+12.2 Carga masiva — paso 2 preview
+Layout horizontal: a la izquierda card-resumen (Total filas, Válidas, Con error, Duplicadas) con conteos grandes; a la derecha tabla con filas paginadas. Filtro tabs encima de la tabla: Todas | Sólo válidas | Sólo errores | Duplicadas. Por cada error en una fila, badge rojo con tooltip detallado. Botones inferior derecha: "Cancelar" (ghost) y "Confirmar lote" (primary, deshabilitado si filas válidas = 0).
+12.3 Vista 360 asegurado
+Header: nombre, CURP, badge vigencia, botón "Reemitir certificado". Tabs: Datos | Coberturas | Eventos | Certificados | Auditoría. Cada tab carga con skeleton mientras llega data. Datos: 2 columnas (personales + póliza) con campos editables inline. Coberturas: lista cards con barra. Eventos: timeline vertical. Certificados: lista de versiones con descarga. Auditoría: timeline con avatar de actor.
+12.4 Portal asegurado — Home
+Mobile (360 px): logo MAC pequeño superior, saludo "Hola, Carmen", debajo card grande con badge VIGENTE (verde) y fecha; debajo botón principal "Descargar mi certificado"; debajo botón secundario "Ver mis coberturas"; bottom-nav con 4 iconos. Widget chatbot fijo esquina inferior derecha.

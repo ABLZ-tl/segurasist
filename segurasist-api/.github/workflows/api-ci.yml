@@ -1,0 +1,175 @@
+name: api-ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    tags: ['v*']
+
+permissions:
+  id-token: write   # GitHub OIDC → AWS sin claves
+  contents: read
+  security-events: write
+  packages: read
+
+concurrency:
+  group: api-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: '20'
+  AWS_REGION: mx-central-1
+  ECR_REPOSITORY: segurasist-api
+
+jobs:
+  lint:
+    name: Lint + typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - run: npm run lint
+      - run: npm run typecheck
+
+  test:
+    name: Tests (unit + integration + cross-tenant GATE)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: segurasist_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+    env:
+      DATABASE_URL: postgres://postgres:test@localhost:5432/segurasist_test?schema=public
+      REDIS_URL: redis://localhost:6379/0
+      NODE_ENV: test
+      LOG_LEVEL: warn
+      COGNITO_REGION: mx-central-1
+      COGNITO_USER_POOL_ID_ADMIN: mx-central-1_test
+      COGNITO_USER_POOL_ID_INSURED: mx-central-1_test
+      COGNITO_CLIENT_ID_ADMIN: test
+      COGNITO_CLIENT_ID_INSURED: test
+      S3_BUCKET_UPLOADS: test-uploads
+      S3_BUCKET_CERTIFICATES: test-certs
+      S3_BUCKET_AUDIT: test-audit
+      S3_BUCKET_EXPORTS: test-exports
+      SQS_QUEUE_LAYOUT: https://sqs.test/layout
+      SQS_QUEUE_PDF: https://sqs.test/pdf
+      SQS_QUEUE_EMAIL: https://sqs.test/email
+      SQS_QUEUE_REPORTS: https://sqs.test/reports
+      SES_SENDER_DOMAIN: segurasist.test
+      SES_CONFIGURATION_SET: test
+      KMS_KEY_ID: alias/test
+      CORS_ALLOWED_ORIGINS: http://localhost:3001
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - run: npx prisma generate
+      - run: npx prisma migrate deploy
+      - run: npm run test:unit
+      - run: npm run test:integration
+      - name: Cross-tenant isolation gate (BLOCKING)
+        run: npm run test:cross-tenant
+
+  security:
+    name: Security (Semgrep + audit + CodeQL)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - name: Semgrep (OWASP top 10)
+        uses: returntocorp/semgrep-action@v1
+        with:
+          config: p/owasp-top-ten
+      - name: npm audit (high+)
+        run: npm audit --audit-level=high
+      - name: CodeQL init
+        uses: github/codeql-action/init@v3
+        with:
+          languages: javascript-typescript
+      - name: CodeQL analyze
+        uses: github/codeql-action/analyze@v3
+
+  build-image:
+    name: Build + scan image
+    needs: [lint, test, security]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' || startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure AWS (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_PROD }}:role/github-actions-api
+          aws-region: ${{ env.AWS_REGION }}
+      - uses: aws-actions/amazon-ecr-login@v2
+        id: ecr
+      - name: Build image
+        run: |
+          docker build -t ${{ env.ECR_REPOSITORY }}:${{ github.sha }} .
+          docker tag  ${{ env.ECR_REPOSITORY }}:${{ github.sha }} \
+            ${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
+      - name: Trivy scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
+          severity: HIGH,CRITICAL
+          exit-code: 1
+      - name: Push image
+        run: docker push ${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
+
+  deploy-staging:
+    name: Deploy → staging
+    needs: build-image
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    environment: staging
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_STAGING }}:role/github-actions-deploy
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Trigger App Runner deploy
+        run: aws apprunner start-deployment --service-arn ${{ secrets.STAGING_SERVICE_ARN }}
+
+  deploy-prod:
+    name: Deploy → prod
+    needs: build-image
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_PROD }}:role/github-actions-deploy
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Trigger App Runner deploy
+        run: aws apprunner start-deployment --service-arn ${{ secrets.PROD_SERVICE_ARN }}

@@ -1,0 +1,13 @@
+# Copy to terraform.tfvars and fill values. NEVER commit terraform.tfvars.
+
+environment   = "staging"
+aws_region    = "mx-central-1"
+aws_dr_region = "us-east-1"
+
+vpc_cidr       = "10.20.0.0/16"
+domain_name    = "segurasist.app"
+domain_zone_id = "ZXXXXXXXXXXXXXXXXXX"
+
+github_oauth_token_secret_arn = "arn:aws:secretsmanager:mx-central-1:222222222222:secret:segurasist/github/amplify-oauth-XXXXXX"
+
+image_tag_api = "bootstrap-placeholder"

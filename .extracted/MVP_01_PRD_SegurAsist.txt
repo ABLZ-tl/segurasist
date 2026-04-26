@@ -1,0 +1,559 @@
+PRD — MVP SegurAsist (Hospitales MAC)
+Product Requirements Document · 6 funcionalidades en 6 sprints · 100% AWS · Cumplimiento V2 desde día 1
+Campo
+Valor
+Documento
+PRD — MVP SegurAsist (Hospitales MAC)
+Versión
+v1.0 – Abril 2026
+Audiencia
+PO, PM, Tech Lead, leads FE/BE/QA/DevOps, sponsor Roy
+Clasificación
+Interno – Confidencial
+Cliente ancla
+Hospitales MAC – Roy / Innovación Segura
+Fecha
+2026-04-25
+
+1. Resumen ejecutivo
+Este Product Requirements Document (PRD) define el producto mínimo viable (MVP) de SegurAsist para el cliente ancla Hospitales MAC. El MVP cubre las seis funcionalidades comprometidas en la propuesta del 14 de abril de 2026, se construye 100% sobre AWS (decisiones cerradas en el Stack Tecnológico Definitivo v1.0) y aplica desde el día uno los controles de seguridad marcados como cumplidos en la Matriz de Evaluación SaaS v2 (88.7% de cumplimiento, riesgo Medio – Apto con plan de remediación).
+La solución es una plataforma SaaS multi-tenant para administración de membresías de salud que reemplaza el gap operativo identificado por MAC: "Nosotros no tenemos nada así, ni vamos a desarrollar. Queremos que tú te encargues de todo." – Alejandro, MAC, 13 de abril de 2026.
+El compromiso comercial es Go-Live productivo en la semana 6 con la primera carga real de asegurados, sobre un piso contractual de 20,000 usuarios al año durante 3 años, con ingresos asegurados mínimos de 5.4 MXN millones.
+1.1 Objetivos de producto
+	•	Resolver el gap operativo de MAC en ≤6 semanas con una plataforma productiva, no un prototipo.
+	•	Habilitar la replicación a SNTE, CATEM, Walmart y futuros clientes sin redesarrollar (multi-tenant nativo).
+	•	Cumplir desde el día 1 con el 88.7% de controles aprobados en la Matriz V2, sosteniendo el riesgo evaluado en Medio.
+	•	Reducir la carga del call center de MAC mediante el portal de autoservicio del asegurado.
+	•	Generar evidencia ejecutiva (entregas puntuales, métricas, satisfacción) que abra la venta del ERP a dirección general en 6 meses.
+1.2 Alcance del MVP – Las 6 funcionalidades
+El alcance del MVP comprende las seis capacidades comprometidas en la presentación a Roy, ejecutadas en paralelo durante el ciclo de 6 sprints:
+#
+Funcionalidad
+Descripción
+Sprint líder
+F1
+Carga masiva de asegurados
+Layout Excel/CSV con previsualización, validación en tiempo real y alta uno-a-uno con feedback de errores.
+S1–S2
+F2
+Dashboard de administración
+KPIs en tiempo real (asegurados, certificados, siniestros, cobertura consumida), filtros, exportación.
+S2–S4
+F3
+Certificados automatizados
+Generación PDF con branding MAC y envío por correo en menos de 60 segundos, con trazabilidad de entrega.
+S2–S3
+F4
+Portal del asegurado
+Autoservicio web responsive: vigencia, paquete, coberturas restantes, descarga de certificado, contacto MAC.
+S3–S5
+F5
+Chatbot integrado
+Asistente embebido en portal con respuestas a preguntas frecuentes (sin costo extra de WhatsApp).
+S4–S6
+F6
+Reportes para Roy
+Conciliación mensual con un clic: volumetría, cobros, utilización por paquete y por entidad.
+S5–S6
+1.3 Fuera de alcance del MVP
+Lo siguiente queda explícitamente fuera del MVP y se planifica para fases posteriores:
+	•	App móvil nativa iOS/Android (Fase 3, semanas 11–18) — el portal del asegurado es responsive web.
+	•	Tracking GPS de ambulancias en tiempo real (Fase 4, semanas 19–24).
+	•	Notificaciones push móviles (Fase 3).
+	•	Canal WhatsApp transaccional (postergado por costo; el chatbot vive en el portal).
+	•	Integración bidireccional con ERP de MAC (validar en post-MVP).
+	•	Pasarela de pago de membresías por el asegurado (modelo MAC: cobro centralizado, no aplica).
+	•	Migración a región mx-central-1 (disponible como SKU premium si MAC lo solicita explícitamente).
+
+2. Personas y stakeholders
+2.1 Stakeholders del programa
+Stakeholder
+Rol
+Interés primario
+Frecuencia de contacto
+Roy (Innovación Segura)
+Sponsor comercial / cliente directo de SegurAsist
+Cumplir compromiso con MAC y tener evidencia para abrir ERP a dirección general.
+Semanal (demo + status)
+Alejandro (MAC)
+Patrocinador operativo en MAC
+Recibir herramienta funcional para administrar las pólizas que el call center hoy gestiona manualmente.
+Quincenal
+Equipo operativo MAC
+Usuarios admin operadores (carga, conciliación)
+UI rápida, validaciones que eviten reprocesos, exportes confiables.
+On-demand (soporte L1)
+CISO SegurAsist
+Garante de cumplimiento
+Sostener 88.7% de cumplimiento V2; no introducir gaps Altos en Go-Live.
+Por gate de release
+Tech Lead SegurAsist
+Dueño técnico de la plataforma
+Calidad de código, deuda controlada, runbook operativo limpio.
+Diaria
+Asegurados finales
+Usuarios del portal
+Consultar póliza sin llamar al call center; descargar certificado.
+N/A (autoservicio)
+2.2 Personas de usuario
+Persona 1 — Operador MAC (Lucía)
+Mujer, 34 años, analista administrativa en MAC. Recibe diariamente layouts de altas y bajas desde recursos humanos del cliente final (sindicato, dependencia, empresa). Hoy usa Excel y correo manual; comete errores de captura y pierde 2–3 horas al día reprocesando. Tolerancia baja a interfaces cargadas y no es técnica.
+Necesidades clave:
+	•	Subir un Excel y ver, antes de confirmar, qué filas tienen error y por qué.
+	•	Saber con certeza que el certificado ya llegó al asegurado.
+	•	Exportar conciliación mensual sin llamar a un técnico.
+Persona 2 — Admin SegurAsist (Mario)
+Hombre, 41 años, lead de operaciones en SegurAsist. Administra múltiples tenants. Necesita visibilidad cross-tenant, gestionar usuarios del lado MAC, configurar paquetes/coberturas y resolver tickets escalados.
+Necesidades clave:
+	•	Cambiar de tenant sin re-loguear y sin riesgo de cruzar datos.
+	•	Reasignar roles, suspender usuarios, ver auditoría de acciones críticas.
+	•	Tablero técnico paralelo con salud de jobs (certificados pendientes, emails fallidos).
+Persona 3 — Asegurado (Doña Carmen)
+Mujer, 58 años, beneficiaria de membresía SNTE-MAC. Tiene un smartphone Android gama media y tarifa de datos limitada. Su uso típico: revisar si su póliza está vigente antes de ir al hospital y descargar el certificado.
+Necesidades clave:
+	•	Login simple (preferentemente con código por SMS o email, no contraseñas largas).
+	•	Una sola pantalla que diga claramente VIGENTE / NO VIGENTE.
+	•	Descargar el certificado en PDF que pueda guardar offline.
+	•	Botón directo para llamar al call center de MAC ante una duda.
+Persona 4 — Roy (Sponsor de Innovación Segura)
+Hombre, 47 años, dueño comercial de la cuenta MAC. No usa el sistema en operación, pero exige reportes consolidados y necesita poder presentar avances a dirección general de MAC y a su propio comité interno.
+Necesidades clave:
+	•	Reporte mensual descargable: volumetría, cobros, utilización.
+	•	KPIs ejecutivos en una pantalla: usuarios activos, % siniestralidad, NPS.
+	•	Capacidad de abrir un acceso lectura para ejecutivos de MAC sin riesgo de modificar datos.
+
+3. User journeys clave
+3.1 Carga masiva de asegurados (Lucía – Operador MAC)
+Disparador: Lucía recibe un layout de altas con 1,200 asegurados nuevos del SNTE.
+	•	Lucía entra al portal admin y se autentica con SSO Cognito (SAML federado a Azure AD MAC) + MFA.
+	•	En el menú "Asegurados" elige "Carga masiva".
+	•	Descarga el layout plantilla (.xlsx) con encabezados validados (CURP, RFC, nombre, paquete, vigencia inicio/fin, beneficiarios).
+	•	Arrastra el archivo poblado al área de drop. El sistema sube a S3, dispara Lambda de validación y muestra una previsualización con: total filas, válidas, con error y duplicadas (en 10 segundos para 1,200 filas).
+	•	Filtra solo las filas con error, las corrige inline o descarga el archivo de errores anotados, lo arregla y reintenta.
+	•	Al confirmar, el sistema enola SQS, procesa por lote y emite un job ID. Lucía puede cerrar la ventana.
+	•	En 60 segundos para el primer asegurado y máximo 5 minutos para el lote completo, se generan certificados PDF y se envían por SES. Lucía recibe email cuando el lote termina.
+	•	Cada asegurado aparece en el listado con estado "Activo" y badge "Certificado entregado" con timestamp.
+3.2 Consulta de póliza por asegurado (Doña Carmen – Asegurada)
+Disparador: Carmen necesita ir al hospital y quiere asegurarse de que su membresía esté vigente.
+	•	Abre segurasist.mx/asegurados desde el navegador del celular.
+	•	Ingresa CURP + recibe código por SMS o email (a su elección durante onboarding).
+	•	Aterriza en pantalla principal: badge verde grande "VIGENTE hasta 31-mar-2027", paquete "Premium" y nombre del titular.
+	•	Ve sus 4 coberturas restantes con barra de consumo (ej. "Consultas: 8 de 10 disponibles").
+	•	Toca "Descargar certificado" → PDF se descarga en su carpeta local.
+	•	Si tiene duda, toca "Llamar a MAC" → marca al call center.
+3.3 Conciliación mensual (Roy – Sponsor)
+Disparador: Roy necesita el cierre de mes para presentar a MAC el primer día hábil del mes siguiente.
+	•	Roy entra al portal admin como rol Supervisor (solo lectura).
+	•	Va a "Reportes" → "Conciliación mensual".
+	•	Selecciona mes y entidad (MAC – todos, MAC – SNTE, MAC – CATEM, etc.).
+	•	Genera reporte que cubre: altas/bajas del mes, asegurados activos cierre, certificados emitidos, utilización por cobertura, monto a facturar.
+	•	Descarga PDF firmado y XLSX detallado. Comparte el PDF por correo a MAC.
+3.4 Atención inicial vía chatbot (Asegurado)
+Disparador: el asegurado tiene una pregunta común ("¿qué cubre mi paquete?", "¿cómo agendo una consulta?").
+	•	En el portal, abre el widget de chat (esquina inferior derecha).
+	•	El chatbot responde con base en knowledge base estructurada por categorías (cobertura, vigencia, contacto, siniestros).
+	•	Si no encuentra respuesta o el asegurado escribe "hablar con humano", el chat ofrece: (a) llamar al call center, (b) crear ticket que se notifica a MAC por correo.
+
+4. Requerimientos funcionales
+Cada requerimiento sigue el formato RF-XXX y se mapea a la funcionalidad correspondiente. Los criterios de aceptación se redactan como Given/When/Then.
+4.1 F1 — Carga masiva de asegurados
+ID
+Requerimiento
+Prioridad
+Criterio de aceptación (resumen)
+RF-101
+Descargar layout plantilla XLSX/CSV con encabezados validados.
+Must
+Given un operador autenticado, when descarga el layout, then recibe archivo .xlsx con 12 columnas obligatorias y hoja de instrucciones.
+RF-102
+Subir archivo de hasta 10,000 filas con feedback en ≤30 s.
+Must
+Given un archivo válido de 10k filas, when se sube, then la previsualización aparece en ≤30 s y muestra conteo válidas/error/duplicado.
+RF-103
+Validar reglas: CURP/RFC formato, vigencia coherente, paquete existe, no duplicado en tenant.
+Must
+Given una fila con CURP inválido, when se procesa, then se marca con error específico ("CURP inválido: dígito verificador").
+RF-104
+Permitir corrección inline o reintento con archivo corregido.
+Must
+Given filas con error, when el operador edita inline, then puede confirmar el lote sin re-subir el archivo.
+RF-105
+Procesar lote en background con SQS+Lambda, mostrar progreso.
+Must
+Given un lote confirmado, when se procesa, then el operador ve barra de progreso y puede cerrar la ventana sin perder el job.
+RF-106
+Disparar generación de certificados al alta exitosa.
+Must
+Given un asegurado nuevo creado, when se confirma, then se encola job de certificado y se intenta entrega vía SES.
+RF-107
+Alta unitaria con formulario validado en tiempo real.
+Should
+Given el operador llena el formulario, when ingresa CURP, then se valida formato sin reload de página.
+RF-108
+Notificar por correo al operador al terminar el lote.
+Should
+Given un lote ≥100 filas, when termina, then el operador recibe email con resumen y enlace al log.
+4.2 F2 — Dashboard de administración
+ID
+Requerimiento
+Prioridad
+Criterio de aceptación (resumen)
+RF-201
+KPIs en tiempo real: asegurados activos, certificados emitidos 30d, siniestros 30d, cobertura consumida %.
+Must
+Given el dashboard cargado, when no hay caché, then los KPIs reflejan datos ≤60 s atrás.
+RF-202
+Listado de asegurados con filtros (paquete, vigencia, estado, fecha alta) y paginación server-side.
+Must
+Given 60k asegurados, when se filtra por paquete Premium, then la respuesta es ≤2 s p95.
+RF-203
+Búsqueda por CURP, RFC, nombre o número de póliza.
+Must
+Given el operador busca "PEPM", when escribe, then resultados aparecen mientras tipea (debounce 300 ms).
+RF-204
+Vista 360 del asegurado: datos, coberturas, eventos, certificados, auditoría.
+Must
+Given un asegurado seleccionado, when se abre la vista 360, then se muestran 5 secciones tabuladas con scroll independiente.
+RF-205
+Trazabilidad: log inmutable visible (quién, qué, cuándo, IP) por asegurado.
+Must
+Given una acción de modificación, when se ejecuta, then aparece en el log con user_id, timestamp y diff.
+RF-206
+Exportar listado filtrado a XLSX o PDF.
+Must
+Given un filtro aplicado, when el operador exporta, then se genera archivo en ≤30 s para hasta 50k filas.
+RF-207
+Selector de tenant para Admin SegurAsist (multi-tenant).
+Must
+Given un Admin SegurAsist, when cambia tenant, then la UI repinta sin permitir mezcla de datos.
+4.3 F3 — Certificados automatizados
+ID
+Requerimiento
+Prioridad
+Criterio de aceptación (resumen)
+RF-301
+Plantilla HTML configurable por tenant con branding (logo, colores, datos legales).
+Must
+Given una plantilla MAC, when se renderiza, then incluye logo MAC y colores corporativos.
+RF-302
+Generar PDF con Puppeteer/Chromium en Lambda en ≤10 s por certificado.
+Must
+Given un asegurado con datos completos, when se dispara la generación, then el PDF queda en S3 en ≤10 s p95.
+RF-303
+Firmar el PDF con metadatos (titular, tenant, vigencia, fecha emisión, hash de verificación).
+Must
+Given un PDF generado, when se inspecciona, then contiene metadata XMP y QR de verificación.
+RF-304
+Almacenar PDF en S3 con KMS y URL firmada (expiración 7 días).
+Must
+Given un certificado guardado, when se solicita la URL, then es presigned con TTL configurable.
+RF-305
+Enviar correo a asegurado con link al PDF y resumen de póliza.
+Must
+Given una emisión exitosa, when se envía vía SES, then el asegurado recibe correo en ≤60 s p95.
+RF-306
+Reintentar entrega ante bounce soft hasta 3 veces; clasificar bounce hard.
+Must
+Given un soft bounce, when ocurre, then SES reintenta y registra estado en BD; hard bounce marca el email como inválido.
+RF-307
+Trazabilidad de entrega: enviado, entregado, abierto, rebotado, fallido.
+Should
+Given un envío, when SES emite eventos, then el dashboard refleja el estado en ≤2 minutos.
+RF-308
+Reemisión a demanda con motivo registrado.
+Should
+Given un asegurado, when un operador re-emite, then se crea nueva versión del certificado y se conserva la anterior.
+4.4 F4 — Portal del asegurado
+ID
+Requerimiento
+Prioridad
+Criterio de aceptación (resumen)
+RF-401
+Login con CURP + código OTP (email o SMS).
+Must
+Given un asegurado registrado, when ingresa CURP, then recibe OTP en canal preferido en ≤60 s.
+RF-402
+Pantalla principal con badge de vigencia, paquete y nombre.
+Must
+Given una sesión válida, when carga el portal, then la vigencia es la primera información visible (above the fold).
+RF-403
+Listado de coberturas con barra de consumo.
+Must
+Given un paquete con 4 coberturas, when se muestran, then cada una indica usado/total y % visual.
+RF-404
+Descarga de certificado PDF.
+Must
+Given un certificado emitido, when el asegurado lo descarga, then se sirve desde S3 con URL firmada.
+RF-405
+Botón directo "Llamar a MAC" (tel:).
+Must
+Given un dispositivo móvil, when toca el botón, then dispara el dialer con el número configurado por tenant.
+RF-406
+Reportar siniestro con formulario simple (fecha, tipo, descripción).
+Should
+Given un asegurado vigente, when reporta, then se crea ticket y se notifica al operador MAC.
+RF-407
+Responsive móvil-first, soporta navegadores con 95% market share MX (Chrome, Safari).
+Must
+Given un viewport 360px, when se navega, then ningún elemento se corta horizontalmente.
+RF-408
+Accesibilidad WCAG 2.1 AA (contraste, etiquetas, navegación teclado).
+Should
+Given un audit Lighthouse, when corre, then puntaje accessibility ≥90.
+4.5 F5 — Chatbot integrado
+ID
+Requerimiento
+Prioridad
+Criterio de aceptación (resumen)
+RF-501
+Widget embebido en portal asegurado (no popup separado).
+Must
+Given el portal cargado, when el asegurado scrollea, then el widget permanece accesible esquina inferior derecha.
+RF-502
+Knowledge base estructurada por categorías (cobertura, vigencia, contacto, siniestros, beneficiarios).
+Must
+Given una pregunta sobre vigencia, when se procesa, then la respuesta proviene de la KB y referencia datos del asegurado.
+RF-503
+Personalización por contexto del asegurado (vigencia real, paquete real).
+Should
+Given "¿hasta cuándo es mi póliza?", when se procesa, then la respuesta menciona la fecha exacta del asegurado autenticado.
+RF-504
+Escalamiento a humano: "hablar con un asesor" crea ticket o muestra teléfono.
+Must
+Given el comando explícito, when se dispara, then se ofrece llamar o crear ticket por correo.
+RF-505
+Histórico de conversaciones por asegurado (últimas 30 días).
+Should
+Given un asegurado recurrente, when abre el chat, then ve sus últimas conversaciones.
+RF-506
+Contenido administrable por Admin SegurAsist sin redeploy.
+Must
+Given una respuesta nueva, when se publica desde admin, then queda disponible en ≤5 minutos.
+4.6 F6 — Reportes para Roy
+ID
+Requerimiento
+Prioridad
+Criterio de aceptación (resumen)
+RF-601
+Reporte conciliación mensual: altas, bajas, activos cierre, certificados, utilización, monto a facturar.
+Must
+Given un mes cerrado, when se genera, then incluye las 6 secciones consolidadas y desglose por entidad.
+RF-602
+Reporte volumetría diaria/semanal/mensual con tendencias.
+Must
+Given el rango "últimos 90 días", when se genera, then se grafican altas/bajas y certificados.
+RF-603
+Reporte utilización por cobertura: consumida vs disponible por paquete.
+Should
+Given un paquete Premium, when se reporta, then se muestra consumo agregado y top-N asegurados con mayor consumo.
+RF-604
+Reporte siniestralidad: eventos reportados, tipo, monto estimado.
+Should
+Given el mes en curso, when se genera, then se listan siniestros con estado y se calcula tasa siniestralidad.
+RF-605
+Programar envío automático al cierre de mes (cron).
+Should
+Given configuración "primer día hábil 9 AM", when se cumple, then se genera y envía PDF por correo a destinatarios.
+RF-606
+Exportar a XLSX detallado y PDF firmado.
+Must
+Given un reporte generado, when se descarga, then ambas versiones están disponibles y firmadas digitalmente.
+
+5. Requerimientos no funcionales
+5.1 Performance y capacidad
+ID
+Requerimiento
+Objetivo medible
+RNF-PER-01
+Latencia API p95
+≤500 ms (endpoints CRUD), ≤2 s (queries con agregados)
+RNF-PER-02
+Carga concurrente operadores
+≥100 sesiones admin simultáneas sin degradación
+RNF-PER-03
+Carga concurrente asegurados
+≥1,000 sesiones portal simultáneas
+RNF-PER-04
+Capacidad altas masivas
+10,000 filas validadas en ≤30 s; 10,000 certificados emitidos en ≤15 min
+RNF-PER-05
+Tamaño base año 1
+20,000 asegurados activos × promedio 4 coberturas
+RNF-PER-06
+Tamaño base año 3
+60,000 asegurados activos sin cambio de arquitectura
+5.2 Disponibilidad y continuidad
+ID
+Requerimiento
+Objetivo medible
+RNF-AVA-01
+SLA contractual base
+99.5% mensual (downtime planeado fuera de horario, aviso ≥48 h)
+RNF-AVA-02
+RTO (Recovery Time Objective)
+≤4 horas
+RNF-AVA-03
+RPO (Recovery Point Objective)
+≤24 horas (point-in-time recovery RDS hasta 7 días)
+RNF-AVA-04
+DR cross-region
+us-east-2 con réplica asíncrona; failover manual ≤30 min
+RNF-AVA-05
+Backups
+Diarios automáticos + snapshots semanales 30 días, cross-region
+5.3 Seguridad (alineado a Matriz V2)
+ID
+Requerimiento
+Control matriz V2
+RNF-SEC-01
+MFA obligatorio para 100% de roles administrativos
+IAM – SSO y MFA
+RNF-SEC-02
+RBAC con 4 roles (Admin MAC, Operador, Admin SegurAsist, Supervisor) + RLS PostgreSQL
+IAM – RBAC/ABAC
+RNF-SEC-03
+TLS 1.3 forzado, AES-256 en reposo con KMS CMK rotación anual
+Datos – Cifrado
+RNF-SEC-04
+Logs inmutables S3 Object Lock modo Compliance, retención 24 m
+Auditoría – Retención
+RNF-SEC-05
+WAF AWS Managed Rules OWASP Top 10 + rate limiting
+AppSec – OWASP
+RNF-SEC-06
+Aislamiento multi-tenant validado por tests CI cross-tenant
+AppSec – Aislamiento
+RNF-SEC-07
+DPA, Aviso de Privacidad LFPDPPP, ARCO operativo
+Datos – DPA / Gobernanza
+RNF-SEC-08
+Notificación de brechas ≤72 h (P1 ≤4 h preliminar)
+Incidentes – Notificación
+5.4 Usabilidad y accesibilidad
+	•	UX-01: Lighthouse score ≥85 (Performance, Best Practices, SEO) y ≥90 (Accessibility) en portal asegurado.
+	•	UX-02: WCAG 2.1 AA: contraste ≥4.5:1, navegación por teclado, etiquetas ARIA en formularios.
+	•	UX-03: Mobile-first; portal asegurado optimizado a viewport 360px.
+	•	UX-04: Idioma inicial es-MX; arquitectura preparada para i18n (next-intl).
+	•	UX-05: Mensajes de error humanos ("CURP inválido: dígito verificador no coincide" en lugar de "E-422").
+5.5 Mantenibilidad y operación
+	•	OPS-01: IaC 100% Terraform, sin cambios manuales en consola AWS para recursos productivos.
+	•	OPS-02: CI/CD obligatorio; ningún deploy manual a producción.
+	•	OPS-03: Cobertura mínima de tests unitarios 70% backend, 60% frontend.
+	•	OPS-04: Runbooks publicados para los 5 escenarios críticos (BD caída, AZ caída, region caída, breach, certificado masivo fallido).
+	•	OPS-05: Telemetría estructurada (JSON) con trace_id propagado entre frontend, API y workers.
+
+6. KPIs de producto
+Métricas para evaluar éxito del MVP a 30, 60 y 90 días post Go-Live.
+KPI
+Meta 30 días
+Meta 60 días
+Meta 90 días
+Asegurados cargados
+5,000
+12,000
+20,000 (piso anual)
+Certificados entregados (bandeja)
+≥97%
+≥98%
+≥99%
+Tiempo medio entrega certificado
+≤90 s
+≤60 s
+≤45 s
+Login asegurados activos / mes
+10%
+25%
+40%
+Llamadas resueltas por chatbot (sin escalar)
+n/a
+30%
+50%
+Reportes generados por Roy / mes
+1
+2
+4
+Tickets de soporte / 1k asegurados
+≤8
+≤5
+≤3
+Uptime mensual
+≥99.5%
+≥99.5%
+≥99.7%
+NPS interno (operadores MAC, n=5)
+n/a
+≥40
+≥50
+
+7. Definición de Done a nivel feature
+Una funcionalidad se considera Done cuando cumple TODAS las condiciones siguientes:
+	•	Código mergeado a main vía PR aprobado por al menos un revisor distinto al autor.
+	•	Tests unitarios + integración pasan en CI; cobertura no decrece bajo umbral.
+	•	Test E2E del happy path crítico de la feature pasa en staging.
+	•	DAST OWASP ZAP no reporta hallazgos High en endpoints nuevos.
+	•	SAST Semgrep + Dependabot sin alertas Critical/High abiertas para el código nuevo.
+	•	Documentación de API actualizada (OpenAPI generado de los DTOs).
+	•	Runbook (si la feature introduce nuevo failure mode) o ADR (si toma decisión arquitectónica) publicado en repo.
+	•	Demostrada en review de sprint con datos representativos.
+	•	Aprobada por PO (o stakeholder delegado) contra criterios de aceptación.
+	•	Deploy a staging exitoso y smoke test verde antes de la review.
+8. Riesgos de producto y mitigaciones
+Riesgo
+Probabilidad
+Impacto
+Mitigación
+Layout MAC cambia en pleno sprint
+Media
+Alto
+Diseñar parser flexible con mapeo de columnas configurable; dejar zona de feedback con MAC en sprint 2.
+Cognito SAML con IdP MAC requiere ajustes que no controlamos
+Media
+Alto
+Plan B: login local Cognito con MFA TOTP para Go-Live; SAML en sprint 5–6.
+Reputación de envío SES insuficiente para 10k correos día 1
+Media
+Medio
+Solicitar salida de sandbox sprint 1; warm-up gradual; configurar dominio dedicado y DKIM.
+Operadores MAC con baja adopción al portal (siguen pidiendo Excel)
+Media
+Alto
+Onboarding presencial + acompañamiento en las primeras 2 cargas reales.
+Volumen real Y1 supera 20k (efecto sindicato grande)
+Baja
+Medio
+Arquitectura ya dimensionada para 60k; revisar cuotas SES/Cognito.
+Hallazgo crítico en pentest pre Go-Live
+Baja
+Alto
+Pentest interno en sprint 5; pentest externo formal contratado para Q3-2026.
+MAC exige residencia mx-central-1 a último momento
+Baja
+Alto
+DPA cubre transferencia internacional; SKU premium documentado; IaC permite migración sin cambios de código.
+9. Glosario
+Término
+Definición
+Tenant
+Cliente lógico aislado dentro de la plataforma (MAC, SNTE, CATEM, etc.).
+RLS
+Row-Level Security de PostgreSQL: políticas por tabla que filtran filas según tenant_id.
+MAU
+Monthly Active Users (usuarios únicos que ingresan al menos una vez en el mes).
+DPA
+Data Processing Agreement: contrato anexo que regula tratamiento de datos personales.
+LFPDPPP
+Ley Federal de Protección de Datos Personales en Posesión de Particulares (México).
+DAST
+Dynamic Application Security Testing (pruebas dinámicas de seguridad).
+SAST
+Static Application Security Testing (análisis estático de código).
+RTO/RPO
+Recovery Time/Point Objective: tiempo y pérdida máxima tolerable ante un desastre.
+CMK
+Customer Managed Key (llave criptográfica administrada por el cliente en KMS).
+IRP
+Incident Response Plan.
+Pólizas / Coberturas / Paquetes
+Pólizas: contrato MAC↔asegurado; Coberturas: beneficios específicos; Paquetes: agrupación comercial (Básico, Premium).
+Layout
+Archivo Excel/CSV con estructura predefinida que MAC usa para cargar asegurados.

@@ -1,0 +1,39 @@
+{
+  "name": "segurasist-web",
+  "version": "0.1.0",
+  "private": true,
+  "description": "SegurAsist monorepo - admin + portal asegurado (Next.js 14)",
+  "packageManager": "pnpm@8.15.6",
+  "engines": {
+    "node": ">=20.0.0",
+    "pnpm": ">=8.15.0"
+  },
+  "scripts": {
+    "dev": "turbo run dev --parallel",
+    "build": "turbo run build",
+    "lint": "turbo run lint",
+    "typecheck": "turbo run typecheck",
+    "test:unit": "turbo run test:unit",
+    "test:e2e": "playwright test --config=tests/e2e/playwright.config.ts",
+    "storybook": "pnpm --filter @segurasist/ui storybook",
+    "clean": "turbo run clean && rm -rf node_modules .turbo",
+    "format": "prettier --write \"**/*.{ts,tsx,md,json}\"",
+    "format:check": "prettier --check \"**/*.{ts,tsx,md,json}\"",
+    "openapi:gen": "pnpm --filter @segurasist/api-client openapi:gen"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.45.3",
+    "@types/node": "20.14.10",
+    "eslint": "8.57.0",
+    "prettier": "3.3.3",
+    "prettier-plugin-tailwindcss": "0.6.6",
+    "turbo": "2.0.9",
+    "typescript": "5.4.5"
+  },
+  "pnpm": {
+    "overrides": {
+      "react": "18.3.1",
+      "react-dom": "18.3.1"
+    }
+  }
+}

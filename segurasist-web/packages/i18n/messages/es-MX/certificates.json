@@ -1,0 +1,8 @@
+{
+  "title": "Certificados",
+  "downloadPdf": "Descargar PDF",
+  "share": "Compartir por correo",
+  "reissue": "Reemitir certificado",
+  "version": "Versión {n}",
+  "issuedOn": "Emitido el {date}"
+}

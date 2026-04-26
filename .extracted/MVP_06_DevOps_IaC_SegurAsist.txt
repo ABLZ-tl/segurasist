@@ -1,0 +1,647 @@
+Plan DevOps e IaC — MVP SegurAsist
+Cuentas AWS · Terraform · CI/CD GitHub Actions · Observabilidad · DR · Hardening · Costos
+Campo
+Valor
+Documento
+Plan DevOps e IaC — MVP SegurAsist
+Versión
+v1.0 – Abril 2026
+Audiencia
+DevOps, SRE, Tech Lead, CISO
+Clasificación
+Interno – Confidencial
+Cliente ancla
+Hospitales MAC – Roy / Innovación Segura
+Fecha
+2026-04-25
+
+1. Resumen DevOps
+La plataforma SegurAsist se opera 100% como código (IaC + GitOps) con cero cambios manuales en consola AWS para recursos productivos. Todo lo que no esté en Git no existe. La estrategia descansa en cuatro pilares: AWS Organizations + cuentas separadas; Terraform 1.7 con remote state versionado; GitHub Actions para CI/CD; observabilidad CloudWatch + GuardDuty + Security Hub centralizada en una cuenta security.
+1.1 Stack DevOps
+Capa
+Decisión
+Notas
+Cuentas AWS
+Organizations: root, security, dev, staging, prod
+Control Tower opcional fase 2
+IaC
+Terraform 1.7+ con módulos compartidos
+Remote state S3 + DynamoDB lock
+CI/CD
+GitHub Actions (3000 min gratis Team)
+Reusable workflows + composite actions
+Image registry
+Amazon ECR Private
+Scan on push + lifecycle
+Compute backend
+AWS App Runner
+Auto-deploy desde ECR
+Compute jobs
+AWS Lambda (Node 20)
+Despliegue vía Terraform o sam build
+Frontend hosting
+AWS Amplify Hosting (monorepo)
+Build automático desde GitHub
+Secrets
+AWS Secrets Manager + KMS
+Rotación 30 d para credenciales BD
+DNS
+Route 53
+Hosted zone segurasist.mx
+TLS
+AWS Certificate Manager
+Renovación automática
+WAF
+AWS WAF v2 + Shield Standard
+Managed rules OWASP, SQLi, XSS, IP rep
+IDS/threat
+GuardDuty + Security Hub
+Findings agregados en cuenta security
+Hardening
+AWS Config + Security Hub CIS
+AWS Foundations v2.0, Linux 2023, RDS
+Logs
+CloudWatch Logs + S3 Object Lock
+12 m online + 24 m archive Glacier
+Tracing
+AWS X-Ray
+Sampling 5% prod
+External monitor
+UptimeRobot Pro
+50 monitores 1-min
+Cost mgmt
+AWS Budgets + Cost Anomaly Detection
+Alerta a 70/90/100% mensual
+Backup
+AWS Backup + RDS automated + S3 versioning
+Cross-region copy a us-east-2
+
+2. Estructura de cuentas AWS
+Cuenta
+Email
+OU
+Propósito
+root
+aws-root@segurasist.mx
+—
+Billing, Organizations, IAM Identity Center, Service Control Policies
+security
+aws-security@segurasist.mx
+Security
+GuardDuty agg, Security Hub agg, Config agg, audit trail S3
+log-archive
+aws-logs@segurasist.mx
+Security
+Bucket S3 receptor de CloudTrail org-wide (Object Lock)
+dev
+aws-dev@segurasist.mx
+Workloads
+Sandbox para devs; quotas reducidas
+staging
+aws-staging@segurasist.mx
+Workloads
+Réplica de prod, datos sintéticos
+prod
+aws-prod@segurasist.mx
+Workloads
+Producción con datos reales MAC
+2.1 Service Control Policies (SCPs) clave
+	•	Bloquear región fuera de us-east-1, us-east-2 (excepto IAM y CloudFront).
+	•	Bloquear deshabilitación de GuardDuty, Security Hub, Config, CloudTrail.
+	•	Bloquear creación de usuarios IAM (forzar IAM Identity Center).
+	•	Bloquear creación de buckets sin cifrado y sin Block Public Access.
+	•	Bloquear creación de Security Groups con 0.0.0.0/0 hacia puertos internos (RDS 5432, Redis 6379).
+	•	Bloquear borrado de S3 Object Lock objects (modo Compliance).
+2.2 IAM Identity Center (SSO de AWS)
+Acceso humano a las cuentas vía IAM Identity Center federado a Google Workspace SegurAsist (saml). Roles permission-set:
+Permission Set
+Acceso
+Usuarios
+AdminFullAccess
+Admin total
+Tech Lead + DevOps Lead (break-glass; MFA hard)
+DevOpsEngineer
+Recursos infra (sin IAM root)
+DevOps + SRE
+ReadOnly
+Lectura completa
+Tech Lead, Backend, Frontend (debug)
+BillingViewer
+Cost Explorer + Budgets
+PM, finanzas
+SecurityAuditor
+GuardDuty/SH/Config + read CloudTrail
+CISO + auditores externos
+MFA hard obligatorio (WebAuthn / Yubikey) para AdminFullAccess. MFA TOTP para el resto.
+
+3. Red — VPC por ambiente
+3.1 Topología
+Cada ambiente (dev/staging/prod) tiene su VPC dedicada en us-east-1, CIDR /16, 3 AZs (a, b, c). Subnets:
+Subnet
+CIDR (prod)
+Tipo
+Recursos
+public-a/b/c
+10.0.0.0/24, .1.0/24, .2.0/24
+Pública
+NLB/ALB, NAT Gateway
+private-app-a/b/c
+10.0.10.0/24, .11.0/24, .12.0/24
+Privada (egress NAT)
+App Runner VPC connector, Lambdas
+private-data-a/b/c
+10.0.20.0/24, .21.0/24, .22.0/24
+Privada aislada
+RDS, ElastiCache
+3.2 Endpoints VPC
+Endpoints Gateway: S3, DynamoDB. Endpoints Interface: KMS, Secrets Manager, SQS, SES, ECR API, ECR DKR, CloudWatch Logs, EventBridge, Cognito-IDP. Esto evita tráfico por NAT y reduce costo + ataque.
+3.3 Security Groups
+SG
+Inbound
+Outbound
+sg-alb
+443 0.0.0.0/0 (vía WAF)
+→ sg-apprunner 3000
+sg-apprunner
+3000 desde sg-alb
+→ sg-rds 5432, sg-redis 6379, 443 a internet (egress)
+sg-lambda-vpc
+—
+→ sg-rds 5432, sg-redis 6379, 443
+sg-rds
+5432 desde sg-apprunner, sg-lambda-vpc, sg-bastion (admin)
+—
+sg-redis
+6379 desde sg-apprunner, sg-lambda-vpc
+—
+sg-bastion
+22 desde IPs allowlist DevOps (solo emergencias)
+→ sg-rds 5432
+
+4. Terraform — estructura y módulos
+4.1 Estructura del repo segurasist-infra
+segurasist-infra/
+├── modules/
+│   ├── vpc/
+│   ├── rds-postgres/
+│   ├── apprunner-service/
+│   ├── lambda-function/
+│   ├── cognito-user-pool/
+│   ├── s3-bucket/                  # con/sin Object Lock
+│   ├── waf-web-acl/
+│   ├── eventbridge-bus/
+│   ├── sqs-queue/
+│   ├── ses-domain/
+│   ├── kms-key/
+│   ├── cloudwatch-alarm/
+│   ├── route53-record/
+│   ├── amplify-app/
+│   └── iam-permission-set/
+├── envs/
+│   ├── dev/
+│   │   ├── backend.tf              # state S3 dev
+│   │   ├── providers.tf
+│   │   ├── main.tf
+│   │   ├── variables.tf
+│   │   └── outputs.tf
+│   ├── staging/
+│   └── prod/
+├── global/
+│   ├── organization/               # OU + SCP + IAM IC
+│   ├── security/                   # GuardDuty agg, SH, Config agg
+│   └── route53/                    # zona segurasist.mx
+├── .github/workflows/
+│   ├── terraform-plan.yml
+│   └── terraform-apply.yml
+├── README.md
+└── Makefile
+4.2 Remote state
+Bucket S3 segurasist-tfstate-{env} con versioning, SSE-KMS y Block Public Access. Lock con DynamoDB tabla terraform-lock-{env}. Cada ambiente con su backend separado para aislar blast-radius.
+4.3 Provider y convenciones
+terraform {
+  required_version = ">= 1.7.0, < 2.0.0"
+  required_providers {
+    aws = { source = "hashicorp/aws", version = "~> 5.40" }
+  }
+  backend "s3" {
+    bucket         = "segurasist-tfstate-prod"
+    key            = "main.tfstate"
+    region         = "us-east-1"
+    dynamodb_table = "terraform-lock-prod"
+    encrypt        = true
+    kms_key_id     = "alias/segurasist-tfstate"
+  }
+}
+
+provider "aws" {
+  region = "us-east-1"
+  default_tags {
+    tags = {
+      Project   = "SegurAsist"
+      Env       = var.environment
+      Owner     = "platform"
+      ManagedBy = "Terraform"
+      CostCtr   = "MAC-MVP"
+    }
+  }
+}
+4.4 Convenciones de naming
+	•	Recursos: segurasist-{env}-{servicio}-{detalle} (e.g., segurasist-prod-rds-main).
+	•	Tags obligatorios: Project, Env, Owner, ManagedBy, CostCtr.
+	•	Variables: snake_case, defaults seguros (cifrado on, public off).
+	•	Módulos: con README.md, examples/, tests/ (Terratest opcional fase 2).
+
+5. Snippets ilustrativos de módulos
+5.1 Módulo RDS PostgreSQL Multi-AZ
+module "rds_main" {
+  source = "../../modules/rds-postgres"
+
+  identifier        = "segurasist-prod-rds-main"
+  engine_version    = "16.3"
+  instance_class    = "db.t4g.small"
+  allocated_storage = 50
+  max_storage       = 500
+
+  multi_az           = true
+  storage_encrypted  = true
+  kms_key_id         = module.kms_rds.key_arn
+  performance_insights_enabled = true
+  monitoring_interval         = 60
+
+  backup_retention_period = 7
+  backup_window           = "08:00-08:30"
+  maintenance_window      = "sun:09:00-sun:09:30"
+  deletion_protection     = true
+  copy_tags_to_snapshot   = true
+
+  vpc_id            = module.vpc.id
+  subnet_ids        = module.vpc.private_data_subnet_ids
+  allowed_sg_ids    = [module.sg_apprunner.id, module.sg_lambda_vpc.id]
+
+  parameter_group   = {
+    family = "postgres16"
+    parameters = [
+      { name = "shared_preload_libraries", value = "pg_stat_statements,pgaudit", apply_method = "pending-reboot" },
+      { name = "pgaudit.log",              value = "ddl,role,write",            apply_method = "immediate" },
+      { name = "rds.force_ssl",            value = "1",                         apply_method = "immediate" },
+      { name = "log_min_duration_statement", value = "1000",                    apply_method = "immediate" }
+    ]
+  }
+
+  cross_region_replica = {
+    enabled = true
+    region  = "us-east-2"
+    kms_key_arn = module.kms_rds_dr.key_arn
+  }
+
+  master_username = "segurasist_admin"
+  manage_master_user_password = true
+  master_user_secret_kms_key_id = module.kms_secrets.key_arn
+}
+5.2 Módulo App Runner
+module "apprunner_api" {
+  source = "../../modules/apprunner-service"
+
+  service_name = "segurasist-prod-api"
+  image_uri    = "${data.aws_caller_identity.current.account_id}.dkr.ecr.us-east-1.amazonaws.com/segurasist-api:${var.image_tag}"
+
+  cpu    = "1024"
+  memory = "2048"
+
+  port  = 3000
+  health_check = {
+    path    = "/health/ready"
+    interval = 10
+    timeout  = 5
+    healthy_threshold   = 2
+    unhealthy_threshold = 3
+  }
+
+  auto_scaling = {
+    min_size = 1
+    max_size = 10
+    max_concurrency = 100
+  }
+
+  vpc_connector = module.vpc_connector.arn
+  observability_enabled = true
+
+  env_vars = {
+    NODE_ENV   = "production"
+    AWS_REGION = "us-east-1"
+    LOG_LEVEL  = "info"
+  }
+
+  secrets = {
+    DATABASE_URL = "${module.rds_main.master_user_secret_arn}:url::"
+    REDIS_URL    = "${module.redis_secret.arn}:url::"
+  }
+
+  waf_web_acl_arn = module.waf_api.arn
+}
+5.3 Módulo S3 con Object Lock (auditoría)
+module "s3_audit" {
+  source = "../../modules/s3-bucket"
+
+  name = "segurasist-prod-audit"
+
+  versioning_enabled = true
+  object_lock = {
+    enabled         = true
+    default_mode    = "COMPLIANCE"
+    default_days    = 730    # 24 meses
+  }
+
+  block_public_access = true
+  sse_kms_key_arn     = module.kms_audit.key_arn
+
+  lifecycle_rules = [{
+    id = "archive-after-90d"
+    transition = [{ days = 90, storage_class = "GLACIER_DEEP_ARCHIVE" }]
+  }]
+
+  cross_region_replication = {
+    destination_bucket_arn = "arn:aws:s3:::segurasist-prod-audit-dr"
+    destination_kms_arn    = "arn:aws:kms:us-east-2:..."
+  }
+}
+5.4 Módulo WAF
+AWS Managed Rules: AWSManagedRulesCommonRuleSet, AWSManagedRulesKnownBadInputsRuleSet, AWSManagedRulesSQLiRuleSet, AWSManagedRulesAmazonIpReputationList, AWSManagedRulesAnonymousIpList. Rate-based rule por IP: 100 req/min default; configurable por tenant a través de label-based rules. Logging a CloudWatch + Kinesis Firehose a S3.
+
+6. Pipelines CI/CD (GitHub Actions)
+6.1 Repos y pipelines
+Repo
+Pipelines
+Triggers
+segurasist-api
+lint, test, build-image, deploy-staging, deploy-prod
+PR (lint+test+build), push main (deploy staging), tag v* (deploy prod)
+segurasist-web
+lint, test, build, e2e, deploy-amplify-staging, deploy-amplify-prod
+Mismo patrón
+segurasist-infra
+tf-fmt, tf-validate, tf-plan, tf-apply
+PR (plan), push main (apply staging), tag v* (apply prod con approval)
+6.2 Workflow API (extracto)
+name: api-ci
+on:
+  pull_request:
+  push:
+    branches: [main]
+    tags: ['v*']
+
+permissions:
+  id-token: write   # OIDC a AWS sin claves
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20, cache: npm }
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env: { POSTGRES_PASSWORD: test, POSTGRES_DB: test }
+        ports: ['5432:5432']
+        options: --health-cmd pg_isready --health-interval 5s
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20, cache: npm }
+      - run: npm ci
+      - run: npx prisma migrate deploy
+      - run: npm run test:unit
+      - run: npm run test:integration
+      - run: npm run test:cross-tenant   # GATE crítico
+
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: npm ci
+      - run: npx semgrep --config p/owasp-top-ten --error
+      - run: npm audit --audit-level=high
+      - uses: github/codeql-action/init@v3
+        with: { languages: javascript-typescript }
+      - uses: github/codeql-action/analyze@v3
+
+  build-image:
+    needs: [lint, test, security]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_PROD }}:role/github-actions-api
+          aws-region: us-east-1
+      - uses: aws-actions/amazon-ecr-login@v2
+      - run: |
+          docker build -t segurasist-api:${{ github.sha }} .
+          docker tag  segurasist-api:${{ github.sha }} ${{ env.ECR }}/segurasist-api:${{ github.sha }}
+          docker push ${{ env.ECR }}/segurasist-api:${{ github.sha }}
+      - name: Trivy scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.ECR }}/segurasist-api:${{ github.sha }}
+          severity: HIGH,CRITICAL
+          exit-code: 1
+
+  deploy-staging:
+    if: github.ref == 'refs/heads/main'
+    needs: build-image
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_STAGING }}:role/github-actions-deploy
+          aws-region: us-east-1
+      - run: aws apprunner start-deployment --service-arn $STAGING_SERVICE_ARN
+      - run: ./scripts/wait-for-healthy.sh staging
+      - name: DAST OWASP ZAP
+        run: ./scripts/run-zap.sh https://api.staging.segurasist.mx
+6.3 Promociones a producción
+Tag v* en main dispara workflow deploy-prod con environment: production que requiere approval manual de PM o Tech Lead. La aprobación queda registrada en GitHub Environments con timestamp y usuario.
+
+7. Gestión de secretos
+Secreto
+Almacén
+Rotación
+Acceso
+DATABASE_URL
+Secrets Manager (managed master)
+30 días auto
+App Runner role + DevOps
+REDIS_URL
+Secrets Manager
+Manual (anual)
+App Runner role
+COGNITO_CLIENT_SECRET
+Secrets Manager
+180 días manual
+App Runner + Lambda
+SES_SMTP_CREDS (si SES SMTP)
+Secrets Manager
+180 días
+App Runner
+GitHub OIDC role
+IAM (no secret)
+—
+GitHub Actions vía OIDC; no hay claves
+JWKS Cognito
+Público
+Auto
+—
+KMS CMK
+KMS
+Anual auto
+Roles específicos
+1Password Business (humanos)
+1Password
+—
+Equipo SegurAsist
+Política: ningún secreto en código, .env de prod, ni en Slack. PR con detección de secretos por gitleaks bloquea merge.
+
+8. Observabilidad y on-call
+8.1 Stack
+	•	Logs: CloudWatch Logs por servicio (App Runner, cada Lambda, RDS errors).
+	•	Métricas: CloudWatch Metrics nativas + EMF custom desde la API.
+	•	Tracing: X-Ray (sampling 5% prod, 100% staging).
+	•	Dashboards: 4 dashboards CloudWatch (Operacional, Negocio, Seguridad, Costos).
+	•	Alarms: SNS topic seg-prod-alarms-p1, p2, p3.
+	•	On-call routing: SNS → Lambda → PagerDuty (Free Tier en Q3-2026 evaluar Pro).
+	•	Status page: UptimeRobot público en status.segurasist.mx.
+8.2 Dashboards CloudWatch
+Dashboard
+Widgets clave
+Operacional
+API requests/min, latencia p50/p95/p99, error rate, RDS CPU/conn, Lambda invocations/errors, SQS depth, Amplify build status
+Negocio
+Asegurados activos, certificados emitidos hoy, % éxito email, lotes en proceso, top tenants por volumen
+Seguridad
+Login fallidos, intentos cross-tenant, GuardDuty findings (sev), Security Hub score CIS, WAF blocked, secret rotation status
+Costos
+Spend diario actual vs budget, top 5 servicios, tendencia mensual, alarmas anomaly
+8.3 On-call
+Rotación semanal entre DevOps + Tech Lead + Backend Sr (en hypercare semanas 6-8 todo el equipo). Severidades:
+Severidad
+SLA acuse
+SLA resolución
+Ejemplo
+P1
+15 min 24/7
+≤4 h
+API down, breach, BD caída, GuardDuty Critical
+P2
+30 min hábil + on-call
+≤8 h
+RDS CPU > 80%, p95 > 1 s sostenido
+P3
+1 h hábil
+Próximo sprint
+Dashboard widget roto, log anomaly menor
+8.4 Runbooks
+Catálogo mínimo en /docs/runbooks/ del repo segurasist-infra:
+	•	RB-001 — API down (App Runner unhealthy)
+	•	RB-002 — RDS al límite de conexiones
+	•	RB-003 — Failover cross-region a us-east-2
+	•	RB-004 — Bounce rate SES > 5%
+	•	RB-005 — Intento cross-tenant detectado
+	•	RB-006 — GuardDuty Critical finding
+	•	RB-007 — Lambda PDF saturada (cola SQS atrasada)
+	•	RB-008 — Restauración point-in-time (RDS PITR)
+	•	RB-009 — Rotación manual de KMS CMK
+	•	RB-010 — Triage de IRP (P1 brecha confirmada)
+
+9. Backups y disaster recovery
+9.1 Backups
+Recurso
+Estrategia
+Retención
+Cross-region
+RDS PostgreSQL
+Automated daily + PITR + snapshots semanales
+7 d PITR + 30 d snapshots
+Sí (us-east-2)
+S3 buckets
+Versioning + lifecycle a Glacier 90 d
+Versioning indefinido (lifecycle)
+Replication a us-east-2
+S3 audit (Object Lock)
+Cross-region replication
+24 m mínimo (Compliance)
+Sí
+Cognito
+Export usuarios mensual a S3 (Lambda)
+12 m
+Sí
+Secrets Manager
+Versionado nativo
+Anterior + actual
+Replication explícita
+Terraform state
+Versioning S3 + lock DynamoDB
+30 versiones
+Replication a us-east-2
+9.2 DR – objetivos y plan
+	•	RTO: ≤4 h. RPO: ≤24 h (PITR cubre hasta 5 minutos en RDS).
+	•	Réplica RDS asíncrona en us-east-2; promoción manual con runbook RB-003.
+	•	S3 cross-region replication para certificados, audit, exports.
+	•	DR drill cada 6 meses con failover real en ambiente staging-mirror.
+	•	Documentación: runbook RB-003 con tiempos medidos y rollback plan.
+
+10. Hardening y compliance continuo
+10.1 CIS Benchmarks habilitados
+	•	AWS Foundations Benchmark v2.0 vía Security Hub.
+	•	CIS Amazon Linux 2023 (cuando se use EC2 manual).
+	•	CIS PostgreSQL 16 vía Parameter Group personalizado.
+	•	CIS Docker (imágenes API revisadas con dockle).
+10.2 AWS Config rules clave
+	•	s3-bucket-public-access-prohibited
+	•	s3-bucket-server-side-encryption-enabled
+	•	rds-storage-encrypted
+	•	rds-instance-public-access-check
+	•	encrypted-volumes (EBS)
+	•	iam-user-mfa-enabled
+	•	iam-root-access-key-check (debe ser 0)
+	•	cloudtrail-enabled (org-wide)
+	•	guardduty-enabled-centralized
+	•	securityhub-enabled
+	•	wafv2-rulegroup-not-empty
+	•	acm-certificate-expiration-check
+	•	secretsmanager-rotation-enabled
+10.3 Inspector y scanning continuo
+	•	Amazon Inspector activo en cuentas dev/staging/prod: scan de imágenes ECR y Lambdas.
+	•	Findings High/Critical disparan ticket Linear automáticamente.
+	•	Remediation SLA: Crítico 7d, Alto 30d, Medio 60d, Bajo 90d.
+
+11. Gestión de costos
+Coincide con el Stack Definitivo: ~4,730 MXN/mes año 1, ~11,240 MXN/mes año 3. DevOps añade alarmas y disciplina:
+	•	AWS Budgets: 70%/90%/100% del mensual con alerta a Slack #segurasist-cost.
+	•	Cost Anomaly Detection con umbral USD 50/día.
+	•	Etiquetado obligatorio Project/Env/CostCtr; reportes desglosados mensual.
+	•	Reservas y Savings Plans evaluables en mes 6 (no antes; necesitamos baseline).
+	•	Lifecycle policies S3 obligatorias para todos los buckets.
+	•	Lambda concurrent execution caps por función para evitar runaway.
+
+12. Onboarding técnico al equipo
+Checklist de primer día para nuevo dev/devops:
+	•	Acceso GitHub al org (CODEOWNERS revisado).
+	•	Acceso IAM Identity Center con role apropiado + MFA hard configurada.
+	•	1Password vault Equipo asignado.
+	•	Slack canales: #segurasist-mac, #segurasist-eng, #segurasist-cost, #segurasist-alerts.
+	•	Linear team SegurAsist + plantillas de ticket.
+	•	Workstation: Node 20, pnpm, Docker, AWS CLI, Terraform 1.7, gh CLI, pre-commit hooks.
+	•	Lectura obligatoria primera semana: PRD, Plan, Arquitectura, este documento (DevOps), Mapeo Seguridad.
+	•	Pair programming sesión con Tech Lead día 2 sobre flujo PR.
+	•	Dry run: PR mock contra repo segurasist-api antes de tocar código real.

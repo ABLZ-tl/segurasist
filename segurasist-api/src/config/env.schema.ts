@@ -1,0 +1,86 @@
+import { z } from 'zod';
+
+const booleanString = z.enum(['true', 'false', '0', '1']).transform((v) => v === 'true' || v === '1');
+
+const logLevels = ['trace', 'debug', 'info', 'warn', 'error', 'fatal'] as const;
+
+export const EnvSchema = z.object({
+  // Runtime
+  NODE_ENV: z.enum(['development', 'test', 'staging', 'production']).default('development'),
+  PORT: z.coerce.number().int().min(1).max(65535).default(3000),
+  HOST: z.string().default('0.0.0.0'),
+  LOG_LEVEL: z.enum(logLevels).default('info'),
+  TRACE_SAMPLE_RATE: z.coerce.number().min(0).max(1).default(0.05),
+
+  // Database
+  DATABASE_URL: z
+    .string()
+    .url()
+    .refine((u) => u.startsWith('postgres://') || u.startsWith('postgresql://'), {
+      message: 'DATABASE_URL must be a postgres connection string',
+    }),
+
+  // Cache
+  REDIS_URL: z.string().url(),
+
+  // AWS — region and Cognito user pools
+  AWS_REGION: z.string().min(1).default('mx-central-1'),
+  COGNITO_REGION: z.string().min(1),
+  COGNITO_USER_POOL_ID_ADMIN: z.string().min(1),
+  COGNITO_USER_POOL_ID_INSURED: z.string().min(1),
+  COGNITO_CLIENT_ID_ADMIN: z.string().min(1),
+  COGNITO_CLIENT_ID_INSURED: z.string().min(1),
+  // Override del endpoint Cognito para dev local (cognito-local).
+  // Si está presente, JwtAuthGuard arma issuer/JWKS contra esta base en lugar de
+  // `https://cognito-idp.<region>.amazonaws.com`. Producción: dejar vacío.
+  COGNITO_ENDPOINT: z.string().url().optional(),
+
+  // S3 buckets
+  S3_BUCKET_UPLOADS: z.string().min(1),
+  S3_BUCKET_CERTIFICATES: z.string().min(1),
+  S3_BUCKET_AUDIT: z.string().min(1),
+  S3_BUCKET_EXPORTS: z.string().min(1),
+
+  // SQS
+  SQS_QUEUE_LAYOUT: z.string().url(),
+  SQS_QUEUE_PDF: z.string().url(),
+  SQS_QUEUE_EMAIL: z.string().url(),
+  SQS_QUEUE_REPORTS: z.string().url(),
+
+  // SES
+  SES_SENDER_DOMAIN: z.string().min(1),
+  SES_CONFIGURATION_SET: z.string().min(1),
+
+  // KMS
+  KMS_KEY_ID: z.string().min(1),
+
+  // CORS / endpoints
+  CORS_ALLOWED_ORIGINS: z
+    .string()
+    .min(1)
+    .transform((s) =>
+      s
+        .split(',')
+        .map((v) => v.trim())
+        .filter(Boolean),
+    ),
+
+  // Optional
+  AWS_ENDPOINT_URL: z.string().url().optional(),
+  ENABLE_SWAGGER: booleanString.optional().default('false'),
+});
+
+export type Env = z.infer<typeof EnvSchema>;
+
+export function loadEnv(raw: NodeJS.ProcessEnv = process.env): Env {
+  const parsed = EnvSchema.safeParse(raw);
+  if (!parsed.success) {
+    const issues = parsed.error.issues
+      .map((i) => `  - ${i.path.join('.') || '(root)'}: ${i.message}`)
+      .join('\n');
+    // eslint-disable-next-line no-console
+    console.error(`[BOOT FATAL] Invalid environment variables:\n${issues}`);
+    process.exit(1);
+  }
+  return parsed.data;
+}

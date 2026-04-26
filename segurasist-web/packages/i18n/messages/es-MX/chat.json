@@ -1,0 +1,10 @@
+{
+  "title": "Asistente SegurAsist",
+  "placeholder": "Escribe tu mensaje...",
+  "suggestions": {
+    "validity": "¿Hasta cuándo es mi póliza?",
+    "coverage": "¿Qué cubre mi paquete?",
+    "agent": "Quiero hablar con un agente"
+  },
+  "fallback": "No pude resolver tu duda. ¿Te conecto con un agente?"
+}

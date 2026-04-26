@@ -1,0 +1,9 @@
+{
+  "generic": "Ocurrió un error inesperado. Intenta nuevamente.",
+  "network": "No pudimos conectarnos. Revisa tu conexión.",
+  "curpInvalid": "CURP inválido: el dígito verificador no coincide.",
+  "rfcInvalid": "RFC inválido. Verifica el formato.",
+  "rateLimited": "Demasiadas solicitudes. Espera un momento e intenta de nuevo.",
+  "sessionExpired": "Tu sesión ha expirado. Inicia sesión nuevamente.",
+  "forbidden": "No tienes permisos para realizar esta acción."
+}

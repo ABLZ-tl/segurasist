@@ -1,0 +1,91 @@
+name: terraform-apply
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "modules/**"
+      - "envs/staging/**"
+      - "global/**"
+  release:
+    types: [published]   # tag v* triggers prod apply
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  TF_VERSION: "1.7.5"
+  TF_IN_AUTOMATION: "true"
+  AWS_REGION: mx-central-1
+
+concurrency:
+  group: tf-apply-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  apply-staging:
+    name: apply staging
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: AWS OIDC login (staging)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID_STAGING }}:role/github-actions-tf-apply-staging
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: gha-tf-apply-staging-${{ github.run_id }}
+
+      - name: terraform init
+        working-directory: envs/staging
+        run: terraform init -input=false
+
+      - name: terraform apply
+        working-directory: envs/staging
+        run: terraform apply -input=false -auto-approve
+
+  apply-prod:
+    name: apply prod
+    if: github.event_name == 'release' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    environment: production    # requires manual approval (configure in GitHub)
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: AWS OIDC login (prod)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID_PROD }}:role/github-actions-tf-apply-prod
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: gha-tf-apply-prod-${{ github.run_id }}
+
+      - name: terraform init
+        working-directory: envs/prod
+        run: terraform init -input=false
+
+      - name: terraform plan (record before apply)
+        working-directory: envs/prod
+        run: terraform plan -input=false -out=tfplan.out
+
+      - name: terraform apply
+        working-directory: envs/prod
+        run: terraform apply -input=false tfplan.out
+
+      - name: Notify Slack
+        if: always()
+        run: |
+          echo "Apply prod finished with status=${{ job.status }}"
+          # TODO: integrate Slack webhook (RB-001 / observability sprint)

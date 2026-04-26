@@ -1,0 +1,563 @@
+Arquitectura Técnica MVP — SegurAsist
+C4 contexto + contenedores · ADRs cerrados · Modelo de datos multi-tenant · 100% AWS
+Campo
+Valor
+Documento
+Arquitectura Técnica MVP — SegurAsist
+Versión
+v1.0 – Abril 2026
+Audiencia
+Tech Lead, Backend, Frontend, DevOps, CISO
+Clasificación
+Interno – Confidencial
+Cliente ancla
+Hospitales MAC – Roy / Innovación Segura
+Fecha
+2026-04-25
+
+1. Resumen arquitectónico
+SegurAsist se construye como una plataforma SaaS multi-tenant 100% sobre AWS, optimizada para un cliente ancla (Hospitales MAC) y diseñada para replicarse a SNTE, CATEM, Walmart y otros sin redesarrollo. La arquitectura privilegia servicios gestionados (managed services) para minimizar la sobrecarga operativa de un equipo pequeño y maximizar el cumplimiento heredado del proveedor cloud.
+La región primaria es us-east-1 (N. Virginia) con réplica de DR cross-region en us-east-2 (Ohio). El componente de cómputo principal es AWS App Runner ejecutando un backend NestJS (TypeScript). La persistencia es Amazon RDS PostgreSQL 16 Multi-AZ con Row-Level Security para aislar tenants. El frontend es Next.js 14 con App Router desplegado en AWS Amplify Hosting. La identidad y SSO se gestiona con Amazon Cognito User Pools. Las cargas asíncronas (procesamiento de layouts, generación PDF, envío de correos) viven en AWS Lambda activadas por Amazon SQS y EventBridge. Los archivos (PDF de certificados, layouts subidos, exports) se almacenan en Amazon S3 con cifrado KMS y, en buckets de auditoría, S3 Object Lock en modo Compliance.
+1.1 Pilares de la arquitectura
+	•	Multi-tenant aislado por construcción: tenant_id en cada tabla + RLS PostgreSQL + tests CI cross-tenant + prefijos de bucket separados.
+	•	Serverless-first donde reduce TCO: SQS+Lambda en lugar de Redis+BullMQ; App Runner en lugar de EKS; Amplify en lugar de ECS para el frontend.
+	•	Seguridad por default: TLS 1.3 forzado, AES-256 con CMK rotación anual, MFA obligatorio admin, WAF AWS Managed Rules, GuardDuty 24/7, logs inmutables S3 Object Lock 24 m.
+	•	Observabilidad estructurada: trace_id propagado entre frontend, API y workers; logs JSON; alarmas CloudWatch con on-call PagerDuty.
+	•	IaC obligatorio: 0 cambios manuales en consola para recursos productivos; Terraform versionado en GitHub.
+	•	Migración futura sin re-código: si MAC exige residencia mx-central-1, se replantea sólo Terraform; Cognito y SES tienen workarounds documentados.
+
+2. Vista de contexto (C4 Nivel 1)
+Actores externos y sistemas que interactúan con SegurAsist:
+Actor / sistema
+Rol
+Interacción
+Operador MAC (Lucía)
+Usuario humano
+Carga layouts, consulta dashboard, exporta reportes.
+Admin SegurAsist (Mario)
+Usuario humano
+Administra tenants, paquetes, plantillas, usuarios.
+Asegurado final (Doña Carmen)
+Usuario humano
+Consulta póliza, descarga certificado, abre tickets.
+Sponsor (Roy)
+Usuario humano
+Reportes mensuales, KPIs ejecutivos.
+Azure AD MAC
+IdP externo
+SAML 2.0 / OIDC para SSO de operadores.
+Servicio de SMS (proveedor)
+Tercero
+Envío de OTP a asegurados (vía Cognito).
+Centro de soporte MAC (call center)
+Tercero
+Recibe escalamientos del chatbot por correo.
+AWS (proveedor)
+Plataforma
+Infraestructura, identidad, observabilidad, cumplimiento.
+2.1 Diagrama de contexto (descripción narrada)
+Tres tipos de usuario web (Admin MAC, Admin SegurAsist, Asegurado) entran a SegurAsist a través de URL distintas servidas por Amplify Hosting:
+	•	admin.segurasist.mx — portal administrativo (operadores MAC y SegurAsist), autentica vía Cognito SAML federado o local con MFA.
+	•	portal.segurasist.mx — portal del asegurado, autentica vía Cognito con CURP + OTP.
+	•	api.segurasist.mx — API REST consumida por ambos frontends.
+El backend habla con: RDS PostgreSQL (datos), S3 (archivos), Cognito (auth), SES (email), SQS+Lambda (jobs asíncronos), Secrets Manager (credenciales), CloudWatch (telemetría).
+
+3. Vista de contenedores (C4 Nivel 2)
+Componentes desplegables principales y su responsabilidad.
+Contenedor
+Tecnología
+Responsabilidad
+Web Admin
+Next.js 14 App Router (SSR + RSC) en Amplify Hosting
+UI para operadores MAC y Admin SegurAsist; renderiza dashboard, listados, vistas 360, formularios.
+Web Portal Asegurado
+Mismo monorepo Next.js 14, ruta /asegurados
+UI mobile-first responsive para asegurados.
+API Backend
+NestJS 10 + TypeScript en App Runner (1 vCPU, 2 GB)
+API REST + JWT validation + RLS context + business logic + integración con AWS.
+Worker Layout
+Lambda Node.js 20
+Parser de XLSX/CSV, validación, escritura batch a RDS.
+Worker PDF
+Lambda Node.js 20 + Puppeteer + Chromium layer
+Renderizado de plantilla HTML a PDF, firma metadata, escritura S3.
+Worker Email
+Lambda Node.js 20
+Envío vía SES, manejo de bounces, registro de eventos.
+Worker Reportes
+Lambda Node.js 20
+Generación de XLSX + PDF de reportes mensuales y bajo demanda.
+Cron Scheduler
+EventBridge Scheduler
+Disparadores: cierre mensual de reportes, vacuum BD, rotación KMS, DR healthcheck.
+Cola jobs
+SQS Standard + DLQ
+Buffer entre productor y workers; DLQ para 3 intentos fallidos.
+Eventos integración
+EventBridge Bus
+Bus de eventos de dominio: insured.created, certificate.issued, claim.reported.
+DB
+RDS PostgreSQL 16 Multi-AZ db.t4g.small (escala a m6g.large)
+Datos transaccionales con RLS, pgAudit, pg_stat_statements.
+Cache / sesiones / rate limiter
+ElastiCache Redis Serverless
+Sesiones, throttling por tenant, claves de OTP.
+Object Store
+S3 buckets segregados (uploads, certificates, exports, audit-logs)
+Archivos del tenant; audit-logs en modo Object Lock Compliance.
+CDN
+CloudFront delante de Amplify y de buckets públicos selectos
+Latencia baja global, TLS, caché.
+Identidad
+Cognito User Pool (admin) + User Pool (asegurados)
+SSO SAML/OIDC, MFA, OTP, JWT emisión.
+Secretos
+Secrets Manager + KMS
+Credenciales BD, API keys, llaves CMK.
+WAF
+AWS WAF + Shield Standard
+OWASP Top 10 rules + rate-based rules + IP reputation.
+Detección amenazas
+GuardDuty + Security Hub
+Detección de anomalías, hallazgos consolidados.
+Observabilidad
+CloudWatch Logs/Metrics/Alarms + X-Ray
+Logs, métricas, tracing, alarmas.
+Monitoreo externo
+UptimeRobot Pro
+Checks externos independientes para SLA.
+
+4. Modelo de datos multi-tenant
+4.1 Tablas core (mínimas para el MVP)
+Tabla
+Propósito
+Columnas clave
+tenants
+Catálogo de clientes (MAC, SNTE, etc.)
+id (uuid pk), name, slug, status, created_at
+users
+Usuarios humanos (operadores, admins, asegurados)
+id, tenant_id (fk), cognito_sub, email, role, mfa_enrolled, status
+packages
+Paquetes comerciales (Básico, Premium)
+id, tenant_id, name, description, status
+coverages
+Coberturas dentro de un paquete
+id, package_id, tenant_id, name, type, limit_count, limit_amount
+insureds
+Asegurados
+id, tenant_id, curp, rfc, full_name, dob, email, phone, package_id, valid_from, valid_to, status
+beneficiaries
+Beneficiarios de un asegurado
+id, insured_id, tenant_id, full_name, relationship, dob
+certificates
+Certificados emitidos
+id, insured_id, tenant_id, version, s3_key, hash, issued_at, valid_to, qr_payload
+claims
+Siniestros reportados
+id, insured_id, tenant_id, type, reported_at, description, status, amount_estimated
+coverage_usage
+Consumos de cobertura
+id, insured_id, coverage_id, tenant_id, used_at, amount, source
+batches
+Lotes de carga masiva
+id, tenant_id, file_s3_key, status, rows_total, rows_ok, rows_error, created_by, created_at, completed_at
+batch_errors
+Errores por fila de un lote
+id, batch_id, tenant_id, row_number, column, error_code, error_message
+email_events
+Eventos SES (delivered, bounced, opened)
+id, tenant_id, certificate_id, event_type, occurred_at, detail
+chat_messages
+Mensajes del chatbot
+id, tenant_id, insured_id, direction, content, intent, created_at
+chat_kb
+Knowledge base entries
+id, tenant_id, category, question, answer, version, status
+audit_log
+Bitácora inmutable de acciones
+id, tenant_id, actor_id, action, resource_type, resource_id, ip, user_agent, payload_diff, occurred_at
+4.2 Estrategia de aislamiento multi-tenant
+Dos capas de defensa redundantes:
+	•	Application: cada query lleva tenant_id resuelto desde el JWT (claim custom:tenant_id) por middleware que rechaza la petición si falta. ORM (Prisma) intercepta y agrega tenant_id en where automáticamente.
+	•	Database: PostgreSQL Row-Level Security activa con políticas por tabla. Antes de cada query la sesión ejecuta SET app.current_tenant = '<uuid>'. Las políticas USING comparan tenant_id contra ese setting; si no coincide, el row no es visible NI a SELECT, INSERT, UPDATE ni DELETE.
+Tests CI dedicados intentan en cada PR consultar recursos del tenant B autenticados como tenant A: el resultado esperado es 403 / 0 filas. Si pasan filas, la build falla.
+Ejemplo de política RLS para insureds:
+ALTER TABLE insureds ENABLE ROW LEVEL SECURITY;
+CREATE POLICY insureds_tenant_iso ON insureds USING (tenant_id::text = current_setting('app.current_tenant', true));
+4.3 Estrategia de migraciones
+	•	Tooling: Prisma Migrate (sincroniza con Prisma schema y emite SQL idempotente).
+	•	Política: migraciones forward-only en producción; rollback se maneja con migración compensatoria.
+	•	Despliegue: la migración se ejecuta automáticamente al inicio del deploy en App Runner mediante script pre-start; falla del deploy si la migración falla.
+	•	Datos: migraciones de datos costosas se ejecutan como Lambda one-off con feature flag.
+
+5. Vista de despliegue
+5.1 Cuentas y ambientes AWS
+Cuenta AWS
+Propósito
+Notas
+root (org)
+AWS Organizations + Control Tower + facturación
+Sin recursos productivos. MFA obligatorio.
+security
+Security tooling (GuardDuty agg, Security Hub agg, AWS Config agg)
+Recibe findings de las demás.
+dev
+Sandbox para desarrolladores
+Datos sintéticos. App Runner mínimo.
+staging
+Réplica funcional de producción
+Datos sintéticos similares a prod (anonimizados).
+prod
+Producción con datos reales de MAC
+Acceso humano restringido a SRE on-call.
+5.2 Topología de red
+	•	VPC dedicada por ambiente con CIDR /16, 3 AZs, 6 subnets (3 públicas, 3 privadas).
+	•	RDS PostgreSQL en subnets privadas; sólo accesible desde App Runner y Lambdas via VPC connector.
+	•	ElastiCache Redis Serverless en subnets privadas.
+	•	App Runner integrado a la VPC vía VPC Connector para acceder a RDS y Redis.
+	•	NAT Gateway en una AZ (cost-conscious; HA si lo justifica métrica).
+	•	Endpoints VPC para S3, KMS y Secrets Manager (evita tráfico por NAT y reduce costo).
+5.3 Dominios y certificados
+Dominio
+Apunta a
+Uso
+admin.segurasist.mx
+Amplify Hosting (admin)
+Portal admin SSR
+portal.segurasist.mx
+Amplify Hosting (portal asegurado)
+Portal asegurado SSR
+api.segurasist.mx
+App Runner via WAF
+API REST
+files.segurasist.mx
+CloudFront → buckets S3 (con OAC)
+Servir PDFs firmados
+status.segurasist.mx
+UptimeRobot público
+Status page externo
+Certificados gestionados por AWS Certificate Manager con renovación automática. HSTS forzado, TLS 1.3 mínimo.
+
+6. Vista de procesos
+6.1 Flujo: carga masiva de asegurados
+	•	UI sube archivo a endpoint POST /v1/batches con multipart/form-data.
+	•	API valida tamaño (≤25 MB), MIME y firma del usuario; sube a S3 (uploads/{tenant}/{batchId}.xlsx) con SSE-KMS.
+	•	API persiste batches con estado validating; emite mensaje SQS al worker layout.
+	•	Lambda Worker Layout descarga el archivo, parsea con SheetJS, valida cada fila (CURP/RFC/paquete/duplicados), escribe batch_errors si aplica.
+	•	Lambda actualiza batches con conteos y estado preview_ready. UI hace polling al endpoint GET /v1/batches/{id}.
+	•	Operador confirma desde UI: POST /v1/batches/{id}/confirm. API encola N mensajes (uno por fila válida) en SQS de creación.
+	•	Lambda crea cada insured (transacción), publica evento EventBridge insured.created.
+	•	EventBridge dispara Lambda Worker PDF para cada insured.created.
+	•	Worker PDF renderiza plantilla, sube PDF a S3 (certificates/{tenant}/{insuredId}/{version}.pdf), persiste certificate.
+	•	Publica evento certificate.issued; otra Lambda envía correo con SES; SES emite eventos delivered/bounced que llegan a Lambda Worker Email vía SNS.
+	•	Operador ve el lote completo en dashboard; cada row del lote tiene estado de certificado y email.
+6.2 Flujo: login asegurado con OTP
+	•	UI portal pide CURP.
+	•	API verifica que CURP existe en insureds vigente; pide a Cognito generar OTP a email/SMS según preferencia.
+	•	Cognito envía OTP; UI muestra pantalla de captura (TTL 5 min, 5 intentos).
+	•	Asegurado ingresa OTP; Cognito emite JWT con claims (sub, email, custom:insured_id, custom:tenant_id).
+	•	UI guarda token (cookie HttpOnly Secure SameSite=Lax).
+	•	Llamadas posteriores mandan Authorization: Bearer; API valida firma JWT contra JWKS de Cognito y aplica RLS context.
+6.3 Flujo: generación de reporte mensual
+	•	Cron EventBridge dispara Lambda Worker Reportes el día hábil 1 a las 09:00 (zona MX).
+	•	Lambda agrega datos de altas, bajas, certificados, utilización del mes anterior por tenant y entidad.
+	•	Genera XLSX con SheetJS y PDF con Puppeteer; firma con metadatos del CISO.
+	•	Sube ambos a S3 (exports/{tenant}/reports/{yyyy-mm}/conciliation.xlsx).
+	•	Envía email a destinatarios configurados por tenant con URL presigned (TTL 30 días).
+	•	Notifica a Roy vía Slack webhook si está configurado.
+
+7. Architecture Decision Records (ADRs)
+Esta sección consolida los ADRs ya cerrados en el Stack Tecnológico Definitivo y agrega los específicos del MVP.
+7.1 ADR-001 — AWS como único proveedor cloud
+Campo
+Valor
+Status
+Aceptado (Stack Definitivo v1.0, abril 2026)
+Contexto
+Necesitamos cloud provider único para reducir DPAs, paneles, contratos.
+Decisión
+100% AWS. Region primaria us-east-1, DR us-east-2.
+Consecuencias
+Stack cohesivo (Cognito + SES + App Runner). Lock-in moderado mitigado por usar estándares (Postgres, OAuth, S3 API).
+Alternativas evaluadas
+GCP — descartado: diferencia de costo marginal, menor disponibilidad de talento MX, DPAs separados para servicios afines.
+7.2 ADR-002 — App Runner sobre ECS/EKS
+Campo
+Valor
+Status
+Aceptado
+Contexto
+MVP con tráfico moderado y equipo pequeño no justifica K8s/cluster propio.
+Decisión
+AWS App Runner para el backend NestJS.
+Consecuencias
+Cero overhead de cluster; auto-scale; billing por uso. Limitación: 1 contenedor por servicio (suficiente). Migración futura a ECS Fargate trivial.
+Alternativas
+ECS Fargate (más control, más overhead), EKS (sobreingeniería para MVP), Lambda containers (límite 15 min, no apto para REST sostenida).
+7.3 ADR-003 — RDS PostgreSQL Multi-AZ vs Aurora Serverless v2
+Campo
+Valor
+Status
+Aceptado
+Contexto
+Carga 24/7 con conexiones persistentes y necesidad de RLS bien documentado.
+Decisión
+RDS PostgreSQL 16 Multi-AZ (db.t4g.small) con pgAudit y CIS Parameter Group.
+Consecuencias
+Costo predecible (~USD 55/mes); RLS first-class. Aurora SLS evaluable cuando volumen lo justifique.
+Alternativas
+Aurora Serverless v2: USD 87/mes mínimo; ventaja por bursts no aplica.
+7.4 ADR-004 — Cognito sobre Auth0
+Campo
+Valor
+Status
+Aceptado
+Contexto
+Necesitamos SAML, OIDC, MFA, SCIM, OTP, multi-tenant (admin pool + insured pool).
+Decisión
+Amazon Cognito User Pools. Pool separado por audiencia (admin vs asegurado).
+Consecuencias
+Costo ~0 hasta 50k MAU; integración nativa AWS; menor pulido UI mitigado con Amplify UI.
+Alternativas
+Auth0: USD 240/mes desde 0; ventaja UI no compensa costo y proveedor extra en DPA.
+7.5 ADR-005 — SQS + Lambda sobre Redis + BullMQ
+Campo
+Valor
+Status
+Aceptado
+Contexto
+Cargas asíncronas: parsing layouts, generación PDF, envío emails, reportes.
+Decisión
+SQS + Lambda. ElastiCache Redis Serverless solo para sesión, throttle, OTP cache.
+Consecuencias
+Pay-per-invocation; sin workers 24/7. Cold start mitigado con provisioned concurrency en Worker PDF.
+Alternativas
+BullMQ: requiere worker container 24/7 + Redis dedicada (~USD 15/mes mínimo).
+7.6 ADR-006 — Next.js + Amplify Hosting sobre Vercel/ECS
+Campo
+Valor
+Status
+Aceptado
+Contexto
+Frontend SSR con CDN global, build CI/CD integrado, ambiente AWS único.
+Decisión
+Next.js 14 App Router + AWS Amplify Hosting.
+Consecuencias
+Build automatizado desde GitHub, CDN CloudFront detrás, costo predecible.
+Alternativas
+Vercel Pro: USD 20/usuario/mes, fuera de AWS, otro DPA.
+7.7 ADR-007 — RLS PostgreSQL para aislamiento multi-tenant
+Campo
+Valor
+Status
+Aceptado
+Contexto
+Aislamiento crítico para 88.7% cumplimiento V2 y para preparar SNTE/CATEM/Walmart.
+Decisión
+Shared schema con tenant_id en cada tabla + RLS PostgreSQL como segunda capa.
+Consecuencias
+Bajo costo operativo, fácil de mantener; tests CI cross-tenant obligatorios. Schema dedicado por cliente disponible para enterprise.
+Alternativas
+Schema-per-tenant: mayor aislamiento pero overhead de migraciones; database-per-tenant: caro y complejo.
+7.8 ADR-008 — CloudWatch + X-Ray en Fase 1 sobre Datadog
+Campo
+Valor
+Status
+Aceptado
+Contexto
+Equipo pequeño, MVP, no justifica USD 15/host Datadog.
+Decisión
+CloudWatch Logs + Metrics + Alarms + X-Ray. Re-evaluar en Fase 2.
+Consecuencias
+Cobertura ~90% del caso; faltarán dashboards pre-armados. Mitigado con Grafana Cloud Free como complemento opcional.
+Alternativas
+Datadog Pro / Grafana Cloud — diferidos.
+7.9 ADR-009 — Generación PDF con Puppeteer en Lambda
+Campo
+Valor
+Status
+Aceptado
+Contexto
+Necesitamos plantilla configurable, branding por tenant, baja latencia.
+Decisión
+Plantilla HTML/CSS renderizada por Puppeteer + Chromium layer en Lambda Node.js 20.
+Consecuencias
+Latencia ~5-10 s por PDF; provisioned concurrency en horario de carga masiva. Costo marginal.
+Alternativas
+wkhtmltopdf (peor calidad), servicio managed (extra DPA), generación en servidor App Runner (acoplamiento).
+7.10 ADR-010 — Two-pool Cognito (admin vs insureds)
+Campo
+Valor
+Status
+Aceptado
+Contexto
+Operadores y asegurados tienen políticas de password, MFA y auth flow distintas.
+Decisión
+Dos User Pools separados; ningún usuario cross-pool.
+Consecuencias
+Aislamiento más fuerte; mayor claridad de scopes; configuración independiente. Costo igual (gratis hasta 50k MAU por pool).
+Alternativas
+Pool único con groups: aceptable pero ofusca políticas y dificulta auditoría.
+7.11 ADR-011 — IaC obligatorio con Terraform
+Campo
+Valor
+Status
+Aceptado
+Contexto
+Plan Cumplimiento exige IaC; cero cambios manuales productivos.
+Decisión
+Terraform 1.7+ con remote state en S3 + DynamoDB lock; módulos compartidos.
+Consecuencias
+Onboarding técnico del equipo; gates en CI rechazan terraform apply manual.
+Alternativas
+CDK (TypeScript), Pulumi: descartados por madurez de providers / preferencia del equipo.
+7.12 ADR-012 — Monorepo Next.js (admin + portal asegurado)
+Campo
+Valor
+Status
+Aceptado
+Contexto
+Mismo design system y mismo modelo de datos.
+Decisión
+Monorepo con dos apps Next.js (apps/admin, apps/portal) y librería compartida (packages/ui, packages/types).
+Consecuencias
+Re-uso máximo; build separado por app; despliegues independientes en Amplify.
+Alternativas
+Repos separados: duplicación; o un solo Next.js multi-target: rutas confusas.
+7.13 ADR-013 — Trazabilidad de auditoría con S3 Object Lock
+Campo
+Valor
+Status
+Aceptado
+Contexto
+Matriz V2 exige logs inmutables con retención 24 m + integridad.
+Decisión
+Logs de auditoría replicados desde CloudWatch a S3 bucket dedicado con Object Lock modo Compliance.
+Consecuencias
+Imposible borrar/modificar antes de retención; satisface ISO A.8.15. Costo Glacier mitigado con lifecycle.
+Alternativas
+Sólo CloudWatch (mutable después de 12 m), QLDB (sobreingeniería).
+
+8. Contratos entre módulos
+8.1 API REST principal
+Endpoints versionados bajo /v1/. Documentación OpenAPI 3.1 generada de los DTOs NestJS y publicada en /v1/openapi.json. Snapshot completo se entrega en el documento de Backend; aquí la tabla resumen:
+Recurso
+Endpoints
+Roles autorizados
+auth
+POST /v1/auth/login, /logout, /refresh, /me
+Todos (algunos públicos)
+batches
+POST, GET, GET/{id}, POST/{id}/confirm, GET/{id}/errors
+Operador MAC, Admin SegurAsist
+insureds
+GET, GET/{id}, POST, PATCH/{id}, DELETE/{id} (soft)
+Operador, Admin
+packages
+GET, POST, PATCH/{id}, DELETE/{id}
+Admin SegurAsist
+coverages
+GET, POST, PATCH/{id}, DELETE/{id}
+Admin SegurAsist
+certificates
+GET, GET/{id}, POST/{id}/reissue, GET/{id}/url
+Operador, Admin, Asegurado (solo el suyo)
+claims
+GET, POST, PATCH/{id}
+Operador, Admin, Asegurado (solo el suyo)
+reports
+GET /reports/conciliation, /usage, /volumetry
+Admin, Supervisor
+chat
+POST /chat/messages, GET /chat/history, GET /chat/kb
+Asegurado; KB write Admin
+audit
+GET /audit/log
+Admin, Supervisor
+webhooks/ses
+POST (firma SNS)
+Pública con verificación de firma
+8.2 Contratos de eventos (EventBridge)
+Evento
+Productor
+Consumidor
+Payload (campos clave)
+insured.created
+API
+Worker PDF
+tenant_id, insured_id, package_id, source
+certificate.issued
+Worker PDF
+Worker Email
+tenant_id, insured_id, certificate_id, s3_key
+certificate.delivered
+Worker Email
+API (audit)
+tenant_id, certificate_id, email, delivered_at
+certificate.bounced
+Worker Email
+API (alerta)
+tenant_id, certificate_id, email, reason
+claim.reported
+API
+Worker Email + audit
+tenant_id, claim_id, insured_id, type
+batch.completed
+Worker Layout
+Worker Email + UI ws
+tenant_id, batch_id, rows_ok, rows_error
+
+9. Seguridad arquitectónica
+Mapa rápido de mecanismos. Detalle técnico por control en el documento Mapeo Seguridad y Cumplimiento.
+Capa
+Mecanismo
+Implementación AWS
+Perímetro
+WAF + DDoS
+AWS WAF (OWASP Managed Rules + Rate-based) + Shield Standard
+Borde API
+Rate limiting por tenant
+WAF Rate-Based Rules + Redis bucket por tenant
+Identidad
+MFA + SAML/OIDC + OTP
+Cognito User Pools (admin + insured)
+Autorización
+RBAC + scopes OAuth2
+Cognito Resource Servers + claims custom
+Aislamiento datos
+RLS PostgreSQL
+Políticas por tabla + middleware NestJS
+Cifrado tránsito
+TLS 1.3 mínimo
+ACM + ALB/CloudFront/HSTS
+Cifrado reposo
+AES-256 con CMK
+RDS, S3, EBS, Backups con KMS Customer Managed
+Secretos
+Rotación automática
+Secrets Manager (rot. 30d) + KMS
+Detección
+IDS, anomalías
+GuardDuty + Security Hub + CloudWatch alarms
+Logs inmutables
+WORM 24m
+S3 Object Lock Compliance + Glacier Deep Archive
+Vulnerabilidades
+SAST/SCA/DAST
+Semgrep + Dependabot + OWASP ZAP en CI
+Hardening
+CIS Benchmarks
+AWS Config + Security Hub + Inspector
+
+10. Estrategia de evolución
+Decisiones explícitas para evitar deuda accidental:
+	•	Cuando el costo Datadog/Grafana se justifique (>USD 200/mes en CW logs), migrar logs a Grafana Cloud Free + retener métricas en CloudWatch.
+	•	Si MAC requiere residencia mx-central-1, replantear sólo Terraform; código no cambia.
+	•	Si llega cliente enterprise con exigencia de aislamiento de schema, activar feature flag tenant.dedicated_schema y crear schema con Prisma Migrate.
+	•	Si volumen >250k MAU, migrar Cognito a Cognito Identity Federation + AWS IAM con roles temporales para acceso S3 directo.
+	•	Si tráfico picos >5x base, migrar App Runner a ECS Fargate con auto-scaling más fino.
+	•	Si llegamos a SOC 2 Tipo II y necesitamos audit trail externo, agregar AWS QLDB para log inmutable enriquecido.
+11. Estimación de costos AWS – validación
+Coincide con la tabla del Stack Definitivo. Año 1 (20k MAU): ~4,730 MXN/mes. Año 3 (60k MAU): ~11,240 MXN/mes. El detalle se mantiene en ese documento; aquí se incluye sólo la cifra para fines de revisión arquitectónica.

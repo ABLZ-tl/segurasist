@@ -1,0 +1,17 @@
+node_modules
+dist
+coverage
+.git
+.github
+.vscode
+.idea
+.env
+.env.*
+!.env.example
+docs
+test
+*.md
+docker-compose*.yml
+Dockerfile.dev
+.eslintcache
+.tsbuildinfo

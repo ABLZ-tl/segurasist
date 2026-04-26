@@ -1,0 +1,503 @@
+// SegurAsist — Prisma schema
+// Multi-tenant. Cada tabla (excepto Tenant) lleva tenant_id NOT NULL.
+// RLS PostgreSQL: las migraciones de Prisma sólo crean el schema. El
+// bootstrap de roles + políticas vive en `prisma/rls/policies.sql` y se
+// aplica con `./scripts/apply-rls.sh` después de `prisma migrate deploy`.
+// Ver `docs/LOCAL_DEV.md`.
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["fullTextSearch"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============== ENUMS ==============
+
+enum TenantStatus {
+  active
+  suspended
+  archived
+
+  @@map("tenant_status")
+}
+
+enum UserRole {
+  admin_segurasist
+  admin_mac
+  operator
+  supervisor
+  insured
+
+  @@map("user_role")
+}
+
+enum UserStatus {
+  active
+  invited
+  disabled
+
+  @@map("user_status")
+}
+
+enum PackageStatus {
+  active
+  archived
+
+  @@map("package_status")
+}
+
+enum CoverageType {
+  consultation
+  emergency
+  hospitalization
+  laboratory
+  imaging
+  pharmacy
+  other
+
+  @@map("coverage_type")
+}
+
+enum InsuredStatus {
+  active
+  suspended
+  cancelled
+  expired
+
+  @@map("insured_status")
+}
+
+enum BeneficiaryRelationship {
+  spouse
+  child
+  parent
+  sibling
+  other
+
+  @@map("beneficiary_relationship")
+}
+
+enum CertificateStatus {
+  issued
+  reissued
+  revoked
+
+  @@map("certificate_status")
+}
+
+enum ClaimStatus {
+  reported
+  in_review
+  approved
+  rejected
+  paid
+
+  @@map("claim_status")
+}
+
+enum ClaimType {
+  consultation
+  emergency
+  hospitalization
+  laboratory
+  imaging
+  pharmacy
+  other
+
+  @@map("claim_type")
+}
+
+enum BatchStatus {
+  validating
+  preview_ready
+  processing
+  completed
+  failed
+  cancelled
+
+  @@map("batch_status")
+}
+
+enum EmailEventType {
+  queued
+  sent
+  delivered
+  bounced
+  complained
+  opened
+  clicked
+  rejected
+
+  @@map("email_event_type")
+}
+
+enum ChatDirection {
+  inbound
+  outbound
+
+  @@map("chat_direction")
+}
+
+enum ChatKbStatus {
+  draft
+  published
+  archived
+
+  @@map("chat_kb_status")
+}
+
+enum AuditAction {
+  create
+  update
+  delete
+  read
+  login
+  logout
+  export
+  reissue
+
+  @@map("audit_action")
+}
+
+// ============== MODELS ==============
+
+model Tenant {
+  id        String       @id @default(uuid()) @db.Uuid
+  name      String       @db.VarChar(160)
+  slug      String       @unique @db.VarChar(80)
+  status    TenantStatus @default(active)
+  brandJson Json?        @map("brand_json")
+  createdAt DateTime     @default(now()) @map("created_at")
+  updatedAt DateTime     @updatedAt @map("updated_at")
+  deletedAt DateTime?    @map("deleted_at")
+
+  users         User[]
+  packages      Package[]
+  coverages     Coverage[]
+  insureds      Insured[]
+  beneficiaries Beneficiary[]
+  certificates  Certificate[]
+  claims        Claim[]
+  usages        CoverageUsage[]
+  batches       Batch[]
+  batchErrors   BatchError[]
+  emailEvents   EmailEvent[]
+  chatMessages  ChatMessage[]
+  chatKb        ChatKb[]
+  auditLogs     AuditLog[]
+
+  @@index([status])
+  @@map("tenants")
+}
+
+model User {
+  id          String     @id @default(uuid()) @db.Uuid
+  tenantId    String     @map("tenant_id") @db.Uuid
+  cognitoSub  String     @map("cognito_sub") @db.VarChar(64)
+  email       String     @db.VarChar(254)
+  fullName    String     @map("full_name") @db.VarChar(160)
+  role        UserRole
+  mfaEnrolled Boolean    @default(false) @map("mfa_enrolled")
+  status      UserStatus @default(invited)
+  lastLoginAt DateTime?  @map("last_login_at")
+  createdAt   DateTime   @default(now()) @map("created_at")
+  updatedAt   DateTime   @updatedAt @map("updated_at")
+  deletedAt   DateTime?  @map("deleted_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  @@unique([tenantId, email], name: "user_tenant_email_unique")
+  @@unique([cognitoSub], name: "user_cognito_sub_unique")
+  @@index([tenantId, role])
+  @@index([tenantId, status])
+  @@map("users")
+}
+
+model Package {
+  id          String        @id @default(uuid()) @db.Uuid
+  tenantId    String        @map("tenant_id") @db.Uuid
+  name        String        @db.VarChar(120)
+  description String?       @db.Text
+  status      PackageStatus @default(active)
+  metadata    Json?
+  createdAt   DateTime      @default(now()) @map("created_at")
+  updatedAt   DateTime      @updatedAt @map("updated_at")
+  deletedAt   DateTime?     @map("deleted_at")
+
+  tenant    Tenant     @relation(fields: [tenantId], references: [id])
+  coverages Coverage[]
+  insureds  Insured[]
+
+  @@unique([tenantId, name], name: "package_tenant_name_unique")
+  @@index([tenantId, status])
+  @@map("packages")
+}
+
+model Coverage {
+  id          String       @id @default(uuid()) @db.Uuid
+  tenantId    String       @map("tenant_id") @db.Uuid
+  packageId   String       @map("package_id") @db.Uuid
+  name        String       @db.VarChar(120)
+  type        CoverageType
+  limitCount  Int?         @map("limit_count")
+  limitAmount Decimal?     @map("limit_amount") @db.Decimal(12, 2)
+  copayment   Decimal?     @db.Decimal(12, 2)
+  description String?      @db.Text
+  createdAt   DateTime     @default(now()) @map("created_at")
+  updatedAt   DateTime     @updatedAt @map("updated_at")
+  deletedAt   DateTime?    @map("deleted_at")
+
+  tenant  Tenant          @relation(fields: [tenantId], references: [id])
+  package Package         @relation(fields: [packageId], references: [id])
+  usages  CoverageUsage[]
+
+  @@index([tenantId, packageId])
+  @@index([tenantId, type])
+  @@map("coverages")
+}
+
+model Insured {
+  id        String        @id @default(uuid()) @db.Uuid
+  tenantId  String        @map("tenant_id") @db.Uuid
+  curp      String        @db.VarChar(18)
+  rfc       String?       @db.VarChar(13)
+  fullName  String        @map("full_name") @db.VarChar(160)
+  dob       DateTime      @db.Date
+  email     String?       @db.VarChar(254)
+  phone     String?       @db.VarChar(20)
+  packageId String        @map("package_id") @db.Uuid
+  validFrom DateTime      @map("valid_from") @db.Date
+  validTo   DateTime      @map("valid_to") @db.Date
+  status    InsuredStatus @default(active)
+  metadata  Json?
+  createdAt DateTime      @default(now()) @map("created_at")
+  updatedAt DateTime      @updatedAt @map("updated_at")
+  deletedAt DateTime?     @map("deleted_at")
+
+  tenant        Tenant          @relation(fields: [tenantId], references: [id])
+  package       Package         @relation(fields: [packageId], references: [id])
+  beneficiaries Beneficiary[]
+  certificates  Certificate[]
+  claims        Claim[]
+  usages        CoverageUsage[]
+
+  @@unique([tenantId, curp], name: "insured_tenant_curp_unique")
+  @@index([tenantId, status])
+  @@index([tenantId, packageId])
+  @@index([tenantId, validTo])
+  @@map("insureds")
+}
+
+model Beneficiary {
+  id           String                  @id @default(uuid()) @db.Uuid
+  tenantId     String                  @map("tenant_id") @db.Uuid
+  insuredId    String                  @map("insured_id") @db.Uuid
+  fullName     String                  @map("full_name") @db.VarChar(160)
+  relationship BeneficiaryRelationship
+  dob          DateTime                @db.Date
+  curp         String?                 @db.VarChar(18)
+  createdAt    DateTime                @default(now()) @map("created_at")
+  updatedAt    DateTime                @updatedAt @map("updated_at")
+  deletedAt    DateTime?               @map("deleted_at")
+
+  tenant  Tenant  @relation(fields: [tenantId], references: [id])
+  insured Insured @relation(fields: [insuredId], references: [id])
+
+  @@index([tenantId, insuredId])
+  @@map("beneficiaries")
+}
+
+model Certificate {
+  id        String            @id @default(uuid()) @db.Uuid
+  tenantId  String            @map("tenant_id") @db.Uuid
+  insuredId String            @map("insured_id") @db.Uuid
+  version   Int               @default(1)
+  s3Key     String            @map("s3_key") @db.VarChar(512)
+  hash      String            @db.VarChar(128)
+  qrPayload String            @map("qr_payload") @db.VarChar(512)
+  issuedAt  DateTime          @default(now()) @map("issued_at")
+  validTo   DateTime          @map("valid_to") @db.Date
+  status    CertificateStatus @default(issued)
+  reissueOf String?           @map("reissue_of") @db.Uuid
+  reason    String?           @db.Text
+  createdAt DateTime          @default(now()) @map("created_at")
+  updatedAt DateTime          @updatedAt @map("updated_at")
+  deletedAt DateTime?         @map("deleted_at")
+
+  tenant  Tenant  @relation(fields: [tenantId], references: [id])
+  insured Insured @relation(fields: [insuredId], references: [id])
+
+  @@unique([tenantId, insuredId, version], name: "cert_tenant_insured_version_unique")
+  @@index([tenantId, insuredId])
+  @@index([tenantId, status])
+  @@map("certificates")
+}
+
+model Claim {
+  id              String      @id @default(uuid()) @db.Uuid
+  tenantId        String      @map("tenant_id") @db.Uuid
+  insuredId       String      @map("insured_id") @db.Uuid
+  type            ClaimType
+  reportedAt      DateTime    @default(now()) @map("reported_at")
+  description     String      @db.Text
+  status          ClaimStatus @default(reported)
+  amountEstimated Decimal?    @map("amount_estimated") @db.Decimal(12, 2)
+  amountApproved  Decimal?    @map("amount_approved") @db.Decimal(12, 2)
+  resolvedAt      DateTime?   @map("resolved_at")
+  metadata        Json?
+  createdAt       DateTime    @default(now()) @map("created_at")
+  updatedAt       DateTime    @updatedAt @map("updated_at")
+  deletedAt       DateTime?   @map("deleted_at")
+
+  tenant  Tenant  @relation(fields: [tenantId], references: [id])
+  insured Insured @relation(fields: [insuredId], references: [id])
+
+  @@index([tenantId, insuredId])
+  @@index([tenantId, status])
+  @@index([tenantId, reportedAt(sort: Desc)])
+  @@map("claims")
+}
+
+model CoverageUsage {
+  id         String   @id @default(uuid()) @db.Uuid
+  tenantId   String   @map("tenant_id") @db.Uuid
+  insuredId  String   @map("insured_id") @db.Uuid
+  coverageId String   @map("coverage_id") @db.Uuid
+  usedAt     DateTime @default(now()) @map("used_at")
+  amount     Decimal? @db.Decimal(12, 2)
+  source     String   @db.VarChar(40)
+  metadata   Json?
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  tenant   Tenant   @relation(fields: [tenantId], references: [id])
+  insured  Insured  @relation(fields: [insuredId], references: [id])
+  coverage Coverage @relation(fields: [coverageId], references: [id])
+
+  @@index([tenantId, insuredId])
+  @@index([tenantId, coverageId])
+  @@index([tenantId, usedAt(sort: Desc)])
+  @@map("coverage_usage")
+}
+
+model Batch {
+  id          String      @id @default(uuid()) @db.Uuid
+  tenantId    String      @map("tenant_id") @db.Uuid
+  fileS3Key   String      @map("file_s3_key") @db.VarChar(512)
+  fileName    String      @map("file_name") @db.VarChar(255)
+  status      BatchStatus @default(validating)
+  rowsTotal   Int         @default(0) @map("rows_total")
+  rowsOk      Int         @default(0) @map("rows_ok")
+  rowsError   Int         @default(0) @map("rows_error")
+  createdBy   String      @map("created_by") @db.Uuid
+  startedAt   DateTime?   @map("started_at")
+  completedAt DateTime?   @map("completed_at")
+  createdAt   DateTime    @default(now()) @map("created_at")
+  updatedAt   DateTime    @updatedAt @map("updated_at")
+  deletedAt   DateTime?   @map("deleted_at")
+
+  tenant Tenant       @relation(fields: [tenantId], references: [id])
+  errors BatchError[]
+
+  @@index([tenantId, status])
+  @@index([tenantId, createdAt(sort: Desc)])
+  @@map("batches")
+}
+
+model BatchError {
+  id           String   @id @default(uuid()) @db.Uuid
+  tenantId     String   @map("tenant_id") @db.Uuid
+  batchId      String   @map("batch_id") @db.Uuid
+  rowNumber    Int      @map("row_number")
+  column       String?  @db.VarChar(80)
+  errorCode    String   @map("error_code") @db.VarChar(64)
+  errorMessage String   @map("error_message") @db.Text
+  rawValue     String?  @map("raw_value") @db.Text
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+  batch  Batch  @relation(fields: [batchId], references: [id])
+
+  @@index([tenantId, batchId])
+  @@map("batch_errors")
+}
+
+model EmailEvent {
+  id            String         @id @default(uuid()) @db.Uuid
+  tenantId      String         @map("tenant_id") @db.Uuid
+  certificateId String?        @map("certificate_id") @db.Uuid
+  eventType     EmailEventType @map("event_type")
+  recipient     String         @db.VarChar(254)
+  occurredAt    DateTime       @default(now()) @map("occurred_at")
+  detail        Json?
+  messageId     String?        @map("message_id") @db.VarChar(255)
+  createdAt     DateTime       @default(now()) @map("created_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  @@index([tenantId, certificateId])
+  @@index([tenantId, eventType])
+  @@index([tenantId, occurredAt(sort: Desc)])
+  @@map("email_events")
+}
+
+model ChatMessage {
+  id         String        @id @default(uuid()) @db.Uuid
+  tenantId   String        @map("tenant_id") @db.Uuid
+  insuredId  String?       @map("insured_id") @db.Uuid
+  direction  ChatDirection
+  content    String        @db.Text
+  intent     String?       @db.VarChar(80)
+  confidence Float?
+  escalated  Boolean       @default(false)
+  createdAt  DateTime      @default(now()) @map("created_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  @@index([tenantId, insuredId])
+  @@index([tenantId, createdAt(sort: Desc)])
+  @@map("chat_messages")
+}
+
+model ChatKb {
+  id        String       @id @default(uuid()) @db.Uuid
+  tenantId  String       @map("tenant_id") @db.Uuid
+  category  String       @db.VarChar(80)
+  question  String       @db.Text
+  answer    String       @db.Text
+  version   Int          @default(1)
+  status    ChatKbStatus @default(draft)
+  createdAt DateTime     @default(now()) @map("created_at")
+  updatedAt DateTime     @updatedAt @map("updated_at")
+  deletedAt DateTime?    @map("deleted_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  @@index([tenantId, category])
+  @@index([tenantId, status])
+  @@map("chat_kb")
+}
+
+model AuditLog {
+  id           String      @id @default(uuid()) @db.Uuid
+  tenantId     String      @map("tenant_id") @db.Uuid
+  actorId      String?     @map("actor_id") @db.Uuid
+  action       AuditAction
+  resourceType String      @map("resource_type") @db.VarChar(80)
+  resourceId   String?     @map("resource_id") @db.VarChar(80)
+  ip           String?     @db.VarChar(45)
+  userAgent    String?     @map("user_agent") @db.VarChar(500)
+  payloadDiff  Json?       @map("payload_diff")
+  traceId      String?     @map("trace_id") @db.VarChar(64)
+  occurredAt   DateTime    @default(now()) @map("occurred_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  @@index([tenantId, occurredAt(sort: Desc)])
+  @@index([tenantId, resourceType, resourceId])
+  @@index([tenantId, actorId])
+  @@map("audit_log")
+}

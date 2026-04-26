@@ -1,0 +1,713 @@
+Mapeo Seguridad y Cumplimiento (V2 → MVP) — SegurAsist
+Cada control de la Matriz V2 traducido a implementación técnica concreta en AWS · 88.7% sostenido desde D1
+Campo
+Valor
+Documento
+Mapeo Seguridad y Cumplimiento (V2 → MVP) — SegurAsist
+Versión
+v1.0 – Abril 2026
+Audiencia
+CISO, Tech Lead, DevOps, QA, auditores
+Clasificación
+Interno – Confidencial
+Cliente ancla
+Hospitales MAC – Roy / Innovación Segura
+Fecha
+2026-04-25
+
+1. Propósito
+Este documento traduce cada control de la Matriz de Evaluación SaaS V2 (Hospitales MAC, abril 2026) a su implementación técnica concreta en el MVP SegurAsist desplegado sobre AWS. Para cada control: (a) el módulo o componente responsable, (b) la implementación técnica, (c) los tests/evidencias que demuestran su funcionamiento, (d) el estado actual y plan si es "Parcial" o "No" en la matriz.
+La V2 reportó 27 controles "Si", 5 "Parcial", 1 "No", para un puntaje de 251/283 = 88.7%, riesgo Medio – Apto con plan de remediación. Este documento garantiza que el equipo no degrada esa postura durante el desarrollo y prepara la migración de los "Parcial"/"No" a "Si" según calendario del Plan de Cumplimiento.
+
+2. Resumen del estado V2
+Categoría
+Controles
+Si
+Parcial
+No
+% cumplimiento
+Gobernanza
+3
+2
+0
+1
+67%
+IAM
+4
+3
+1
+0
+88%
+Datos
+4
+4
+0
+0
+100%
+AppSec
+4
+3
+1
+0
+84%
+API
+3
+3
+0
+0
+100%
+Incidentes
+3
+1
+2
+0
+63%
+Infraestructura
+4
+3
+1
+0
+86%
+Auditoría
+3
+3
+0
+0
+100%
+Física
+2
+2
+0
+0
+100%
+Contrato
+3
+3
+0
+0
+100%
+TOTAL
+33
+27
+5
+1
+88.7%
+
+3. Mapeo detallado por control
+3.1 — Gobernanza · Política de Seguridad
+Campo
+Valor
+Pregunta original (V2)
+¿Cuenta con políticas de seguridad y certificaciones ISO/SOC2?
+Estado en V2
+No (único control en No de toda la matriz)
+Implementación MVP
+Política interna formal alineada a ISO 27001:2022 publicada en repo legal/policies/. Certificación ISO 27001 en roadmap (Stage 2 julio 2027); SOC 2 Tipo I enero 2027.
+Módulos / componentes
+—
+Evidencia / verificación
+Documentos firmados por CISO + Director General archivados en 1Password vault Compliance.
+Plan si gap
+Plan_Accion_Cumplimiento_SegurAsist contempla gap assessment may-2026, auditoría Stage 2 jul-2027, SOC 2 Tipo I ene-2027, Tipo II mar-2027. Mensajería al cliente: 'certificación en roadmap formal'.
+3.2 — Gobernanza · Cumplimiento Legal
+Campo
+Valor
+Pregunta original (V2)
+¿Cumple regulaciones de protección de datos (GDPR, etc.)?
+Estado en V2
+Si
+Implementación MVP
+LFPDPPP cubierta: Aviso de Privacidad publicado, ARCO operativo (≤5 d acuse, ≤20 d resp.), DPO designado, transferencias internacionales con DPA AWS firmado y SCCs cuando aplique.
+Módulos / componentes
+AppRunner serve route /privacy + Lambda /arco (formulario público)
+Evidencia / verificación
+Aviso de privacidad versionado; bitácora ARCO consultable; DPA AWS en repositorio legal.
+Plan si gap
+—
+3.3 — Gobernanza · Gestión de Subprocesadores
+Campo
+Valor
+Pregunta original (V2)
+¿Utiliza terceros? ¿Están certificados?
+Estado en V2
+Si
+Implementación MVP
+Lista pública de subprocesadores actualizada al sprint 5. Cada uno con DPA y certificaciones documentadas: AWS (todas), GitHub (SOC 2), UptimeRobot (SOC 2).
+Módulos / componentes
+Doc /docs/legal/subprocessors.md publicada también en /privacy/subprocessors
+Evidencia / verificación
+Tabla en doc + tickets de revisión semestral; alerta si cambia un subprocesador.
+Plan si gap
+—
+3.4 — IAM · SSO y MFA
+Campo
+Valor
+Pregunta original (V2)
+¿Soporta SSO (SAML/OAuth2) y MFA obligatorio?
+Estado en V2
+Si
+Implementación MVP
+Cognito User Pool admin con SAML 2.0 / OIDC (Okta, Azure AD, Google Workspace). MFA TOTP/WebAuthn obligatorio para 100% admin. Pool asegurados con OTP email/SMS, MFA opt-in.
+Módulos / componentes
+AuthModule (NestJS) + Cognito + Terraform módulo cognito-user-pool
+Evidencia / verificación
+Test E2E login con MFA verde; Cognito Sign-in policy exporta evidencia; CloudWatch metric MFAEnrollment = 100% admins.
+Plan si gap
+—
+3.5 — IAM · RBAC/ABAC
+Campo
+Valor
+Pregunta original (V2)
+¿Ofrece roles con privilegios mínimos?
+Estado en V2
+Si
+Implementación MVP
+4 roles en pool admin (Admin MAC, Operador, Admin SegurAsist, Supervisor) + 1 rol en pool asegurado (Insured), todos como Cognito groups. PostgreSQL RLS por tenant_id en cada tabla. Tests CI cross-tenant verde requerido para merge.
+Módulos / componentes
+AuthModule + RolesGuard + PrismaService middleware + tests/security/cross-tenant.spec.ts
+Evidencia / verificación
+Suite cross-tenant 100% endpoints; RLS policies inspeccionables (pg_policies).
+Plan si gap
+—
+3.6 — IAM · Ciclo de vida de usuarios
+Campo
+Valor
+Pregunta original (V2)
+¿Automatiza altas, bajas y cambios vía SSO?
+Estado en V2
+Parcial (3.5/7)
+Implementación MVP
+SCIM 2.0 nativo en Cognito Developer+ planeado en sprint 5. En ausencia de IdP del cliente: dashboard admin con checklist onboarding/offboarding (revocación ≤24h).
+Módulos / componentes
+UsersModule + endpoints SCIM + UI checklist en /users
+Evidencia / verificación
+Sprint 5 entrega SCIM contra Azure AD MAC; checklist visible en UI.
+Plan si gap
+Sprint 5 cierra el gap; provisional vía dashboard. Si MAC no provee IdP, fallback Cognito local opera con checklist.
+3.7 — IAM · Auditoría de accesos
+Campo
+Valor
+Pregunta original (V2)
+¿Registra accesos exitosos y fallidos?
+Estado en V2
+Si
+Implementación MVP
+Cognito CloudWatch Logs + audit_log NestJS persiste accesos; eventos críticos replicados a S3 Object Lock 24m. Cada evento con timestamp, user_id, IP, user-agent.
+Módulos / componentes
+AuthModule interceptor + AuditModule + Terraform módulo s3-audit
+Evidencia / verificación
+Endpoint /v1/audit/log (paginated); query nativa CloudWatch Insights; tests integración registran log.
+Plan si gap
+—
+3.8 — Datos · Cifrado
+Campo
+Valor
+Pregunta original (V2)
+¿Cifran datos en tránsito (TLS1.2+) y reposo (AES-256)?
+Estado en V2
+Si
+Implementación MVP
+TLS 1.3 forzado (TLS <1.2 rechazado en ALB y CloudFront), HSTS preload. AES-256 reposo con KMS CMK rotación anual. Llaves separadas por ambiente.
+Módulos / componentes
+Terraform: ACM, ALB listener TLS policy, módulo kms-key con rotation = true
+Evidencia / verificación
+AWS Config rule TLS 1.2-min activa; KMS rotation status = enabled; testssl.sh en CI nightly.
+Plan si gap
+—
+3.9 — Datos · Ubicación de Datos
+Campo
+Valor
+Pregunta original (V2)
+¿En qué país/región se almacenan los datos?
+Estado en V2
+Si
+Implementación MVP
+Primaria us-east-1, DR us-east-2. Para clientes que exijan residencia MX, SKU premium con migración a mx-central-1 (~+35% costo). DPA cubre transferencia internacional.
+Módulos / componentes
+Terraform providers + módulo rds-postgres cross-region
+Evidencia / verificación
+AWS Config rule 'desired-region' activa; arquitectura documentada; DPA AWS firmado.
+Plan si gap
+—
+3.10 — Datos · Retención y Borrado
+Campo
+Valor
+Pregunta original (V2)
+¿Poseen políticas de retención y borrado seguro?
+Estado en V2
+Si
+Implementación MVP
+Política: vigencia + 6m gracia. Backups RDS 7d PITR + 30d snapshots. Borrado seguro NIST SP 800-88 Rev 1: crypto-shredding KMS + delete data + certificado firmado por CISO.
+Módulos / componentes
+Lambda cron retention-policy + UsersModule (eliminación) + AuditModule (certificado)
+Evidencia / verificación
+Cron Lambda logs en CloudWatch; certificados firmados archivados en bucket legal/certificates/.
+Plan si gap
+—
+3.11 — Datos · Contrato DPA
+Campo
+Valor
+Pregunta original (V2)
+¿Existe acuerdo de procesamiento de datos?
+Estado en V2
+Si
+Implementación MVP
+Plantilla DPA anexa a contrato maestro, alineada LFPDPPP + cláusulas opcionales GDPR (SCCs UE). Notificación brechas ≤72h, lista subprocesadores, derecho auditoría.
+Módulos / componentes
+Plantilla en repo legal/templates/DPA.docx
+Evidencia / verificación
+DPA firmado MAC archivado en 1Password Compliance.
+Plan si gap
+—
+3.12 — AppSec · PenTesting Anual
+Campo
+Valor
+Pregunta original (V2)
+¿Realizan pruebas de penetración anualmente?
+Estado en V2
+Parcial (5/10)
+Implementación MVP
+Pipeline CI/CD con SAST (Semgrep), SCA (Dependabot/Trivy), DAST (OWASP ZAP por PR). Pentest interno sprint 5. Pentest externo formal Q3-2026 con firma acreditada.
+Módulos / componentes
+.github/workflows/security.yml + scripts/run-zap.sh + contrato pentest externo
+Evidencia / verificación
+Reportes Semgrep/ZAP/Dependabot en GitHub Security tab; pentest interno entregable sprint 5; contrato externo firmado mes 4.
+Plan si gap
+Sprint 5 cierra gap interno; Q3-2026 cierra gap externo. Reporte compartible bajo NDA con MAC.
+3.13 — AppSec · OWASP (SAST/DAST)
+Campo
+Valor
+Pregunta original (V2)
+¿Evalúan OWASP Top 10?
+Estado en V2
+Si
+Implementación MVP
+OWASP Top 10 web + API cubierto en múltiples capas: Prisma queries parametrizadas, output encoding React, headers seguridad, WAF AWS Managed Rules OWASP, Zod validations, code review obligatorio.
+Módulos / componentes
+Helmet en Fastify + Next.js headers + WAF Terraform + ZAP en CI
+Evidencia / verificación
+Reportes Semgrep/ZAP en cada PR; WAF logs en CloudWatch; security headers verificados con securityheaders.com en CI.
+Plan si gap
+—
+3.14 — AppSec · Gestión de Vulnerabilidades
+Campo
+Valor
+Pregunta original (V2)
+¿Parchean vulnerabilidades críticas en menos de 30 días?
+Estado en V2
+Si
+Implementación MVP
+SLA: Crítica ≤7d, Alta ≤30d, Media ≤60d, Baja ≤90d. Monitoreo: Dependabot, Inspector (hosts/contenedores), GuardDuty (amenazas activas). MTTR mensual al Comité.
+Módulos / componentes
+Dependabot config + Amazon Inspector + GuardDuty + Linear automation
+Evidencia / verificación
+Linear filtro vulnerability + SLA timestamps; reporte mensual al Comité Seguridad.
+Plan si gap
+—
+3.15 — AppSec · Aislamiento Multitenant
+Campo
+Valor
+Pregunta original (V2)
+¿Existe aislamiento entre clientes?
+Estado en V2
+Si
+Implementación MVP
+tenant_id en cada query + RLS PostgreSQL (policy por tabla) + prefijos S3 separados por tenant + tests CI que un usuario A obtiene 403/404 en recursos del tenant B.
+Módulos / componentes
+PrismaService middleware + RLS init script + tests/security/cross-tenant.spec.ts + s3 bucket policies
+Evidencia / verificación
+Suite cross-tenant 100% endpoints; pg_policies inspeccionables; pentest interno cubre 30 escenarios manuales.
+Plan si gap
+—
+3.16 — API · Autenticación API
+Campo
+Valor
+Pregunta original (V2)
+¿OAuth2, llaves rotables y rate-limiting?
+Estado en V2
+Si
+Implementación MVP
+JWTs Cognito OAuth 2.0 (15m access, 7d refresh). API keys con rotación inmediata desde dashboard. Rate-limiting WAF Rate-Based Rules (default 100 req/min, configurable por tenant). Soporte mTLS via API Gateway para enterprise.
+Módulos / componentes
+AuthModule + Cognito + Terraform waf-web-acl + API key rotation Lambda
+Evidencia / verificación
+Tests integración auth; WAF logs; Secrets Manager rotation status.
+Plan si gap
+—
+3.17 — API · Scopes API
+Campo
+Valor
+Pregunta original (V2)
+¿Permisos granulares por token?
+Estado en V2
+Si
+Implementación MVP
+Scopes OAuth2 granulares por recurso/acción (read:policies, write:policies, read:insureds, admin:users, export:data). Configuración en Cognito Resource Servers. Decorator @Scopes() valida.
+Módulos / componentes
+AuthModule scopes guard + Cognito Resource Servers Terraform
+Evidencia / verificación
+Tests negativos: scope insuficiente devuelve 403.
+Plan si gap
+—
+3.18 — API · Logs API
+Campo
+Valor
+Pregunta original (V2)
+¿Registra uso y errores de API?
+Estado en V2
+Si
+Implementación MVP
+Logs JSON estructurados (endpoint, método, user_id, tenant_id, status, latencia, IP) → CloudWatch Logs. Trace_id X-Ray. Alarmas por picos 4xx/5xx, latencia p95, anomalías.
+Módulos / componentes
+pino + nestjs-pino + AuditInterceptor + X-Ray SDK + CloudWatch alarms
+Evidencia / verificación
+Dashboard CloudWatch Operacional muestra métricas en tiempo real; alarmas en SNS/PagerDuty.
+Plan si gap
+—
+3.19 — Incidentes · IRP
+Campo
+Valor
+Pregunta original (V2)
+¿Tienen plan formal de respuesta a incidentes?
+Estado en V2
+Parcial (5/10)
+Implementación MVP
+Plan de Respuesta a Incidentes documentado siguiendo NIST SP 800-61 Rev 2. Roles formales (IR Lead = CISO, Comms Lead, Legal). Runbooks específicos. Primer simulacro tabletop Q2-2026.
+Módulos / componentes
+/docs/security/IRP.md + runbooks RB-006, RB-010 + canal #segurasist-irp
+Evidencia / verificación
+IRP versionado en repo; tabletop programado y registro de simulacro.
+Plan si gap
+Q2-2026 ejecutar primer tabletop; capturar lecciones aprendidas; certificar revisión semestral.
+3.20 — Incidentes · Notificación Brechas
+Campo
+Valor
+Pregunta original (V2)
+¿En cuánto tiempo notifican una brecha?
+Estado en V2
+Si
+Implementación MVP
+Notificación al cliente ≤72h desde confirmación. Para incidentes P1 (críticos), notificación inicial preliminar ≤4h. Plantillas pre-aprobadas por legal.
+Módulos / componentes
+/docs/comms/breach-notification-template.md + endpoint /admin/incident/declare
+Evidencia / verificación
+Plantillas versionadas; bitácora de incidentes en repo seguro.
+Plan si gap
+—
+3.21 — Incidentes · Monitoreo 24/7
+Campo
+Valor
+Pregunta original (V2)
+¿Tienen SOC o monitoreo continuo?
+Estado en V2
+Parcial (4/8)
+Implementación MVP
+Monitoreo técnico 24/7 vía CloudWatch + GuardDuty con alarmas a rotación on-call. SLA P1: 15 min acuse, ≤4h resolución. SOC tercerizado (MDR) en evaluación Q1-2027.
+Módulos / componentes
+CloudWatch + GuardDuty + Lambda → PagerDuty + on-call schedule
+Evidencia / verificación
+Métricas MTTR; runbooks RB-001 a RB-010; PagerDuty escalation policy.
+Plan si gap
+Q1-2027 evaluar MDR (Arctic Wolf, Expel, AWS MSSP) si volumen lo justifica.
+3.22 — Infraestructura · SLA/Uptime
+Campo
+Valor
+Pregunta original (V2)
+¿Garantizan 99.9% mínimo?
+Estado en V2
+Parcial (4.5/9)
+Implementación MVP
+SLA contractual base 99.5% mensual. Disponible 99.9% como addendum con cargo, habilitado por réplica activa cross-region (us-east-1 + us-east-2 activo-activo).
+Módulos / componentes
+Terraform módulo apprunner-service Multi-AZ + RDS Multi-AZ + DR cross-region
+Evidencia / verificación
+Reporte mensual uptime UptimeRobot público en status.segurasist.mx; SLA tracking interno.
+Plan si gap
+Si MAC requiere 99.9%, activar SKU; involves activo-activo en us-east-2 + Route 53 health-check failover.
+3.23 — Infraestructura · Backups
+Campo
+Valor
+Pregunta original (V2)
+¿Realizan respaldos y pruebas de restauración?
+Estado en V2
+Si
+Implementación MVP
+RDS PITR 7d + snapshots semanales 30d + cross-region copy us-east-2. Pruebas restauración mensuales en ambiente aislado. RPO ≤24h, RTO ≤4h.
+Módulos / componentes
+Terraform rds-postgres backup config + AWS Backup + Lambda restore-test mensual
+Evidencia / verificación
+Reporte mensual restauración en /docs/runbooks/RB-008-evidence.
+Plan si gap
+—
+3.24 — Infraestructura · DRP
+Campo
+Valor
+Pregunta original (V2)
+¿Cuentan con plan de recuperación ante desastres?
+Estado en V2
+Si
+Implementación MVP
+DRP documentado, probado cada 6 meses. Multi-AZ us-east-1 (auto failover) + réplica cross-region us-east-2 (manual ≤30 min). Runbooks por escenario.
+Módulos / componentes
+/docs/runbooks/RB-003-failover-cross-region.md + DR drill calendar
+Evidencia / verificación
+Bitácora DR drill semestral; RTO/RPO medidos.
+Plan si gap
+—
+3.25 — Infraestructura · Hardening
+Campo
+Valor
+Pregunta original (V2)
+¿Aplican benchmarks CIS o equivalentes?
+Estado en V2
+Si
+Implementación MVP
+CIS AWS Foundations v2.0, PostgreSQL 16, Amazon Linux 2023, Docker. Auditoría continua via AWS Config + Security Hub. Desviaciones priorizadas semanal.
+Módulos / componentes
+Terraform AWS Config rules + Security Hub + Inspector + Parameter Group RDS
+Evidencia / verificación
+Security Hub score CIS visible en dashboard; reporte semanal de desviaciones.
+Plan si gap
+—
+3.26 — Auditoría · Retención de Logs
+Campo
+Valor
+Pregunta original (V2)
+¿Conservan logs ≥12 meses?
+Estado en V2
+Si
+Implementación MVP
+CloudWatch Logs 12m online (consulta rápida). Archivado a S3 Glacier Deep Archive 24m adicionales. Logs de seguridad 24m online. Integridad por S3 Object Lock Compliance.
+Módulos / componentes
+Terraform módulo s3-audit con Object Lock + lifecycle Glacier
+Evidencia / verificación
+AWS Config rule retention-period; Object Lock attribute consulta posible solo lectura.
+Plan si gap
+—
+3.27 — Auditoría · Alertas
+Campo
+Valor
+Pregunta original (V2)
+¿Generan alertas automáticas por anomalías?
+Estado en V2
+Si
+Implementación MVP
+Reglas en CloudWatch + GuardDuty: picos login fallidos, accesos geo atípicos, exfiltración masiva, intentos cross-tenant, anomalías en error rate o latencia.
+Módulos / componentes
+CloudWatch alarms + GuardDuty + Security Hub + EventBridge → SNS → PagerDuty
+Evidencia / verificación
+Dashboard CloudWatch Seguridad; runbooks de triage.
+Plan si gap
+—
+3.28 — Auditoría · Acceso a Logs
+Campo
+Valor
+Pregunta original (V2)
+¿El cliente puede solicitar logs?
+Estado en V2
+Si
+Implementación MVP
+Self-service para enterprise vía dashboard y API export (CSV/JSON). Para resto, ticket al CSM (≤2 días hábiles). Exportación firmada digitalmente.
+Módulos / componentes
+AuditModule export endpoint + Lambda sign-export
+Evidencia / verificación
+Tests integración export; firma verificable con clave pública SegurAsist.
+Plan si gap
+—
+3.29 — Física · DC Certificados
+Campo
+Valor
+Pregunta original (V2)
+¿Datacenters Tier III/IV?
+Estado en V2
+Si
+Implementación MVP
+Infraestructura en AWS us-east-1, us-east-2: SOC 1/2/3, ISO 27001/27017/27018, PCI DSS, HIPAA BAA, FedRAMP High, Tier III+.
+Módulos / componentes
+—
+Evidencia / verificación
+AWS Artifact reportes self-service bajo NDA.
+Plan si gap
+—
+3.30 — Física · Acceso Restringido
+Campo
+Valor
+Pregunta original (V2)
+¿Controlan y monitorean acceso físico?
+Estado en V2
+Si
+Implementación MVP
+Controlado por AWS: biometría multi-factor, CCTV 24/7, escolta visitantes, bitácora auditada, segregación por zonas.
+Módulos / componentes
+—
+Evidencia / verificación
+AWS SOC 2 Tipo II report (AWS Artifact bajo NDA).
+Plan si gap
+—
+3.31 — Contrato · Propiedad de Datos
+Campo
+Valor
+Pregunta original (V2)
+¿El cliente conserva la propiedad total?
+Estado en V2
+Si
+Implementación MVP
+Cliente conserva propiedad total e irrestricta. SegurAsist procesador conforme DPA. Datos NO se usan para entrenar IA, análisis agregado comercial, ni se comparten con terceros fuera de subprocesadores declarados.
+Módulos / componentes
+—
+Evidencia / verificación
+Cláusula explícita en contrato y DPA; configuración no-train en repo.
+Plan si gap
+—
+3.32 — Contrato · Portabilidad
+Campo
+Valor
+Pregunta original (V2)
+¿Pueden exportarse datos al finalizar contrato?
+Estado en V2
+Si
+Implementación MVP
+30 días para exportar (CSV, JSON, Excel, PDF certificados) vía dashboard y API. Asistencia técnica incluida. Self-service exports en cualquier momento.
+Módulos / componentes
+ReportsModule + Lambda export + endpoint /v1/export/full
+Evidencia / verificación
+Tests E2E full-export; documentación legal.
+Plan si gap
+—
+3.33 — Contrato · Borrado Seguro
+Campo
+Valor
+Pregunta original (V2)
+¿Emitirán certificado de eliminación?
+Estado en V2
+Si
+Implementación MVP
+Tras 30d portabilidad: borrado seguro NIST SP 800-88 Rev 1: delete data + crypto-shredding KMS + certificado firmado CISO.
+Módulos / componentes
+Lambda offboarding + KMS scheduled deletion + AuditModule cert sign
+Evidencia / verificación
+Plantilla certificado en repo legal; ejemplo firmado disponible bajo NDA.
+Plan si gap
+—
+
+4. Plan para mover "Parcial" → "Si"
+Control
+Estado V2
+Acción concreta
+Sprint MVP
+Cuándo pasa a Si
+IAM Lifecycle (3.6)
+Parcial
+Implementar SCIM 2.0 nativo Cognito + flujo dual approval
+Sprint 5
+Sprint 5 release
+AppSec PenTest (3.12)
+Parcial
+Pentest interno equipo + contrato externo Q3-2026
+Sprint 5 (interno) + Q3-2026 (externo)
+Q3-2026 con reporte
+Incidentes IRP (3.19)
+Parcial
+Ejecutar primer tabletop con escenario brecha
+Q2-2026
+Q2-2026 con acta
+Incidentes Monitoreo 24/7 (3.21)
+Parcial
+Evaluar contratación MDR (Arctic Wolf/Expel)
+Q1-2027
+Q1-2027 con contrato
+Infra SLA/Uptime (3.22)
+Parcial
+Activar SKU 99.9% si MAC lo solicita; activo-activo us-east-2
+Sprint 5 (capability), on-demand
+Cuando MAC contrate addendum
+4.1 Único "No" de la matriz
+Gobernanza – Política de Seguridad (3.1, en "No"): ya existen políticas internas alineadas a ISO 27001:2022. Lo que falta es la certificación formal externa. Trayectoria comprometida en el Plan de Acción de Cumplimiento:
+	•	Mayo 2026: Gap assessment ISO 27001 (~60,000 MXN, una vez).
+	•	Enero 2027: SOC 2 Tipo I auditoría (~280,000 MXN).
+	•	Marzo 2027: SOC 2 Tipo II (~420,000 MXN anual).
+	•	Julio 2027: ISO 27001 Stage 2 audit; certificado en diciembre 2027.
+Para la propuesta MAC: el gap se mitiga contractualmente con el DPA + roadmap formal compartido bajo NDA + evidencia ISO 27001 de AWS subyacente.
+
+5. Verificación operativa continua
+Cada control tiene un mecanismo de verificación que corre por sí solo y emite señal a CISO + Tech Lead. Si el control deja de cumplirse, abre ticket de Sev≥High.
+Categoría
+Mecanismo automatizado
+Frecuencia
+Destino
+IAM
+AWS Config rules iam-user-mfa-enabled, iam-root-access-key-check
+Continua
+Security Hub
+Datos cifrado
+Config rules s3-bucket-server-side-encryption-enabled, rds-storage-encrypted, encrypted-volumes
+Continua
+Security Hub
+AppSec
+Semgrep + Dependabot + Trivy + ZAP
+Cada PR
+GitHub Security + Linear
+Multitenant
+Cross-tenant test suite
+Cada PR
+CI gate
+API
+OpenAPI contract test + auth fuzz tests k6
+Cada PR + nightly
+CI
+Incidentes
+Runbook drill audit
+Trimestral
+Acta firmada CISO
+Backups
+Lambda restore-test verifica restauración real RDS
+Mensual
+S3 evidence + email CISO
+DR
+Drill cross-region
+Semestral
+Acta + RTO/RPO medido
+Hardening
+AWS Config CIS Benchmark v2.0
+Continua
+Security Hub score
+Auditoría logs
+S3 Object Lock attribute check
+Continua
+Config rule
+WAF
+Bypass attempt test mensual + WAF logs review
+Mensual
+DevOps + CISO
+Subprocesadores
+Calendario revisión semestral
+Semestral
+Linear ticket
+
+6. Roles y responsabilidades de cumplimiento
+Rol
+Responsabilidad cumplimiento
+CISO
+Owner del programa, aprueba release gates de seguridad, lidera IRP, firma certificados de eliminación
+Tech Lead
+Asegura que arquitectura cumple controles; bloquea PR que comprometen aislamiento
+DevOps Lead
+Implementa controles AWS Config / Security Hub; mantiene Terraform alineado; ejecuta drills
+QA Lead
+Mantiene suite cross-tenant + tests de seguridad; ejecuta pentest interno
+Backend Lead
+Implementa controles a nivel código (RLS, scopes, rate limit, audit log)
+Frontend Lead
+Implementa headers, CSP, manejo de tokens seguro
+PO
+Asegura que cambios de scope no introducen gaps; comunica cambios a CISO
+PM
+Tracking de remediation SLAs; reporta postura mensual a Roy
+DPO (compartido CSM)
+Atiende ARCO, mantiene Aviso de Privacidad, gestiona DPA
+
+7. Comunicación a MAC
+La postura de cumplimiento se comparte con MAC en tres niveles:
+	•	Pre-contrato: Matriz V2 + Cuestionario Seguridad (ya entregados, abril 2026).
+	•	Operación: status mensual con KPIs de cumplimiento (CIS score, vulnerabilidades abiertas, intentos cross-tenant, drills ejecutados).
+	•	Anual: re-evaluación formal de la matriz; reporte compartible bajo NDA.

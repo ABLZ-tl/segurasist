@@ -1,0 +1,10 @@
+# SegurAsist API — CODEOWNERS
+# Cualquier cambio requiere review del Tech Lead.
+*                       @segurasist/tech-lead
+/prisma/                @segurasist/tech-lead @segurasist/backend
+/src/common/prisma/     @segurasist/tech-lead @segurasist/backend
+/src/common/guards/     @segurasist/tech-lead @segurasist/security
+/test/security/         @segurasist/tech-lead @segurasist/security
+/.github/workflows/     @segurasist/devops @segurasist/tech-lead
+/Dockerfile             @segurasist/devops
+/apprunner.yaml         @segurasist/devops

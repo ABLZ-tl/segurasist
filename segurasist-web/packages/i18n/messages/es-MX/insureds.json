@@ -1,0 +1,26 @@
+{
+  "title": "Asegurados",
+  "newInsured": "Nuevo asegurado",
+  "bulkUpload": "Carga masiva",
+  "searchPlaceholder": "Buscar por CURP, RFC, nombre o póliza",
+  "columns": {
+    "name": "Nombre",
+    "curp": "CURP",
+    "package": "Paquete",
+    "validity": "Vigencia",
+    "status": "Estado"
+  },
+  "status": {
+    "active": "Vigente",
+    "cancelled": "Cancelada",
+    "expired": "Vencida"
+  },
+  "tabs": {
+    "data": "Datos",
+    "coverages": "Coberturas",
+    "claims": "Eventos",
+    "certificates": "Certificados",
+    "audit": "Auditoría"
+  },
+  "empty": "No hay asegurados que coincidan con los filtros."
+}

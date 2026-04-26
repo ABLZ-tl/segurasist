@@ -1,0 +1,32 @@
+# SegurAsist Infrastructure - Code Owners
+#
+# Order matters: the LAST matching pattern wins.
+# Owners listed here are auto-requested as reviewers on any PR
+# touching the matched paths.
+
+# Default: DevOps lead must review everything
+*                                   @segurasist/devops-leads
+
+# Modules: DevOps + Tech lead
+/modules/                           @segurasist/devops-leads @segurasist/tech-leads
+
+# Per-environment composition
+/envs/dev/                          @segurasist/devops-leads
+/envs/staging/                      @segurasist/devops-leads @segurasist/tech-leads
+/envs/prod/                         @segurasist/devops-leads @segurasist/tech-leads @segurasist/cisos
+
+# Global: Organization, security, IAM OIDC -> CISO + DevOps
+/global/organization/               @segurasist/devops-leads @segurasist/cisos
+/global/security/                   @segurasist/cisos @segurasist/devops-leads
+/global/iam-github-oidc/            @segurasist/devops-leads @segurasist/cisos
+/global/route53/                    @segurasist/devops-leads
+
+# CI/CD pipelines
+/.github/                           @segurasist/devops-leads @segurasist/tech-leads
+
+# Security-sensitive docs
+/docs/security/                     @segurasist/cisos
+/docs/runbooks/                     @segurasist/devops-leads
+
+# ADRs require Tech lead sign-off
+/docs/adr/                          @segurasist/tech-leads @segurasist/devops-leads

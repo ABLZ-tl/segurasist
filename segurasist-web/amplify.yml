@@ -1,0 +1,49 @@
+# AWS Amplify Hosting monorepo build spec.
+# Each app builds independently. Shared packages are built implicitly by Turbo
+# when the consumer app's `build` script runs.
+#
+# Configure two Amplify apps (one per Next.js app), each with this same file
+# and APP_NAME set in environment to either "admin" or "portal".
+version: 1
+applications:
+  - appRoot: apps/admin
+    frontend:
+      phases:
+        preBuild:
+          commands:
+            - corepack enable
+            - corepack prepare pnpm@8.15.6 --activate
+            - pnpm install --frozen-lockfile
+        build:
+          commands:
+            - pnpm --filter @segurasist/admin... build
+      artifacts:
+        baseDirectory: apps/admin/.next
+        files:
+          - '**/*'
+      cache:
+        paths:
+          - node_modules/**/*
+          - .pnpm-store/**/*
+          - .next/cache/**/*
+
+  - appRoot: apps/portal
+    frontend:
+      phases:
+        preBuild:
+          commands:
+            - corepack enable
+            - corepack prepare pnpm@8.15.6 --activate
+            - pnpm install --frozen-lockfile
+        build:
+          commands:
+            - pnpm --filter @segurasist/portal... build
+      artifacts:
+        baseDirectory: apps/portal/.next
+        files:
+          - '**/*'
+      cache:
+        paths:
+          - node_modules/**/*
+          - .pnpm-store/**/*
+          - .next/cache/**/*

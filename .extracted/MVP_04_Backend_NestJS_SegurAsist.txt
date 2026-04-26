@@ -1,0 +1,869 @@
+Especificación Backend (NestJS) — MVP SegurAsist
+Estructura, módulos, API, Lambdas, datos, seguridad, observabilidad, deploy
+Campo
+Valor
+Documento
+Especificación Backend (NestJS) — MVP SegurAsist
+Versión
+v1.0 – Abril 2026
+Audiencia
+Backend, Tech Lead, DevOps, QA
+Clasificación
+Interno – Confidencial
+Cliente ancla
+Hospitales MAC – Roy / Innovación Segura
+Fecha
+2026-04-25
+
+1. Resumen y stack backend
+La API de SegurAsist es un servicio NestJS 10 + TypeScript desplegado como contenedor en AWS App Runner (1 vCPU, 2 GB) con escalado automático. Persistencia en RDS PostgreSQL 16 vía Prisma ORM. Identidad delegada a Amazon Cognito. Trabajos asíncronos en AWS Lambda activados por Amazon SQS y EventBridge. Storage en Amazon S3. Cache, sesiones y throttling en ElastiCache Redis Serverless.
+1.1 Versiones pinneadas
+Componente
+Versión
+Notas
+Node.js
+20 LTS (Active LTS hasta abril 2026)
+App Runner runtime y Lambda runtime
+TypeScript
+5.4
+strict, noUncheckedIndexedAccess
+NestJS
+10.x
+@nestjs/core, @nestjs/platform-fastify (no Express)
+Prisma
+5.x
+Cliente + Migrate
+PostgreSQL
+16
+RDS Multi-AZ
+Zod
+3.x
+Validación de inputs y configs
+pino
+9.x
+Logger JSON estructurado
+pino-http + nestjs-pino
+última estable
+Request logging
+aws-sdk v3
+Última
+Sólo @aws-sdk/* específicos
+jose
+5.x
+Verificación JWT JWKS
+jest + supertest
+Últimas
+Tests
+1.2 Decisión Fastify sobre Express
+NestJS soporta ambos. Se elige Fastify por: ~2× throughput en handlers ligeros, schema validation nativo, menor footprint memoria en Lambda containers (si llegamos a usar Lambda HTTP en el futuro).
+1.3 Mapeo Funcionalidad MVP → Módulos backend
+Para que cualquier lector pueda saltar de una funcionalidad de la presentación o el PRD a su implementación backend, esta tabla resuelve el cruce explícitamente.
+#
+Funcionalidad MVP (presentación / PRD)
+Módulos NestJS implicados
+Workers Lambda
+F1
+Carga masiva de asegurados
+BatchesModule + InsuredsModule + AuthModule
+Worker Layout
+F2
+Dashboard de administración
+InsuredsModule + ReportsModule + AuditModule
+—
+F3
+Certificados automatizados
+CertificatesModule + WebhooksModule + InsuredsModule
+Worker PDF + Worker Email
+F4
+Portal del asegurado
+AuthModule (insured pool) + InsuredsModule + CertificatesModule + ClaimsModule
+—
+F5
+Chatbot integrado
+ChatModule + InsuredsModule (contexto)
+—
+F6
+Reportes para Roy
+ReportsModule + AuditModule
+Worker Reports
+
+2. Estructura del repositorio API
+segurasist-api/
+├── src/
+│   ├── main.ts                          # bootstrap Nest + Fastify
+│   ├── app.module.ts                    # módulo raíz
+│   ├── config/
+│   │   ├── env.schema.ts                # Zod schema de env
+│   │   └── config.module.ts
+│   ├── common/
+│   │   ├── filters/
+│   │   │   └── http-exception.filter.ts
+│   │   ├── interceptors/
+│   │   │   ├── trace-id.interceptor.ts
+│   │   │   ├── audit.interceptor.ts
+│   │   │   └── timeout.interceptor.ts
+│   │   ├── guards/
+│   │   │   ├── jwt-auth.guard.ts
+│   │   │   ├── roles.guard.ts
+│   │   │   └── throttle.guard.ts
+│   │   ├── pipes/
+│   │   │   └── zod-validation.pipe.ts
+│   │   ├── decorators/
+│   │   │   ├── current-user.decorator.ts
+│   │   │   ├── tenant.decorator.ts
+│   │   │   └── roles.decorator.ts
+│   │   └── prisma/
+│   │       ├── prisma.service.ts        # cliente + middleware tenant
+│   │       └── prisma.module.ts
+│   ├── modules/
+│   │   ├── auth/
+│   │   ├── tenants/
+│   │   ├── users/
+│   │   ├── packages/
+│   │   ├── coverages/
+│   │   ├── insureds/
+│   │   ├── batches/
+│   │   ├── certificates/
+│   │   ├── claims/
+│   │   ├── reports/
+│   │   ├── chat/
+│   │   ├── audit/
+│   │   └── webhooks/
+│   └── infra/
+│       ├── aws/
+│       │   ├── s3.service.ts
+│       │   ├── sqs.service.ts
+│       │   ├── ses.service.ts
+│       │   ├── kms.service.ts
+│       │   ├── cognito.service.ts
+│       │   └── secrets.service.ts
+│       ├── observability/
+│       │   ├── logger.ts                # pino
+│       │   ├── tracing.ts               # AWS X-Ray
+│       │   └── metrics.ts
+│       └── cache/
+│           └── redis.service.ts
+├── prisma/
+│   ├── schema.prisma
+│   ├── migrations/
+│   └── seed.ts
+├── test/
+│   ├── unit/                            # *.spec.ts
+│   ├── integration/                     # supertest contra Postgres real
+│   ├── e2e/                             # Playwright (opcional shared)
+│   └── security/
+│       └── cross-tenant.spec.ts         # GATE crítico de PR
+├── docs/
+│   ├── adr/
+│   ├── openapi.json                     # generado en build
+│   └── runbooks/
+├── Dockerfile
+├── apprunner.yaml
+├── .github/workflows/
+└── package.json
+
+3. Módulos NestJS — responsabilidades
+Módulo
+Responsabilidad
+Dependencias
+AuthModule
+Validación JWT Cognito (JWKS), guards, refresh, /me, login para flujos no-SAML.
+CognitoService, RedisService
+TenantsModule
+CRUD de tenants (sólo Admin SegurAsist global).
+PrismaService
+UsersModule
+Gestión de usuarios humanos (operadores, admins). Sincronización opcional con Cognito vía SCIM.
+CognitoService, PrismaService
+PackagesModule
+Catálogo de paquetes por tenant.
+PrismaService
+CoveragesModule
+Coberturas que componen un paquete.
+PrismaService
+InsuredsModule
+CRUD de asegurados, vista 360, búsqueda.
+PrismaService, EventBridgeService
+BatchesModule
+Subida y procesamiento de layouts (preview + confirm).
+S3Service, SqsService, PrismaService
+CertificatesModule
+Emisión y reemisión, descarga firmada, listado.
+S3Service, EventBridgeService
+ClaimsModule
+Reporte y gestión de siniestros.
+PrismaService, EventBridgeService
+ReportsModule
+Generación de reportes mensuales, volumetría, utilización.
+S3Service, SqsService
+ChatModule
+Mensajería del chatbot, KB CRUD.
+PrismaService, RedisService
+AuditModule
+Log de auditoría: append + lectura.
+PrismaService, S3Service
+WebhooksModule
+Recibe eventos firmados de SES/SNS.
+PrismaService, EventBridgeService
+
+4. Autenticación y autorización
+4.1 Flujo Cognito
+	•	Frontend (admin) inicia OAuth Authorization Code Flow contra Cognito. Para asegurados, flujo CUSTOM_CHALLENGE (CURP + OTP).
+	•	Cognito emite Access Token (JWT, 15 min) e ID Token (JWT, 15 min) y Refresh Token (7 días).
+	•	Frontend almacena access token en cookie HttpOnly Secure SameSite=Lax.
+	•	Cada request al API lleva Authorization: Bearer.
+	•	AuthGuard valida firma JWT contra JWKS público de Cognito (cacheado 24h con stale-while-revalidate).
+	•	AuthGuard inyecta CurrentUser y Tenant en el request a partir de claims (sub, email, custom:tenant_id, custom:role, scope).
+	•	RolesGuard verifica que role esté autorizado por @Roles() decorator del handler.
+	•	PrismaService middleware fija session_replication_role + SET app.current_tenant para activar RLS.
+4.2 Roles y scopes OAuth2
+Rol
+Audiencia
+Scopes principales
+MFA obligatorio
+admin_mac
+Operador MAC
+read:insureds write:insureds read:batches write:batches read:reports
+Sí
+operator
+Operador (sólo carga)
+read:insureds write:insureds read:batches write:batches
+Sí
+admin_segurasist
+Admin SegurAsist global
+* (incluye admin:tenants, admin:users)
+Sí
+supervisor
+Supervisor (lectura + reportes)
+read:* read:reports
+Sí
+insured
+Asegurado
+read:self read:certificates:self write:claims:self
+TOTP/Email opt-in
+4.3 Ejemplo de handler protegido
+@Controller({ path: 'insureds', version: '1' })
+@UseGuards(JwtAuthGuard, RolesGuard)
+export class InsuredsController {
+  @Get(':id')
+  @Roles('admin_mac', 'operator', 'admin_segurasist', 'supervisor')
+  @Scopes('read:insureds')
+  async getById(@Param('id') id: string, @Tenant() tenant: TenantCtx) {
+    return this.insureds.findOne(id, tenant);
+  }
+}
+4.4 PrismaService con RLS context
+@Injectable({ scope: Scope.REQUEST })
+export class PrismaService extends PrismaClient {
+  constructor(@Inject(REQUEST) req: FastifyRequest) {
+    super({ log: ['warn', 'error'] });
+    const tenantId = (req as any).tenant?.id;
+    this.$use(async (params, next) => {
+      if (!tenantId) throw new ForbiddenException('Tenant context missing');
+      await this.$queryRawUnsafe(`SET LOCAL app.current_tenant = '${tenantId}'`);
+      return next(params);
+    });
+  }
+}
+
+5. Validación, DTOs y errores
+5.1 Validación con Zod
+Todos los inputs HTTP se validan con Zod a través de un pipe genérico. Los esquemas viven al lado de los DTOs en cada módulo. Ejemplo:
+export const CreateInsuredSchema = z.object({
+  curp: z.string().regex(/^[A-Z]{4}\d{6}[HM][A-Z]{5}[A-Z0-9]\d$/),
+  rfc: z.string().regex(/^[A-Z&Ñ]{3,4}\d{6}[A-Z0-9]{3}$/),
+  fullName: z.string().min(3).max(120),
+  dob: z.string().date(),
+  email: z.string().email().optional(),
+  phone: z.string().regex(/^\+?\d{10,15}$/).optional(),
+  packageId: z.string().uuid(),
+  validFrom: z.string().date(),
+  validTo: z.string().date(),
+  beneficiaries: z.array(BeneficiarySchema).max(10).optional()
+}).refine(d => new Date(d.validTo) > new Date(d.validFrom), {
+  message: 'validTo debe ser posterior a validFrom', path: ['validTo']
+});
+export type CreateInsuredDto = z.infer<typeof CreateInsuredSchema>;
+5.2 Formato de errores (RFC 7807 Problem Details)
+{
+  "type": "https://docs.segurasist.mx/errors/INSURED_DUPLICATED",
+  "title": "Asegurado duplicado",
+  "status": 409,
+  "detail": "El CURP PEPM800101HDFRRR03 ya existe activo en este tenant.",
+  "instance": "/v1/insureds",
+  "code": "INSURED_DUPLICATED",
+  "traceId": "abc123def456",
+  "field": "curp"
+}
+5.3 Catálogo de códigos de error (extracto)
+Código
+HTTP
+Significado
+AUTH_INVALID_TOKEN
+401
+JWT inválido, vencido o firma incorrecta
+AUTH_INSUFFICIENT_SCOPE
+403
+El token no tiene el scope requerido
+TENANT_MISMATCH
+403
+Recurso pertenece a otro tenant
+RESOURCE_NOT_FOUND
+404
+Recurso no existe en el tenant
+VALIDATION_ERROR
+422
+Input no cumple Zod (incluye fields[])
+INSURED_DUPLICATED
+409
+CURP ya existe activo
+BATCH_TOO_LARGE
+413
+Archivo > 25 MB
+RATE_LIMITED
+429
+Quota excedida
+UPSTREAM_AWS_ERROR
+502
+Error transitorio de AWS
+INTERNAL_ERROR
+500
+Inesperado; trace_id obligatorio
+
+6. Endpoints REST detallados
+6.1 Auth
+Método
+Path
+Body / Query
+Respuesta
+Códigos
+POST
+/v1/auth/login
+{ email, password } o { curp } (insured)
+{ accessToken, refreshToken, expiresIn }
+200, 401, 422
+POST
+/v1/auth/otp/request
+{ curp, channel: 'email'|'sms' }
+{ session }
+200, 404, 429
+POST
+/v1/auth/otp/verify
+{ session, code }
+{ accessToken, refreshToken, expiresIn }
+200, 401, 422
+POST
+/v1/auth/refresh
+{ refreshToken }
+{ accessToken, expiresIn }
+200, 401
+POST
+/v1/auth/logout
+(cookie)
+204
+204, 401
+GET
+/v1/auth/me
+—
+{ id, role, tenant, scopes, mfa }
+200, 401
+6.2 Batches
+Método
+Path
+Body / Query
+Respuesta
+Notas
+POST
+/v1/batches
+multipart file
+{ id, status: 'validating' }
+Sube a S3 y encola validate
+GET
+/v1/batches
+?status&limit&cursor
+Lista paginada
+Cursor-based
+GET
+/v1/batches/{id}
+—
+Detalle + counts
+Polling cada 2 s desde UI
+GET
+/v1/batches/{id}/errors
+?limit&cursor
+Lista batch_errors
+Soporta export CSV
+POST
+/v1/batches/{id}/confirm
+{ rowsToInclude?: number[] }
+{ id, status: 'processing' }
+Encola N mensajes
+POST
+/v1/batches/{id}/cancel
+—
+{ status: 'cancelled' }
+Sólo si pending
+6.3 Insureds
+Método
+Path
+Body / Query
+Respuesta
+Notas
+GET
+/v1/insureds
+?q&packageId&status&validFrom&validTo&limit&cursor
+Lista paginada
+Index PG: tenant_id+status, GIN trigram para nombre
+GET
+/v1/insureds/{id}
+—
+Vista 360
+Devuelve coverages, certificates, claims, audit
+POST
+/v1/insureds
+CreateInsuredDto
+{ id, ... }
+Dispara EventBridge insured.created
+PATCH
+/v1/insureds/{id}
+Partial<UpdateInsuredDto>
+{ id, ... }
+Append en audit_log
+DELETE
+/v1/insureds/{id}
+—
+204
+Soft delete (status = 'cancelled')
+6.4 Certificates
+Método
+Path
+Body / Query
+Respuesta
+Notas
+GET
+/v1/certificates
+?insuredId&status&limit&cursor
+Lista paginada
+
+GET
+/v1/certificates/{id}
+—
+Detalle
+
+GET
+/v1/certificates/{id}/url
+—
+{ url, expiresAt }
+S3 presigned URL TTL 7 días
+POST
+/v1/certificates/{id}/reissue
+{ reason }
+{ id, version }
+Crea nueva versión
+6.5 Reports
+Método
+Path
+Body / Query
+Respuesta
+Notas
+GET
+/v1/reports/conciliation
+?month=YYYY-MM
+{ url, signature }
+Si no existe, encola y devuelve 202
+GET
+/v1/reports/volumetry
+?from&to&granularity
+{ series: [...] }
+Inline JSON
+GET
+/v1/reports/usage
+?packageId
+{ aggregates: [...] }
+Inline JSON
+POST
+/v1/reports/schedule
+{ type, recipients, cron }
+{ id }
+Persiste y crea EventBridge rule
+6.6 Chat
+Método
+Path
+Body / Query
+Respuesta
+Notas
+POST
+/v1/chat/messages
+{ content }
+{ reply, intent, confidence, escalate? }
+Lookup KB + personalización
+GET
+/v1/chat/history
+?limit
+Lista
+30 días retención
+GET
+/v1/chat/kb
+—
+Categorías + entries
+Admin SegurAsist UI
+POST
+/v1/chat/kb
+{ category, question, answer }
+{ id }
+Admin SegurAsist
+PATCH
+/v1/chat/kb/{id}
+Partial<...>
+{ id }
+Versiona la entrada
+
+7. Workers Lambda
+7.1 Worker Layout
+Trigger: SQS layout-validation-queue. Payload: { batchId, tenantId, s3Key }.
+	•	Descarga el archivo desde S3 con KMS decrypt.
+	•	Parsea con SheetJS (xlsx); detecta hoja "asegurados" o primera.
+	•	Itera filas. Por cada fila: valida con Zod schema, busca duplicados (CURP en tenant), valida package_id existe.
+	•	Insert batch en transacción: actualiza counts cada 1000 filas para mostrar progreso.
+	•	Marca el batch como preview_ready y publica evento batch.preview_ready.
+Memoria: 1024 MB. Timeout: 5 min. Reservada concurrency: 5.
+7.2 Worker PDF
+Trigger: EventBridge insured.created y certificate.reissue_requested. Payload: { insuredId, tenantId, version? }.
+	•	Carga datos del asegurado y plantilla (caché en memoria local con TTL 5 min).
+	•	Renderiza HTML con Handlebars (datos + branding del tenant).
+	•	Ejecuta puppeteer-core con Chromium layer (chrome-aws-lambda).
+	•	Aplica metadata XMP + QR de verificación (URL al endpoint /v1/certificates/verify/{hash}).
+	•	Sube PDF a S3 con SSE-KMS y persiste certificate.
+	•	Publica evento certificate.issued.
+Memoria: 2048 MB. Timeout: 30 s. Provisioned concurrency: 2 en horario laboral.
+7.3 Worker Email
+Trigger: EventBridge certificate.issued. Payload: { certificateId, tenantId, insuredId }.
+	•	Genera URL S3 presigned (TTL 7 días).
+	•	Renderiza plantilla email con branding del tenant (Handlebars + Polished).
+	•	Llama SES SendEmail (Configuration Set para tracking de eventos).
+	•	Persiste registro inicial email_events con estado queued.
+Memoria: 256 MB. Timeout: 10 s.
+7.4 Worker Reports
+Trigger: SQS report-generation-queue (manual o cron EventBridge).
+	•	Ejecuta queries agregadas con timeouts (≤30 s).
+	•	Construye XLSX con SheetJS y PDF con Puppeteer.
+	•	Sube ambos a S3 (exports/{tenant}/reports/...).
+	•	Si la solicitud es interactiva, escribe URL en BD para que API responda al polling.
+	•	Si es schedule, dispara Worker Email para enviar.
+Memoria: 3008 MB. Timeout: 5 min.
+7.5 Webhook handler SES (Lambda + SNS)
+SES envía Bounce/Complaint/Delivery a un topic SNS. Una Lambda suscrita al topic verifica firma SNS, persiste email_events y emite alerta si bounce hard cruza umbral del 5% diario.
+
+8. Capa de datos (Prisma + Postgres)
+8.1 Convenciones
+	•	Todas las tablas tienen tenant_id NOT NULL excepto tenants y configuraciones globales.
+	•	PK uuid v4 generado por la app (no sequence).
+	•	Timestamps: created_at, updated_at con default now().
+	•	Soft delete: columna status enum + deleted_at nullable; nunca DELETE físico en tablas core.
+	•	Índices: tenant_id en cada tabla; índices compuestos según query plan.
+	•	Enums fuertes en Postgres (CREATE TYPE) y Prisma.
+8.2 Snippet schema.prisma (extracto)
+model Insured {
+  id            String   @id @default(uuid())
+  tenantId      String   @map("tenant_id")
+  curp          String
+  rfc           String?
+  fullName      String   @map("full_name")
+  dob           DateTime
+  email         String?
+  phone         String?
+  packageId     String   @map("package_id")
+  validFrom     DateTime @map("valid_from")
+  validTo       DateTime @map("valid_to")
+  status        InsuredStatus @default(active)
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+  deletedAt     DateTime? @map("deleted_at")
+
+  tenant        Tenant   @relation(fields: [tenantId], references: [id])
+  package       Package  @relation(fields: [packageId], references: [id])
+  certificates  Certificate[]
+  claims        Claim[]
+  beneficiaries Beneficiary[]
+  usages        CoverageUsage[]
+
+  @@unique([tenantId, curp], name: "insured_tenant_curp_unique")
+  @@index([tenantId, status])
+  @@index([tenantId, packageId])
+  @@map("insureds")
+}
+8.3 Migraciones — práctica
+	•	npx prisma migrate dev --name <nombre> en local crea la migración SQL.
+	•	PR incluye la migración revisada por Tech Lead.
+	•	CI ejecuta prisma migrate deploy en staging contra una réplica de prod (snapshot).
+	•	Deploy a prod corre prisma migrate deploy automáticamente vía hook pre-start.
+	•	Si la migración falla, App Runner no actualiza la versión y el tráfico sigue en versión anterior.
+8.4 RLS — script de inicialización
+-- Para cada tabla con tenant_id
+ALTER TABLE insureds ENABLE ROW LEVEL SECURITY;
+CREATE POLICY p_insureds_select ON insureds FOR SELECT
+  USING (tenant_id::text = current_setting('app.current_tenant', true));
+CREATE POLICY p_insureds_modify ON insureds FOR ALL
+  USING (tenant_id::text = current_setting('app.current_tenant', true))
+  WITH CHECK (tenant_id::text = current_setting('app.current_tenant', true));
+El usuario de aplicación (segurasist_app) NO tiene BYPASSRLS. Sólo tareas administrativas usan un usuario separado segurasist_admin con BYPASSRLS y MFA explícito.
+
+9. Observabilidad
+9.1 Logs estructurados
+Cada log es JSON con campos estándar: timestamp, level, msg, traceId, tenantId, userId, route, method, status, latencyMs, awsRequestId. Niveles: trace, debug, info, warn, error, fatal. Production por default a info.
+9.2 Métricas custom (CloudWatch EMF)
+Métrica
+Tipo
+Dimensiones
+Alarma sugerida
+api.request.count
+Counter
+route, method, status, tenant
+—
+api.request.latency_ms
+Histogram
+route, method
+p95 > 500 ms 5 min
+batch.processing.duration_ms
+Histogram
+tenant
+p95 > 30000 5 min
+pdf.generation.duration_ms
+Histogram
+tenant
+p95 > 10000 5 min
+email.bounce.rate
+Gauge
+tenant
+> 5% diario
+auth.login.failed
+Counter
+tenant, role
+> 100 / 5 min
+audit.cross_tenant_attempt
+Counter
+tenant, role
+≥1 dispara P1
+9.3 Tracing con AWS X-Ray
+	•	X-Ray daemon habilitado en App Runner; SDK instrumenta Fastify, Prisma, AWS SDK v3, Redis.
+	•	trace_id se propaga al frontend (header X-Trace-Id) para correlación con telemetría web.
+	•	Sampling 5% en prod, 100% en staging.
+9.4 Alarmas críticas
+Alarma
+Condición
+Severidad
+Acción on-call
+API down
+0 healthy targets 2 min
+P1
+Failover staging temporal + diagnóstico
+DB conexiones >80%
+RDS DBLoadCPU > 80% 5 min
+P2
+Escalar instancia / kill queries largas
+Cross-tenant attempt
+≥1 evento
+P1
+Bloquear cuenta + revisar audit log
+Bounce rate hard >5%
+Diario
+P2
+Pausar envíos, revisar reputación SES
+GuardDuty Critical
+Cualquier finding crítico
+P1
+IRP playbook
+Latencia API p95 > 1 s
+5 min
+P3
+Revisar slow queries, reciclar instancia
+
+10. Seguridad — controles a implementar en código
+Control matriz V2
+Implementación en backend
+IAM – SSO/MFA
+Cognito User Pool con SAML/OIDC; admin pool exige MFA TOTP o SMS
+IAM – RBAC + RLS
+Roles en Cognito groups + scopes; PrismaService SET app.current_tenant + políticas RLS
+IAM – Lifecycle
+SCIM 2.0 (Cognito Developer+); endpoints internos para alta/baja
+IAM – Auditoría
+Interceptor audit en Nest persiste cada acción mutante
+Datos – Cifrado tránsito
+Fastify forzando TLS; HSTS header; ALB sólo TLS 1.3
+Datos – Cifrado reposo
+RDS, S3, EBS con KMS CMK; Prisma usa SSL hacia RDS
+Datos – Retención
+Migración cron Lambda elimina datos > política; soft delete en código
+Datos – DPA
+DPA firmado externo; código no necesita cambios; logs de export se persisten
+AppSec – OWASP
+Helmet (CSP, X-Frame, etc.); validación Zod; queries parametrizadas Prisma; output encoding React
+AppSec – Vulnerabilities
+Dependabot + Semgrep en CI; renovate semanal; SLA 7d crítica
+AppSec – Multitenant
+Tests cross-tenant en CI; review obligatorio para cambios en tenant scope
+API – Auth
+JWT corto (15 min) + refresh (7 d); api keys con rotación en Secrets Manager
+API – Scopes
+Decorator @Scopes() valida claim scope contra requerido
+API – Logs
+pino + nestjs-pino + interceptor; export a CloudWatch
+Incidentes – IRP
+Endpoint /admin/incident/declare crea ticket + notifica on-call
+Incidentes – Notificación
+Endpoint y plantilla pre-aprobadas en repo /docs/comms
+Auditoría – Retención
+CloudWatch 12 m + S3 Glacier 24 m configurado en Terraform
+
+11. Performance y rendimiento
+	•	Conexiones BD pool: 10 por instancia App Runner; máximo 30 conexiones a RDS db.t4g.small (límite 87).
+	•	Cache Redis para: lista de paquetes (TTL 5 min), claims agregados (TTL 1 min), JWKS Cognito (TTL 24 h).
+	•	Listados con cursor-based pagination (no offset) para mantener performance constante.
+	•	Queries con EXPLAIN ANALYZE en PR si el handler toca tablas > 100k filas.
+	•	Índices propuestos: insureds(tenant_id, curp) UNIQUE, insureds(tenant_id, status), certificates(tenant_id, insured_id), audit_log(tenant_id, occurred_at DESC).
+	•	Trigram (pg_trgm) para búsqueda por nombre.
+	•	HTTP keep-alive habilitado y compresión gzip/brotli para responses > 1 KB.
+
+12. Estrategia de testing del backend
+Capa
+Herramienta
+Cobertura objetivo
+Unitario (services, helpers)
+Jest
+≥80%
+Integración (controllers + Postgres real con docker-compose)
+Jest + supertest + testcontainers
+≥70% endpoints
+Cross-tenant (gate)
+Jest spec dedicada
+100% endpoints con tenant_id
+Contrato (OpenAPI vs implementación)
+openapi-validator-middleware
+100%
+Carga (perf)
+k6
+Por release
+Mutation (sample crítico)
+Stryker
+Sample mensual
+Test cross-tenant ejemplo (debe fallar la build si pasa):
+it('user del tenant A NO puede ver insureds del tenant B', async () => {
+  const tokenA = await mintToken({ role: 'admin_mac', tenantId: 'tenant-A' });
+  const insuredB = await seedInsured({ tenantId: 'tenant-B' });
+  const res = await request(app)
+    .get(`/v1/insureds/${insuredB.id}`)
+    .set('Authorization', `Bearer ${tokenA}`);
+  expect(res.status).toBe(404);  // o 403; nunca 200
+});
+
+13. Build, empaquetado y despliegue
+13.1 Dockerfile (multi-stage)
+# build
+FROM node:20-bookworm-slim AS build
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci --no-audit --no-fund
+COPY . .
+RUN npx prisma generate && npm run build
+
+# runtime
+FROM gcr.io/distroless/nodejs20-debian12 AS runtime
+WORKDIR /app
+COPY --from=build /app/node_modules ./node_modules
+COPY --from=build /app/dist ./dist
+COPY --from=build /app/prisma ./prisma
+COPY --from=build /app/package.json ./
+ENV NODE_ENV=production
+EXPOSE 3000
+CMD ["dist/main.js"]
+13.2 apprunner.yaml
+version: 1.0
+runtime: docker
+build:
+  commands:
+    pre-build: []
+run:
+  runtime-version: latest
+  command: node dist/main.js
+  network:
+    port: 3000
+  env:
+    - name: NODE_ENV
+      value: production
+    - name: AWS_REGION
+      value: us-east-1
+  secrets:
+    - name: DATABASE_URL
+      value-from: arn:aws:secretsmanager:us-east-1:...:secret:rds/segurasist/prod-XXXX:url::
+13.3 Health checks
+	•	/health/live — 200 si el proceso está arriba (no toca BD).
+	•	/health/ready — 200 si BD y Redis responden < 200 ms; usado por App Runner load balancer.
+
+14. Configuración (env vars)
+Variable
+Origen
+Ejemplo
+DATABASE_URL
+Secrets Manager
+postgres://...@rds-prod.../segurasist?sslmode=require
+REDIS_URL
+Secrets Manager
+rediss://elasticache.../0
+COGNITO_USER_POOL_ID_ADMIN
+ENV
+us-east-1_xxxxx
+COGNITO_USER_POOL_ID_INSURED
+ENV
+us-east-1_yyyyy
+COGNITO_REGION
+ENV
+us-east-1
+AWS_REGION
+ENV
+us-east-1
+S3_BUCKET_UPLOADS
+ENV
+segurasist-prod-uploads
+S3_BUCKET_CERTIFICATES
+ENV
+segurasist-prod-certificates
+S3_BUCKET_AUDIT
+ENV
+segurasist-prod-audit (Object Lock)
+SQS_QUEUE_LAYOUT
+ENV
+https://sqs...
+SES_SENDER_DOMAIN
+ENV
+segurasist.mx
+SES_CONFIGURATION_SET
+ENV
+segurasist-prod
+KMS_KEY_ID
+ENV
+alias/segurasist-prod
+LOG_LEVEL
+ENV
+info
+TRACE_SAMPLE_RATE
+ENV
+0.05
+Validación al boot con Zod; si falta una variable obligatoria, el proceso aborta antes de aceptar tráfico.
+15. Riesgos backend conocidos y mitigación
+Riesgo
+Mitigación
+Cold start de Lambda PDF al primer certificado del día
+Provisioned concurrency 2 en horario laboral 8-19; warm-up scheduler
+Conexiones BD agotadas por picos
+Pool 10/instancia; usar pgbouncer si se llega al límite
+Lambda Worker Layout fuera de tiempo en archivos > 10k filas
+Particionar archivo en lotes de 5k antes de encolar
+Plantilla PDF con CSS roto
+Snapshot tests; lint CSS al PR
+JWKS rotación de Cognito
+Cache JWKS con stale-while-revalidate; reintentos exponenciales
+Bounces SES dañan reputación
+Alarma 5% diaria + pause automática + warm-up dominio dedicado
+Migración Prisma falla en deploy
+App Runner mantiene versión anterior; alerta P2 inmediata

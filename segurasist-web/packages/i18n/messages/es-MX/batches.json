@@ -1,0 +1,22 @@
+{
+  "title": "Lotes de carga",
+  "new": "Nuevo lote",
+  "steps": {
+    "upload": "Subir archivo",
+    "preview": "Previsualización",
+    "confirm": "Confirmar"
+  },
+  "templateDownload": "Descargar plantilla",
+  "filter": {
+    "all": "Todas",
+    "valid": "Sólo válidas",
+    "errors": "Sólo errores",
+    "duplicates": "Duplicadas"
+  },
+  "summary": {
+    "total": "Total",
+    "valid": "Válidas",
+    "errors": "Con error",
+    "duplicates": "Duplicadas"
+  }
+}

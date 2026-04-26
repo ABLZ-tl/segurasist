@@ -1,0 +1,45 @@
+# OS
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+# Claude Code session state (machine-local)
+.claude/
+
+# Editors
+.vscode/
+.idea/
+
+# Logs
+*.log
+
+# Sensitive (defensa adicional sobre los .gitignore por sub-proyecto)
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# Build artifacts (defensa adicional)
+node_modules/
+dist/
+build/
+coverage/
+.next/
+.turbo/
+out/
+
+# Terraform state (defensa adicional)
+*.tfstate
+*.tfstate.*
+.terraform/
+
+# Tooling caches
+.cache/
+*.tsbuildinfo
+.pnpm-store/
+
+# Test artifacts
+playwright-report/
+test-results/
+storybook-static/

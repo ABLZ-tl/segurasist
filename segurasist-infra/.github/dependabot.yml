@@ -1,0 +1,84 @@
+version: 2
+
+updates:
+  # GitHub Actions used in workflows
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "07:00"
+      timezone: America/Mexico_City
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - github-actions
+    reviewers:
+      - segurasist/devops-leads
+    commit-message:
+      prefix: "chore(actions)"
+
+  # Terraform providers + modules in env composition (root of each env)
+  - package-ecosystem: terraform
+    directory: /envs/dev
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
+    labels:
+      - dependencies
+      - terraform
+      - env-dev
+    reviewers:
+      - segurasist/devops-leads
+    commit-message:
+      prefix: "chore(tf-dev)"
+
+  - package-ecosystem: terraform
+    directory: /envs/staging
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
+    labels:
+      - dependencies
+      - terraform
+      - env-staging
+    reviewers:
+      - segurasist/devops-leads
+      - segurasist/tech-leads
+    commit-message:
+      prefix: "chore(tf-staging)"
+
+  - package-ecosystem: terraform
+    directory: /envs/prod
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
+    labels:
+      - dependencies
+      - terraform
+      - env-prod
+    reviewers:
+      - segurasist/devops-leads
+      - segurasist/tech-leads
+      - segurasist/cisos
+    commit-message:
+      prefix: "chore(tf-prod)"
+
+  # Global stacks
+  - package-ecosystem: terraform
+    directory: /global/organization
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 2
+    labels:
+      - dependencies
+      - terraform
+      - global
+    reviewers:
+      - segurasist/cisos
+      - segurasist/devops-leads
+    commit-message:
+      prefix: "chore(tf-global)"

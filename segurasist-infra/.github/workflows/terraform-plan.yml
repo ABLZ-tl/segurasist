@@ -1,0 +1,148 @@
+name: terraform-plan
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "modules/**"
+      - "envs/**"
+      - "global/**"
+      - ".github/workflows/terraform-*.yml"
+
+permissions:
+  id-token: write    # OIDC -> AWS
+  contents: read
+  pull-requests: write
+
+env:
+  TF_VERSION: "1.7.5"
+  TF_IN_AUTOMATION: "true"
+  AWS_REGION: mx-central-1
+
+concurrency:
+  group: tf-plan-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  detect-changes:
+    name: Detect changed envs
+    runs-on: ubuntu-latest
+    outputs:
+      envs: ${{ steps.set.outputs.envs }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - id: set
+        name: Compute affected env matrix
+        run: |
+          set -euo pipefail
+          base="${{ github.event.pull_request.base.sha }}"
+          head="${{ github.event.pull_request.head.sha }}"
+          changed=$(git diff --name-only "$base" "$head" || true)
+
+          envs=()
+          if echo "$changed" | grep -qE '^(envs/dev/|modules/)';     then envs+=("dev"); fi
+          if echo "$changed" | grep -qE '^(envs/staging/|modules/)'; then envs+=("staging"); fi
+          if echo "$changed" | grep -qE '^(envs/prod/|modules/)';    then envs+=("prod"); fi
+
+          if [[ ${#envs[@]} -eq 0 ]]; then
+            echo 'envs=[]' >> "$GITHUB_OUTPUT"
+          else
+            json=$(printf '"%s",' "${envs[@]}")
+            echo "envs=[${json%,}]" >> "$GITHUB_OUTPUT"
+          fi
+
+  fmt-and-validate:
+    name: fmt + validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: terraform fmt -check
+        run: terraform fmt -check -recursive .
+
+      - name: validate modules
+        run: |
+          set -euo pipefail
+          for dir in modules/*/ ; do
+            echo "::group::validate $dir"
+            (cd "$dir" && terraform init -backend=false -input=false >/dev/null && terraform validate)
+            echo "::endgroup::"
+          done
+
+  plan:
+    name: plan ${{ matrix.env }}
+    needs: [detect-changes, fmt-and-validate]
+    if: needs.detect-changes.outputs.envs != '[]'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        env: ${{ fromJSON(needs.detect-changes.outputs.envs) }}
+    environment: ${{ matrix.env }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: AWS OIDC login
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/github-actions-tf-plan-${{ matrix.env }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: gha-tf-plan-${{ matrix.env }}-${{ github.run_id }}
+
+      - name: terraform init
+        working-directory: envs/${{ matrix.env }}
+        run: terraform init -input=false
+
+      - name: terraform plan
+        id: plan
+        working-directory: envs/${{ matrix.env }}
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          terraform plan -input=false -no-color -out=tfplan.out 2>&1 | tee plan.txt
+          echo "exit_code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+
+      - name: Comment PR with plan
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const env = '${{ matrix.env }}';
+            const plan = fs.readFileSync(`envs/${env}/plan.txt`, 'utf8');
+            const truncated = plan.length > 60000
+              ? plan.slice(0, 60000) + '\n... (truncated, see workflow logs) ...'
+              : plan;
+            const body = [
+              `### Terraform plan: \`${env}\``,
+              '',
+              '<details><summary>Show plan</summary>',
+              '',
+              '```hcl',
+              truncated,
+              '```',
+              '',
+              '</details>',
+            ].join('\n');
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });
+
+      - name: Fail job if plan errored
+        if: steps.plan.outputs.exit_code != '0'
+        run: |
+          echo "terraform plan exited with ${{ steps.plan.outputs.exit_code }}"
+          exit 1

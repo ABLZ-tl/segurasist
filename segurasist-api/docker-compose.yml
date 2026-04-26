@@ -1,0 +1,81 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: segurasist-postgres
+    environment:
+      POSTGRES_USER: segurasist
+      POSTGRES_PASSWORD: segurasist
+      POSTGRES_DB: segurasist
+    ports:
+      - "5432:5432"
+    volumes:
+      - segurasist_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U segurasist -d segurasist"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: segurasist-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  localstack:
+    image: localstack/localstack:3.7
+    container_name: segurasist-localstack
+    environment:
+      SERVICES: s3,sqs,kms,secretsmanager
+      DEFAULT_REGION: mx-central-1
+      AWS_DEFAULT_REGION: mx-central-1
+      DEBUG: "0"
+      PERSISTENCE: "1"
+    ports:
+      - "4566:4566"
+    volumes:
+      - segurasist_localstack:/var/lib/localstack
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:4566/_localstack/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  mailpit:
+    image: axllent/mailpit:latest
+    container_name: segurasist-mailpit
+    environment:
+      MP_MAX_MESSAGES: "5000"
+      MP_SMTP_AUTH_ACCEPT_ANY: "1"
+      MP_SMTP_AUTH_ALLOW_INSECURE: "1"
+    ports:
+      - "1025:1025"
+      - "8025:8025"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8025/livez"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  cognito-local:
+    image: jagregory/cognito-local:latest
+    container_name: segurasist-cognito-local
+    ports:
+      - "9229:9229"
+    volumes:
+      - segurasist_cognito:/app/.cognito
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:9229/ || exit 0"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  segurasist_pg:
+  segurasist_localstack:
+  segurasist_cognito:

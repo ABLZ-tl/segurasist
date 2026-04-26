@@ -1,0 +1,14 @@
+{
+  "extends": "@segurasist/config/tsconfig.lib.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "rootDir": ".",
+    "outDir": "dist",
+    "types": ["node", "vitest/globals", "@testing-library/jest-dom"],
+    "paths": {
+      "@/*": ["./src/*"]
+    }
+  },
+  "include": ["src/**/*", ".storybook/**/*", "vitest.setup.ts", "vitest.config.ts"],
+  "exclude": ["node_modules", "dist", "storybook-static"]
+}

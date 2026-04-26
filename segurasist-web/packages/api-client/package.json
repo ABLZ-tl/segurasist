@@ -1,0 +1,39 @@
+{
+  "name": "@segurasist/api-client",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./hooks/insureds": "./src/hooks/insureds.ts",
+    "./hooks/batches": "./src/hooks/batches.ts",
+    "./hooks/certificates": "./src/hooks/certificates.ts",
+    "./hooks/packages": "./src/hooks/packages.ts",
+    "./hooks/reports": "./src/hooks/reports.ts",
+    "./hooks/chat": "./src/hooks/chat.ts",
+    "./hooks/auth": "./src/hooks/auth.ts"
+  },
+  "files": ["src"],
+  "scripts": {
+    "lint": "eslint \"src/**/*.{ts,tsx}\"",
+    "typecheck": "tsc --noEmit",
+    "openapi:gen": "openapi-typescript ${OPENAPI_URL:-https://api.segurasist.app/openapi.json} -o ./src/generated/openapi.d.ts",
+    "test:unit": "vitest run"
+  },
+  "dependencies": {
+    "@tanstack/react-query": "5.51.11",
+    "zustand": "4.5.4"
+  },
+  "peerDependencies": {
+    "react": "^18.3.0"
+  },
+  "devDependencies": {
+    "@segurasist/config": "workspace:*",
+    "@types/react": "18.3.3",
+    "openapi-typescript": "7.0.2",
+    "typescript": "5.4.5",
+    "vitest": "2.0.4"
+  }
+}

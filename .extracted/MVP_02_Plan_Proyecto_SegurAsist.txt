@@ -1,0 +1,874 @@
+Plan de Proyecto y Sprints — MVP SegurAsist
+Sprint 0 + 6 sprints semanales · Roles, RACI, ceremonias, riesgos · Go-Live día 30
+Campo
+Valor
+Documento
+Plan de Proyecto y Sprints — MVP SegurAsist
+Versión
+v1.0 – Abril 2026
+Audiencia
+Equipo SegurAsist + Roy + sponsor MAC
+Clasificación
+Interno – Confidencial
+Cliente ancla
+Hospitales MAC – Roy / Innovación Segura
+Fecha
+2026-04-25
+
+1. Resumen ejecutivo del plan
+El MVP de SegurAsist para Hospitales MAC se ejecuta en 6 sprints semanales (30 días hábiles de desarrollo) más 10 días hábiles de hypercare post Go-Live (40 días hábiles totales), con un Sprint 0 de preparación de 5 días hábiles previo al kick-off. El objetivo es Go-Live productivo en la semana 6 con al menos los flujos críticos de las 6 funcionalidades operando contra datos reales de MAC.
+Equipo dedicado: 5 personas (1 Tech Lead, 1 Backend Sr, 1 Frontend Sr, 1 DevOps/SRE, 1 QA) más roles cruzados (PO/PM compartidos a 50%, CISO 20%, soporte CSM 10%). Modalidad remota con dos ceremonias presenciales obligatorias: kick-off y dry-run pre Go-Live.
+1.1 Hitos macro
+Hito
+Fecha
+Entregable verificable
+Aprobación PRD + esta planeación
+Día 0 (firma contrato)
+PRD v1.0 + Plan v1.0 firmados por Roy
+Kick-off técnico
+Día 1
+Repos creados, ambientes dev/staging provisionados con Terraform, primer build verde
+Demo Sprint 1
+Día 5
+Login admin Cognito + esqueleto navegación + carga masiva con previsualización (sin background processing aún)
+Demo Sprint 2
+Día 10
+Carga masiva end-to-end + emisión y envío de certificados + Dashboard KPIs base
+Demo Sprint 3
+Día 15
+Portal asegurado con login OTP + consulta vigencia y descarga PDF + Dashboard listado completo
+Demo Sprint 4
+Día 20
+Reportes mensuales + chatbot KB + auditoría completa visible en UI
+Code freeze + endurecimiento
+Día 25
+Pentest interno + DAST limpio + runbooks publicados + DR drill ejecutado
+UAT con MAC
+Día 27–28
+Aprobación operativa de Lucía + Mario + Roy
+Go-Live productivo
+Día 30
+Primera carga real en producción + monitoreo activo 48 h
+Hypercare
+Días 31–40
+Soporte L1-L2 dedicado, métricas diarias, ajustes cosméticos
+
+2. Equipo y RACI
+2.1 Composición del equipo
+Rol
+% dedicación
+Responsabilidad principal
+Tech Lead (compartido con Backend Sr)
+100%
+Arquitectura, ADRs, code review obligatorio, decisiones técnicas, salud del backlog técnico.
+Backend Sr (NestJS)
+100%
+Implementación API, auth, jobs, integraciones AWS, tests.
+Frontend Sr (Next.js)
+100%
+Implementación admin + portal asegurado, design system, accesibilidad.
+DevOps / SRE
+100%
+Terraform, CI/CD, observabilidad, hardening, runbooks, on-call setup.
+QA
+100%
+Plan de pruebas, automatización E2E, performance, DAST, gate de release.
+Product Owner (Alan)
+50%
+Backlog, criterios de aceptación, aprobaciones, interlocución con Roy.
+Project Manager
+50%
+Planeación, reporting, gestión de riesgos, ceremonias, comunicaciones.
+CISO
+20%
+Validación de controles V2, aprobación de gates de seguridad, IRP.
+Customer Success Manager
+10%
+Coordinación con MAC, agendar UAT, hypercare.
+2.2 RACI por entregable
+R = Responsable (ejecuta), A = Aprobador (rinde cuentas), C = Consultado, I = Informado.
+Entregable
+Tech Lead
+BE
+FE
+DevOps
+QA
+PO
+CISO
+PRD aprobado
+C
+C
+C
+I
+I
+A/R
+C
+Arquitectura y ADRs
+A/R
+C
+C
+C
+I
+I
+C
+Esquema BD + migraciones
+A/R
+R
+I
+I
+C
+I
+C
+API NestJS + OpenAPI
+A
+R
+C
+I
+C
+I
+I
+Frontend admin
+C
+C
+A/R
+I
+C
+C
+I
+Frontend portal asegurado
+C
+C
+A/R
+I
+C
+C
+I
+Generación PDF Lambda
+A
+R
+C
+C
+C
+I
+I
+Terraform módulos
+C
+I
+I
+A/R
+I
+I
+C
+Pipeline CI/CD GitHub Actions
+C
+C
+C
+A/R
+C
+I
+C
+Estrategia QA + automatización
+C
+C
+C
+I
+A/R
+C
+I
+Hardening CIS + WAF + GuardDuty
+C
+I
+I
+R
+I
+I
+A
+DR drill + runbooks
+C
+I
+I
+A/R
+C
+I
+C
+Pentest interno + DAST
+C
+C
+C
+C
+R
+I
+A
+Comunicación con MAC
+I
+I
+I
+I
+I
+A/R
+I
+Go-Live decision (gate)
+R
+C
+C
+R
+R
+A
+R
+
+3. Sprint 0 — Preparación (5 días hábiles antes del kick-off)
+Bloque previo al sprint 1 enfocado en habilitadores que no se pueden empezar después sin perder velocidad.
+Día
+Actividad
+Owner
+Salida
+D-5
+Crear cuenta raíz AWS, habilitar MFA, AWS Organizations, crear cuenta security tooling separada.
+DevOps
+OU productiva + dev/staging + security operativas.
+D-5
+Solicitar salida de sandbox SES con caso de uso MAC.
+DevOps
+Ticket abierto con AWS Support.
+D-4
+Firmar DPA marco AWS desde Artifact y archivarlo.
+PO + CISO
+DPA firmado en repositorio legal.
+D-4
+Crear repositorios GitHub: segurasist-api, segurasist-web, segurasist-infra. Habilitar Branch Protection y Advanced Security.
+DevOps
+Repos privados con CODEOWNERS.
+D-3
+Provisionar VPC, RDS staging, App Runner staging, Cognito User Pool con Terraform.
+DevOps
+Ambiente staging up + endpoint health-check verde.
+D-3
+Boilerplate NestJS con módulo auth Cognito + middleware tenant + RLS habilitado.
+Backend
+Repo api con primer endpoint /health autenticado.
+D-2
+Boilerplate Next.js 14 con App Router + Amplify Auth + design system base.
+Frontend
+Repo web desplegado a Amplify staging.
+D-2
+Pipeline CI/CD: lint → test → build → deploy staging (web + api).
+DevOps
+PR template + workflow funcional.
+D-1
+Sesión de alineamiento del equipo sobre PRD, Plan, Arquitectura, Estrategia QA.
+PM + Tech Lead
+Acta de kick-off.
+D-1
+Definir layout MAC oficial con Lucía (validación de columnas y reglas).
+PO + Backend
+layout.xlsx versionado en repo y contrato API.
+
+4. Plan por sprint (S1–S6)
+Cada sprint dura 5 días hábiles. Capacidad nominal por persona: 30 puntos/sprint (Fibonacci: 1, 2, 3, 5, 8, 13). Velocidad esperada del equipo combinada: 110 puntos/sprint los primeros dos sprints, 130 a partir del sprint 3.
+4.1 Sprint 1 — Cimientos (días 1–5)
+Objetivo: que cualquier desarrollador del equipo pueda empezar a entregar features sobre cimientos firmes.
+ID
+Historia
+Pts
+Owner
+Criterio aceptación clave
+S1-01
+Como Admin SegurAsist quiero loguearme con SSO para entrar al sistema.
+5
+BE+FE
+Login Cognito con MFA, redirect protegido.
+S1-02
+Como dev quiero la migración base PostgreSQL con tablas core (tenants, users, insureds, packages, coverages, certificates, audit_log).
+8
+BE
+Migración versionada + RLS por tenant_id.
+S1-03
+Como dev quiero que cada request lleve tenant_id resuelto desde el JWT.
+5
+BE
+Middleware tested; query sin tenant_id es bloqueada.
+S1-04
+Como Operador MAC quiero descargar el layout plantilla.
+2
+BE+FE
+Endpoint sirve archivo .xlsx con headers correctos.
+S1-05
+Como Operador MAC quiero subir un layout y ver la previsualización con conteo válidas/error/duplicado.
+13
+BE+FE
+Subida a S3, validación síncrona ≤30 s para 1k filas, UI muestra resumen.
+S1-06
+Como dev quiero CI ejecutando lint + tests + build en cada PR.
+5
+DevOps
+Workflow GH Actions verde; PR sin tests bloquea merge.
+S1-07
+Como SRE quiero CloudWatch capturando logs estructurados de api y web.
+5
+DevOps
+Log group + retention policy + dashboard inicial.
+S1-08
+Como dev quiero design system (botones, inputs, tabla, layout) reutilizable.
+8
+FE
+Storybook con 8 componentes base + tokens de color.
+S1-09
+Como QA quiero plan de smoke tests publicado y suite E2E inicial corriendo en CI.
+5
+QA
+Playwright corre 3 escenarios contra staging.
+Total: 56 puntos. Demo: subir un layout y ver el preview funcionando.
+4.2 Sprint 2 — Carga masiva end-to-end + Certificados
+Objetivo: cerrar el flujo crítico de negocio: layout → asegurados creados → certificado en bandeja del asegurado.
+ID
+Historia
+Pts
+Owner
+Criterio aceptación clave
+S2-01
+Procesamiento background con SQS + Lambda para confirmar lote.
+8
+BE+DevOps
+10k filas procesadas en ≤10 min; estado consultable.
+S2-02
+Modelo y CRUD de paquetes y coberturas administrables.
+5
+BE+FE
+UI permite crear paquete con N coberturas; persistido por tenant.
+S2-03
+Generación PDF con Puppeteer en Lambda + plantilla MAC.
+13
+BE+DevOps
+Lambda emite PDF en ≤10 s; firma metadatos; sube a S3.
+S2-04
+Envío de correo con SES + tracking de eventos (delivered/bounced).
+8
+BE
+Webhook SES → eventbridge → BD; estado visible en lista.
+S2-05
+Dashboard admin: 4 KPIs (asegurados activos, certificados 30d, siniestros 30d, % cobertura).
+5
+BE+FE
+KPIs reflejan datos ≤60 s, visibles tras login.
+S2-06
+Listado de asegurados con paginación server-side.
+5
+BE+FE
+Filtra por estado/paquete/vigencia; p95 ≤2 s.
+S2-07
+Auditoría: log inmutable de altas y emisión, persistido en S3 con Object Lock.
+5
+BE+DevOps
+Bucket configurado modo Compliance; query API expone últimos N eventos.
+S2-08
+Pipeline DAST OWASP ZAP corriendo en staging por PR.
+5
+DevOps+QA
+Reporta findings en PR; falla si hay High.
+Total: 54 puntos. Demo: subir layout real → ver lista poblada → certificado en email del receptor.
+4.3 Sprint 3 — Portal asegurado y Dashboard completo
+Objetivo: el asegurado puede entrar y consultar su póliza desde su celular; el admin tiene dashboard completo.
+ID
+Historia
+Pts
+Owner
+Criterio aceptación clave
+S3-01
+Login portal asegurado con CURP + OTP (email/SMS).
+8
+BE+FE
+OTP llega ≤60 s; lockout tras 5 intentos.
+S3-02
+Pantalla principal asegurado: vigencia, paquete, nombre.
+5
+FE+BE
+Above the fold a 360px; Lighthouse a11y ≥90.
+S3-03
+Listado de coberturas con barra de consumo.
+3
+FE+BE
+4 coberturas mostradas con usado/total.
+S3-04
+Descarga de certificado PDF firmado (URL S3 presigned).
+3
+BE+FE
+URL expira 7 días; reauditoría registrada.
+S3-05
+Botón llamar a MAC (tel:) y reportar siniestro.
+3
+FE+BE
+Tel: dispara dialer; siniestro crea ticket.
+S3-06
+Vista 360 admin del asegurado (5 secciones: datos, coberturas, eventos, certificados, auditoría).
+8
+BE+FE
+Tabs no recargan; carga inicial ≤2 s.
+S3-07
+Búsqueda con debounce por CURP, RFC, nombre, póliza.
+5
+BE+FE
+Resultados aparecen mientras tipea (300 ms).
+S3-08
+Selector de tenant para Admin SegurAsist (multi-tenant).
+5
+BE+FE
+Cambio de tenant repinta sin refresh; tests cross-tenant verdes.
+S3-09
+Exportación XLSX/PDF del listado filtrado.
+5
+BE+FE
+≤30 s para 50k filas; descarga se genera vía Lambda.
+S3-10
+Hardening WAF: reglas OWASP + rate limit por tenant.
+5
+DevOps
+Rules deployed; 100 req/min default; bypass para internal IPs.
+Total: 50 puntos. Demo: Doña Carmen entra al portal desde un celular y ve su póliza.
+4.4 Sprint 4 — Reportes + Chatbot v1
+Objetivo: cubrir las dos features de mayor valor para el sponsor (reportes para Roy) y diferenciador comercial (chatbot).
+ID
+Historia
+Pts
+Owner
+Criterio aceptación clave
+S4-01
+Reporte conciliación mensual (altas, bajas, activos cierre, certificados, utilización, monto).
+13
+BE+FE
+PDF y XLSX descargables; cifras cuadran con BD.
+S4-02
+Reporte volumetría con gráficos.
+5
+BE+FE
+Trend 90 días; render < 3 s.
+S4-03
+Reporte utilización por cobertura.
+5
+BE+FE
+Top-N consumidores; agregado por paquete.
+S4-04
+Programación cron del envío automático fin de mes.
+5
+BE+DevOps
+EventBridge cron; PDF llega a destinatarios día hábil 1 a las 9 AM.
+S4-05
+Chatbot widget UI embebido en portal asegurado.
+5
+FE
+Visible esquina inferior derecha; persistente entre páginas.
+S4-06
+Knowledge base estructurada por categorías + lógica de matching.
+8
+BE
+5 categorías iniciales; matching por keywords + sinónimos.
+S4-07
+Personalización de respuestas con datos del asegurado autenticado.
+5
+BE
+"¿hasta cuándo es mi póliza?" responde con fecha real.
+S4-08
+Escalamiento: "hablar con humano" → ticket por correo a MAC.
+3
+BE+FE
+Ticket llega; asegurado recibe acuse.
+S4-09
+Auditoría visible en vista 360 (timeline).
+5
+BE+FE
+Eventos paginados; export CSV.
+S4-10
+Performance test JMeter con 1,000 sesiones portal + 100 sesiones admin.
+5
+QA+DevOps
+p95 latencia API ≤500 ms; sin errores.
+Total: 59 puntos. Demo: Roy genera y descarga reporte mensual + asegurado conversa con chatbot.
+4.5 Sprint 5 — Cierre funcional + endurecimiento de seguridad
+Objetivo: cerrar gaps funcionales pequeños y completar todos los controles "Si" de la matriz V2.
+ID
+Historia
+Pts
+Owner
+Criterio aceptación clave
+S5-01
+Reemisión de certificado a demanda con motivo registrado.
+3
+BE+FE
+Modal con motivos predefinidos; versión nueva visible.
+S5-02
+SSO SAML federado al IdP de MAC (Azure AD).
+8
+BE+DevOps
+Flujo SAML probado contra tenant MAC; fallback Cognito local.
+S5-03
+SCIM 2.0 para aprovisionamiento automático desde IdP MAC.
+5
+BE
+Alta/baja sincroniza ≤1 min; cambio de rol requiere aprobación dual.
+S5-04
+Histórico de conversaciones del chatbot (30 días).
+3
+BE+FE
+Asegurado ve sus chats anteriores; admin puede consultar.
+S5-05
+Configuración self-service del chatbot por Admin SegurAsist.
+5
+BE+FE
+Editar respuesta refleja en portal en ≤5 min.
+S5-06
+GuardDuty + Security Hub habilitados con alertas a canal on-call.
+5
+DevOps
+Findings llegan a PagerDuty; runbook de triage publicado.
+S5-07
+DR drill: failover manual a us-east-2 documentado y ejecutado.
+8
+DevOps+SRE
+RTO medido ≤4 h; RPO ≤24 h; runbook actualizado con timing real.
+S5-08
+Pentest interno (caja blanca) por equipo + remediación de Highs.
+13
+QA+CISO
+0 findings High al cierre; report archivado.
+S5-09
+Documentación operativa: runbooks de los 5 escenarios críticos.
+5
+DevOps+TL
+Publicados en repo + linkeados desde dashboard.
+S5-10
+Onboarding presencial con Lucía en oficinas MAC.
+3
+PO+CSM
+Lucía ejecuta su primera carga supervisada; feedback registrado.
+Total: 58 puntos. Demo: failover de region en vivo + dashboard SOC con métricas de seguridad.
+4.6 Sprint 6 — UAT, code freeze y Go-Live
+Objetivo: aprobar UAT con MAC, congelar código, ejecutar Go-Live productivo y cubrir hypercare 48 h.
+ID
+Historia
+Pts
+Owner
+Criterio aceptación clave
+S6-01
+UAT con scripts pre-acordados (operador, asegurado, sponsor).
+8
+QA+PO
+3 scripts ejecutados sin defectos Bloqueantes.
+S6-02
+Cierre de Defectos descubiertos en UAT (sólo bug fixes, sin features nuevas).
+13
+Equipo
+0 defectos Críticos/Altos abiertos.
+S6-03
+Code freeze + cherry-pick controlado a release branch.
+3
+TL+DevOps
+Branch release-1.0 protegida; sólo merges aprobados por TL.
+S6-04
+Provisionamiento productivo con Terraform (módulos validados en staging).
+8
+DevOps
+Cuenta prod up; staging sirve de réplica configuracional.
+S6-05
+Importación inicial de catálogo MAC a producción (paquetes, coberturas, plantillas).
+5
+BE+CSM
+Catálogo poblado verificado por Mario.
+S6-06
+Carga real piloto: 500 asegurados productivos.
+5
+PO+CSM
+Certificados entregados; bandeja verificada.
+S6-07
+Go-Live oficial: carga del primer lote completo.
+5
+Equipo
+≤1% errores de validación; ≥97% certificados entregados.
+S6-08
+Hypercare 48 h: war-room virtual on-call.
+8
+Equipo
+Métricas reportadas a Roy cada 6 h durante 48 h.
+S6-09
+Retrospectiva del programa + plan Fase 2.
+3
+PM+TL
+Acta firmada; Fase 2 priorizada en backlog.
+Total: 58 puntos. Demo: carga real productiva + métricas en vivo.
+
+5. Backlog post-MVP (Fase 2 candidata)
+Items que ya tenemos identificados pero que no entran al MVP. Se priorizan en la retrospectiva del sprint 6.
+ID
+Item
+Origen
+Valor estimado
+F2-01
+Chatbot con LLM (Bedrock + RAG sobre KB)
+Mejora competitiva
+Alto
+F2-02
+App móvil iOS/Android React Native
+Roadmap propuesta
+Alto
+F2-03
+Notificaciones push de vigencia y siniestros
+Roadmap propuesta
+Alto
+F2-04
+Tracking GPS ambulancias
+Pedido Alejandro
+Medio (Fase 4)
+F2-05
+Integración bidireccional ERP MAC
+Por explorar
+Medio
+F2-06
+API pública con OAuth scopes y rate limit por cliente
+Replicación SNTE/CATEM
+Alto
+F2-07
+Dashboard SOC con métricas de seguridad self-service
+Compliance avanzado
+Medio
+F2-08
+Soporte residencia mx-central-1 como SKU premium
+Cuestionario MAC
+Bajo (a demanda)
+F2-09
+Migración logs a Grafana Cloud o Datadog Pro
+Stack Definitivo
+Bajo (cuando justifique)
+F2-10
+Auditoría SOC 2 Tipo I (preparación)
+Plan Cumplimiento
+Alto (Q1-2027)
+
+6. Ceremonias y cadencia
+Ceremonia
+Frecuencia
+Duración
+Asistentes
+Resultado esperado
+Daily stand-up
+Diaria L–V 09:30
+15 min
+Equipo dev + TL + PM
+Bloqueos identificados; sin discusiones largas.
+Sprint planning
+Lunes inicio sprint
+60 min
+Equipo dev + PO + PM + TL
+Backlog del sprint comprometido.
+Backlog refinement
+Miércoles
+45 min
+Equipo dev + PO
+Próximo sprint definido al 80%.
+Sprint review (demo)
+Viernes fin sprint
+45 min
+Equipo + Roy + Alejandro (opcional)
+Demo en vivo + decisión de aceptación.
+Retrospectiva
+Viernes fin sprint
+30 min
+Equipo dev + PM
+3 acciones de mejora con dueño.
+Comité de seguridad
+Quincenal
+30 min
+TL + DevOps + CISO + PO
+Estado de controles V2; remediaciones en curso.
+Status a Roy
+Lunes 10:00
+20 min
+PM + PO + Roy
+Reporte semanal: avance, riesgos, decisiones.
+War-room hypercare
+Daily 09:00 y 17:00
+20 min
+Equipo + on-call
+Activo solo durante S6 y primeras 2 semanas post Go-Live.
+
+7. Plan de comunicación
+Audiencia
+Canal
+Frecuencia
+Contenido
+Owner
+Equipo SegurAsist
+Slack #segurasist-mac
+Permanente
+Coordinación operativa, alertas, decisiones.
+Equipo
+Equipo SegurAsist
+Linear
+Permanente
+Issues, sprints, releases.
+PM
+Roy
+Email + Slack compartido
+Semanal lunes
+Status (Verde/Ámbar/Rojo) + 3 highlights + 3 riesgos.
+PM
+Roy + Alejandro MAC
+Demo + correo
+Viernes cada sprint
+Demo grabada + minuta + próximos pasos.
+PM + PO
+MAC equipo operativo
+Sesión Teams
+Sprint 5 y 6
+Onboarding, capacitación, UAT.
+PO + CSM
+CISO + Comité
+Documento Notion
+Quincenal
+Postura de cumplimiento V2; gaps abiertos.
+CISO
+Stakeholders ejecutivos
+Reporte 1-pager
+Mensual
+KPIs, presupuesto, riesgos top.
+PM
+
+8. Gestión de riesgos del programa
+#
+Riesgo
+Prob.
+Impacto
+Estrategia
+Trigger
+Owner
+R-01
+Layout MAC cambia en sprint 3+
+M
+A
+Mitigar – Parser configurable
+Cambio de columna requerido
+Tech Lead
+R-02
+SAML con Azure AD MAC sin acceso oportuno
+M
+A
+Mitigar – Plan B Cognito local
+MAC no provee credenciales para sprint 5
+DevOps
+R-03
+SES no sale de sandbox a tiempo
+M
+M
+Evitar – Solicitar D-5
+Día 5 sin aprobación
+DevOps
+R-04
+Backlog inflado por nuevas peticiones MAC
+A
+M
+Mitigar – Change control + Fase 2
+Petición fuera de PRD
+PO
+R-05
+Pérdida de un dev clave
+B
+A
+Transferir – Pair programming + ADRs
+Notificación de salida
+PM
+R-06
+Defecto crítico descubierto en UAT
+M
+A
+Mitigar – Endurecimiento sprint 5
+Bug Crítico día 27+
+QA
+R-07
+Costos AWS superan presupuesto Y1
+B
+M
+Mitigar – Budgets + alarmas Cost Explorer
+Gasto > 130% baseline
+DevOps
+R-08
+MAC pospone Go-Live por proceso interno
+B
+M
+Aceptar – Mantener staging caliente
+Comunicación oficial
+PO
+R-09
+Hallazgos pentest ≥ High en sprint 5
+M
+A
+Mitigar – Gate seguridad sprint 4
+Reporte ZAP/Semgrep High
+CISO
+R-10
+Volumen Y1 supera 2× lo estimado
+B
+B
+Aceptar – Auto-scale App Runner + RDS storage autoscale
+MAU > 50k
+Tech Lead
+Prob. = Probabilidad (B/M/A); Impacto (B/M/A). Estrategia: Evitar, Mitigar, Transferir, Aceptar.
+
+9. Definition of Ready y Definition of Done
+9.1 Definition of Ready (DoR) — para entrar al sprint
+	•	Historia escrita en formato "Como… quiero… para…".
+	•	Criterios de aceptación enumerados (Given/When/Then).
+	•	Mockup o esbozo si afecta UI.
+	•	Estimada en puntos por el equipo.
+	•	Dependencias resueltas o explícitamente identificadas.
+	•	Cumple PRD; si no, change request aprobado.
+9.2 Definition of Done (DoD) — para cerrar la historia
+	•	Código mergeado a main vía PR aprobado.
+	•	Tests unitarios + integración pasan; cobertura no decrece.
+	•	Test E2E del happy path de la feature pasa en staging.
+	•	DAST OWASP ZAP sin findings High en endpoints nuevos.
+	•	SAST Semgrep + Dependabot sin alertas Critical/High abiertas.
+	•	Documentación API actualizada (OpenAPI).
+	•	Runbook (si introduce failure mode) o ADR (si decisión arquitectónica).
+	•	Demostrada en review de sprint.
+	•	Aprobada por PO contra criterios de aceptación.
+	•	Deploy a staging exitoso y smoke test verde.
+9.3 Definition of Release-Ready — para Go-Live
+	•	Todas las historias del MVP DoD ✓.
+	•	Pentest interno con 0 findings High abiertos.
+	•	DR drill ejecutado y RTO/RPO confirmados.
+	•	Runbooks publicados y validados por on-call.
+	•	UAT firmada por MAC.
+	•	Backups verificados por restauración real en ambiente aislado.
+	•	Plan de rollback documentado y ensayado.
+	•	Comunicación a usuarios finales preparada (correo + acceso).
+	•	Hypercare on-call programado para 48 h.
+	•	Aprobación firmada por: Tech Lead, DevOps Lead, QA Lead, PO, CISO.
+
+10. Métricas del programa
+Métrica
+Objetivo
+Cómo se mide
+Velocidad
+≥110 pts/sprint
+Suma de puntos completados por sprint
+Defects escapados a staging
+≤3 Highs / sprint
+Defectos abiertos por QA después de PR aprobado
+Defects escapados a prod (post Go-Live)
+0 Críticos en hypercare
+Tickets P1/P2 abiertos en primeras 2 semanas
+Coverage backend
+≥70%
+Reporte coverage en CI
+Coverage frontend
+≥60%
+Reporte coverage en CI
+Lead time (PR open → merged)
+≤24 h
+GitHub Insights
+MTTR a fallos en staging
+≤2 h
+PagerDuty
+Compromiso vs entrega por sprint
+≥90%
+(pts terminados / pts comprometidos)
+Cumplimiento controles V2 al Go-Live
+≥88.7% (mantenido)
+Re-evaluación de matriz al final de sprint 5
