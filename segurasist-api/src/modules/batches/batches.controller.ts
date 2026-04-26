@@ -15,9 +15,10 @@ import {
   Post,
   Query,
   Req,
+  Res,
   UseGuards,
 } from '@nestjs/common';
-import type { FastifyRequest } from 'fastify';
+import type { FastifyReply, FastifyRequest } from 'fastify';
 import { BatchesService } from './batches.service';
 import {
   ConfirmBatchSchema,
@@ -27,11 +28,33 @@ import {
   type ListBatchErrorsQuery,
   type ListBatchesQuery,
 } from './dto/batch.dto';
+import { INSUREDS_TEMPLATE_FILENAME, INSUREDS_TEMPLATE_MIME, LayoutsService } from './layouts.service';
 
+// El layout XLSX vive en este controller (en lugar de un módulo `layouts/`
+// dedicado) porque es un asset estrechamente acoplado al flujo de batches:
+// mismos roles que pueden subir batches lo descargan, y el contenido define
+// las columnas que `BatchesService.upload` validará. Cuando MAC-002 desbloquee
+// las columnas oficiales, solo cambia `LayoutsService` — contrato del endpoint
+// y RBAC se mantienen.
 @Controller({ path: 'batches', version: '1' })
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class BatchesController {
-  constructor(private readonly batches: BatchesService) {}
+  constructor(
+    private readonly batches: BatchesService,
+    private readonly layouts: LayoutsService,
+  ) {}
+
+  @Get('template')
+  @Roles('admin_segurasist', 'admin_mac', 'operator')
+  async template(@Res({ passthrough: false }) reply: FastifyReply): Promise<void> {
+    const buffer = await this.layouts.generateInsuredsTemplate();
+    void reply
+      .header('Content-Type', INSUREDS_TEMPLATE_MIME)
+      .header('Content-Disposition', `attachment; filename="${INSUREDS_TEMPLATE_FILENAME}"`)
+      .header('Content-Length', buffer.length)
+      .header('Cache-Control', 'no-store')
+      .send(buffer);
+  }
 
   @Post()
   @Roles('admin_mac', 'operator', 'admin_segurasist')

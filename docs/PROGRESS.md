@@ -3,7 +3,7 @@
 | Fase | Estado | Notas |
 |---|---|---|
 | Sprint 0 — Cimientos | ✅ Completado | 3 repos bootstrapped (api 101 / web 173 / infra 161 archivos), 12 docs externas, dominio `.app`, región primaria `mx-central-1` |
-| Sprint 1 — Auth + carga preview | 🟡 En curso | **Local-first**: stack en docker-compose (postgres, redis, localstack, mailpit, cognito-local). Ver `docs/LOCAL_DEV.md`. AWS real diferido a Sprint 5. |
+| Sprint 1 — Auth + carga preview | ✅ Cerrado (S1-05 deferred) | Local-first stack docker-compose, RBAC 5 roles e2e green, 535 tests automatizados (192 BE unit + 113 admin unit + 162 packages unit + 83 BE e2e). S1-05 (validador upload) movido a Sprint 2 cuando MAC-002 desbloquee. |
 | Sprint 2 — Carga end-to-end + Certificados | ⬜ Pendiente | |
 | Sprint 3 — Portal asegurado + Dashboard | ⬜ Pendiente | |
 | Sprint 4 — Reportes + Chatbot | ⬜ Pendiente | |
@@ -68,12 +68,29 @@ Ver `external/` para el detalle de cada uno. Marcar `[x]` cuando se resuelva.
 - `AuthController.login` devuelve `AuthTokens` en body (no Set-Cookie); el FE proxy `/api/auth/local-login` traduce a cookies httpOnly same-origin para el browser.
 - Bugs pre-existentes admin (corregidos como side-effect FE): `initialsOf` cruzando boundary `'use client'`, `Link href` con typedRoutes, columnas DataTable con funciones en server component.
 
-### Pendiente Día 3
+### Día 3 (2026-04-26)
 
-- Verificar `/v1/auth/me` end-to-end con el `.env` corregido (`COGNITO_ENDPOINT=http://0.0.0.0:9229`) — reiniciar `npm run dev` y refrescar `/dashboard`.
-- Setup Vitest en `apps/admin` (config + jsdom + testing-library) y escribir tests del form de login.
-- S1-04: endpoint descarga layout plantilla `.xlsx` (provisional hasta MAC-002).
-- S1-06: GitHub Actions CI workflow listo en `.github/workflows/` aunque GH-001 esté bloqueado.
+| Story / item | Estado | Evidencia |
+|---|---|---|
+| Premium polish UX desktop (Linear/Vercel/Stripe) | ✅ Listo | tokens, Inter Variable + JetBrains Mono, sidebar Linear-style, KPI cards con sparklines, charts re-temados, dark/light toggle persistido, ⌘K palette, Framer motion |
+| Mobile UX completo | ✅ Listo | drawer hamburguesa Radix Dialog, ⌘K bottom-sheet, touch targets ≥44px, safe-area iOS, KPI 2×2 mobile, `lg:` cutoff @1024 |
+| RBAC matrix (5 roles e2e) | ✅ Listo | `cognito-local-bootstrap.sh` extendido a 5 users + `prisma/seed.ts` 5 filas + `test/e2e/rbac.e2e-spec.ts` con **71 tests**: matriz extraída de `@Roles()` reales, insured pool isolation verificado |
+| FE role-aware sidebar + AccessDenied + insured redirect | ✅ Listo | `apps/admin/lib/rbac.ts` (NAV_ITEMS centralizado), `lib/auth-server.ts` (`fetchMe()`), middleware decode JWT redirige insured a `:3002`, `AccessDenied` placeholder, role chip dinámico |
+| Unit testing comprehensive | ✅ Listo | **454 unit tests** total: 192 BE (services + guards + filters + pipes + prisma extends + AWS infra), 113 admin (rbac, jwt, auth-server, route handlers, components), 162 packages (ui + auth) |
+| `/batches` server-component bug | ✅ Corregido | extraído `BatchesTable` a client component |
+| **S1-04 — Layout XLSX template provisional** | ✅ Listo | `GET /v1/batches/template` con `LayoutsService.generateInsuredsTemplate()` usando exceljs. 3 hojas (Asegurados / Instrucciones / Catálogos), 11 columnas demo. RBAC `admin_segurasist`/`admin_mac`/`operator`. 13 unit + 6 e2e tests. Cuando MAC-002 desbloquee solo se actualiza el array `COLUMNS`. |
+| **S1-06 — GitHub Actions CI** | ✅ Listo (en repo, no ejecutado hasta GH-001) | `.github/workflows/ci.yml` con paths-filter, jobs api-lint+typecheck/api-unit/api-e2e (con docker-compose + bootstrap completo)/web-lint+typecheck/web-unit + `ci-success` aggregate gate. README de `.github/` documenta el unblock path. |
+| Git init + checkpoint | ✅ Listo | Repo en `main`, commit inicial `ff90834` (564 archivos, 62.9k líneas), `.gitignore` cubre env/node_modules/.next/.terraform/.claude. Listo para push a GitHub privado. |
+
+**Sprint 1 cerrado** — la única historia pendiente es **S1-05** (validador de upload del layout masivo) que está bloqueada por **MAC-002** (la doctora Lucía no ha validado el layout oficial). Se mueve a Sprint 2 cuando se desbloquee, sin riesgo arquitectónico: el endpoint S1-04 ya está, el FE puede construir el flujo download/upload/preview con el demo.
+
+### Backlog descubierto (Sprint 5)
+
+- `HttpExceptionFilter` reescribe el status original (e.g. `HttpException(503)` sale como 500). Decisión de producto antes de Sprint 5 pentest.
+- `users.tenant_id NOT NULL` vs `admin_segurasist` cross-tenant. Workaround actual: sentinel `GLOBAL` en JWT + asociado a tenant `mac` en BD. Migración a `tenant_id NULL` requiere branch en `JwtAuthGuard` y RLS bypass para superadmin.
+- `@Scopes('read:batches')` no funciona porque idTokens cognito-local no incluyen claim `scope` — todos los roles reciben 403 en `GET /v1/batches`. Definir cómo se emiten scopes (group claims o scope custom).
+- Logout button en topbar/drawer (no estaba en spec).
+- Tenant switcher real (sigue mock con mac/demo).
 
 ## Decisiones técnicas vivas
 
