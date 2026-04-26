@@ -16,7 +16,7 @@ Ver `external/` para el detalle de cada uno. Marcar `[x]` cuando se resuelva.
 
 ### Bloquean Sprint 1 (necesarios ya)
 
-- [ ] MAC-002: Layout oficial validado con Lucía (columnas y reglas) — necesario para validador de carga masiva (S1-05)
+- [x] **MAC-002 — RESUELTO 2026-04-26**: Lucía dio libre albedrío. Layout v1 definido por SegurAsist (12 columnas + bajas separadas + beneficiarios CSV). Onboarding presencial Sprint 2 día 5.
 - [ ] OPS-004: Slack workspace `segurasist` + canales `#segurasist-*` — comunicación de equipo
 
 ### Bloquean Sprint 5 (provisioning + endurecimiento, no urgentes ahora)

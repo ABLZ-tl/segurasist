@@ -19,7 +19,7 @@ Estos documentos describen acciones que **no puedo automatizar** desde código l
 | [GH-001](GH-001-github-org-repos.md) | GitHub Org + 3 repos + Branch Protection + Advanced Security | CI/CD | ⬜ |
 | [GH-002](GH-002-github-oidc-aws.md) | GitHub Actions OIDC con AWS (sin claves) | Deploys | ⬜ |
 | [MAC-001](MAC-001-saml-azure-ad.md) | Federación SAML con Azure AD MAC | Sprint 5 SSO real | ⬜ |
-| [MAC-002](MAC-002-layout-asegurados.md) | Validación del layout oficial con Lucía | Sprint 1 carga masiva | ⬜ |
+| [MAC-002](MAC-002-layout-asegurados.md) | ~~Validación del layout oficial con Lucía~~ — libre albedrío otorgado, layout v1 definido | Sprint 1 carga masiva | ✅ |
 | [LEG-001](LEG-001-dpa-aviso-privacidad.md) | DPA AWS firmado + Aviso de Privacidad | LFPDPPP | ⬜ |
 | [OPS-001](OPS-001-1password-vault.md) | 1Password Business + vault Equipo | Onboarding | ⬜ |
 | [OPS-002](OPS-002-pagerduty.md) | PagerDuty Free + on-call rotation | Alertas P1/P2 | ⬜ |
