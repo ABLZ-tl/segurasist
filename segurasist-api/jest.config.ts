@@ -30,6 +30,9 @@ const config: Config = {
     {
       displayName: 'e2e',
       testMatch: ['<rootDir>/test/e2e/**/*.spec.ts', '<rootDir>/test/e2e/**/*.e2e-spec.ts'],
+      // setup.ts NO matchea por testMatch (no termina en .spec.ts/.e2e-spec.ts).
+      // Se carga vía setupFiles para inicializar env vars (ver test/e2e/setup.ts).
+      setupFiles: ['<rootDir>/test/e2e/setup.ts'],
       transform: baseTransform,
       moduleNameMapper,
     },

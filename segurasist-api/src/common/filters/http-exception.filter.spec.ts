@@ -72,10 +72,10 @@ describe('HttpExceptionFilter', () => {
 
   it('construye problem+json con headers content-type y x-trace-id', () => {
     const { host, reply } = buildHost('/v1/foo', 'tid-1');
-    // NB: BadRequest (400) cae en `default` → VALIDATION_ERROR → status 422.
-    // El status de HttpException original NO se preserva — se mapea al ErrorCode.
+    // M1: BadRequest (400) preserva su status original 400. El `code` se
+    // mapea al ErrorCode VALIDATION_ERROR (catch-all <500 sin mapping).
     filter.catch(new BadRequestException('bad'), host);
-    expect(reply.statusCode).toBe(422);
+    expect(reply.statusCode).toBe(400);
     expect(reply.headers['content-type']).toBe('application/problem+json; charset=utf-8');
     expect(reply.headers['x-trace-id']).toBe('tid-1');
     expect((reply.body as { traceId: string }).traceId).toBe('tid-1');
@@ -163,13 +163,34 @@ describe('HttpExceptionFilter', () => {
     expect(reply.headers['x-trace-id']).toBe('unknown');
   });
 
-  it('5xx genérico (no matcheado) cae en INTERNAL_ERROR (status reescrito a 500)', () => {
-    // BUG-O-FEATURE: el status original de la HttpException (503) NO se preserva.
-    // El filter mapea via ErrorCode → INTERNAL_ERROR.status = 500.
+  it('M1: HttpException(503) preserva status 503 (mapeado a UPSTREAM_AWS_ERROR)', () => {
+    // M1 — antes el filter reescribía 503 → 500 (mismo ErrorCode INTERNAL_ERROR.status=500).
+    // Ahora el status del response sigue siendo el original del caller (503),
+    // y el `code` se mapea al ErrorCode correspondiente del catálogo.
     const { host, reply } = buildHost();
-    filter.catch(new HttpException('weird', 503), host);
+    filter.catch(new HttpException('Service Unavailable', 503), host);
+    expect(reply.statusCode).toBe(503);
+    expect((reply.body as { status: number }).status).toBe(503);
+    expect((reply.body as { code: string }).code).toBe('UPSTREAM_AWS_ERROR');
+  });
+
+  it('M1: HttpException(418) preserva status 418 con code=VALIDATION_ERROR (catch-all <500)', () => {
+    // 418 no está en el catálogo: el mapper devuelve VALIDATION_ERROR (catch-all
+    // para 4xx no mapeados) pero el status del response permanece 418.
+    const { host, reply } = buildHost();
+    filter.catch(new HttpException("I'm a teapot", 418), host);
+    expect(reply.statusCode).toBe(418);
+    expect((reply.body as { status: number }).status).toBe(418);
+    expect((reply.body as { code: string }).code).toBe('VALIDATION_ERROR');
+  });
+
+  it('M1: HttpException(599) custom 5xx preserva 599 con code=INTERNAL_ERROR', () => {
+    // 5xx no mapeado → INTERNAL_ERROR como code, pero status original 599.
+    const { host, reply } = buildHost();
+    filter.catch(new HttpException('weird upstream', 599), host);
+    expect(reply.statusCode).toBe(599);
+    expect((reply.body as { status: number }).status).toBe(599);
     expect((reply.body as { code: string }).code).toBe('INTERNAL_ERROR');
-    expect(reply.statusCode).toBe(500);
   });
 
   it('extrae detail del response object cuando HttpException lo trae con message', () => {

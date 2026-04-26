@@ -11,6 +11,7 @@ export const ErrorCodes = {
   VALIDATION_ERROR: { status: 422, title: 'Validación fallida' },
   INSURED_DUPLICATED: { status: 409, title: 'Asegurado duplicado' },
   BATCH_TOO_LARGE: { status: 413, title: 'Archivo demasiado grande' },
+  UNSUPPORTED_FILE: { status: 415, title: 'Tipo de archivo no soportado' },
   RATE_LIMITED: { status: 429, title: 'Cuota excedida' },
   UPSTREAM_AWS_ERROR: { status: 502, title: 'Error AWS upstream' },
   NOT_IMPLEMENTED: { status: 501, title: 'No implementado' },
@@ -36,12 +37,20 @@ export function buildProblem(
   detail: string,
   traceId: string,
   extra: Partial<Pick<ProblemDetails, 'instance' | 'field' | 'errors'>> = {},
+  /**
+   * Status HTTP a forzar. Si se omite, se usa el del catálogo `ErrorCodes`.
+   * Útil cuando el upstream lanza `HttpException` con un status que el
+   * catálogo no mapea 1-1 (p.ej. 503 Service Unavailable, 418, etc.).
+   * El status del problem y el del response HTTP siempre coinciden — el
+   * filter usa este número para `res.status(...)`.
+   */
+  statusOverride?: number,
 ): ProblemDetails {
   const meta = ErrorCodes[code];
   return {
     type: `${ERROR_DOCS_BASE}/${code}`,
     title: meta.title,
-    status: meta.status,
+    status: statusOverride ?? meta.status,
     detail,
     code,
     traceId,

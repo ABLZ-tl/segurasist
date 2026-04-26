@@ -1,14 +1,16 @@
 import { CurrentUser, AuthUser } from '@common/decorators/current-user.decorator';
-import { Roles, Scopes } from '@common/decorators/roles.decorator';
+import { Roles } from '@common/decorators/roles.decorator';
 import { Tenant, TenantCtx } from '@common/decorators/tenant.decorator';
 import { JwtAuthGuard } from '@common/guards/jwt-auth.guard';
 import { RolesGuard } from '@common/guards/roles.guard';
 import { ZodValidationPipe } from '@common/pipes/zod-validation.pipe';
+import { detectFileType, DETECTED_MIME } from '@common/utils/file-magic-bytes';
 import {
   Body,
   Controller,
   Get,
   HttpCode,
+  HttpException,
   HttpStatus,
   Param,
   ParseUUIDPipe,
@@ -58,7 +60,6 @@ export class BatchesController {
 
   @Post()
   @Roles('admin_mac', 'operator', 'admin_segurasist')
-  @Scopes('write:batches')
   async upload(@Req() req: FastifyRequest, @Tenant() tenant: TenantCtx, @CurrentUser() user: AuthUser) {
     // multipart parsing handled by @fastify/multipart; service stub for sprint 0.
     const file = await (
@@ -76,12 +77,32 @@ export class BatchesController {
       );
     }
     const buffer = await file.toBuffer();
-    return this.batches.upload({ buffer, filename: file.filename, mimetype: file.mimetype }, tenant, user.id);
+
+    // L4 — validar magic bytes ANTES de subir a S3. El cliente puede mentir
+    // sobre `Content-Type` y `filename`; un EXE renombrado .xlsx pasaría
+    // sin esta verificación. Si el contenido real no es XLSX ni CSV
+    // respondemos 415 con un Problem Details legible para humanos.
+    const detected = detectFileType(buffer);
+    if (detected === 'unknown') {
+      throw new HttpException(
+        {
+          message: 'Tipo de archivo no soportado: solo XLSX o CSV.',
+          filename: file.filename,
+          declaredMime: file.mimetype,
+        },
+        HttpStatus.UNSUPPORTED_MEDIA_TYPE,
+      );
+    }
+
+    return this.batches.upload(
+      { buffer, filename: file.filename, mimetype: DETECTED_MIME[detected] },
+      tenant,
+      user.id,
+    );
   }
 
   @Get()
   @Roles('admin_mac', 'operator', 'admin_segurasist', 'supervisor')
-  @Scopes('read:batches')
   list(
     @Query(new ZodValidationPipe(ListBatchesQuerySchema)) q: ListBatchesQuery,
     @Tenant() tenant: TenantCtx,
@@ -91,14 +112,12 @@ export class BatchesController {
 
   @Get(':id')
   @Roles('admin_mac', 'operator', 'admin_segurasist', 'supervisor')
-  @Scopes('read:batches')
   findOne(@Param('id', new ParseUUIDPipe()) id: string, @Tenant() tenant: TenantCtx) {
     return this.batches.findOne(id, tenant);
   }
 
   @Get(':id/errors')
   @Roles('admin_mac', 'operator', 'admin_segurasist', 'supervisor')
-  @Scopes('read:batches')
   listErrors(
     @Param('id', new ParseUUIDPipe()) id: string,
     @Query(new ZodValidationPipe(ListBatchErrorsQuerySchema)) q: ListBatchErrorsQuery,
@@ -110,7 +129,6 @@ export class BatchesController {
   @Post(':id/confirm')
   @HttpCode(HttpStatus.ACCEPTED)
   @Roles('admin_mac', 'operator', 'admin_segurasist')
-  @Scopes('write:batches')
   confirm(
     @Param('id', new ParseUUIDPipe()) id: string,
     @Body(new ZodValidationPipe(ConfirmBatchSchema)) dto: ConfirmBatchDto,
@@ -122,7 +140,6 @@ export class BatchesController {
   @Post(':id/cancel')
   @HttpCode(HttpStatus.OK)
   @Roles('admin_mac', 'operator', 'admin_segurasist')
-  @Scopes('write:batches')
   cancel(@Param('id', new ParseUUIDPipe()) id: string, @Tenant() tenant: TenantCtx) {
     return this.batches.cancel(id, tenant);
   }

@@ -130,11 +130,10 @@ echo "[client] insured → ${INSURED_CLIENT_ID}"
 # 3) Crear / actualizar usuarios — uno por rol del enum UserRole
 # =========================================================================
 # ensure_user POOL_ID EMAIL ROLE TENANT_ATTR PASSWORD
-#   TENANT_ATTR es lo que se mete en custom:tenant_id. Para superadmin pasamos
-#   "GLOBAL" como sentinel (no es un UUID real; el JwtAuthGuard rechaza el
-#   token si requiere UUID — eso es deseable para forzar a que el guard tenga
-#   un branch específico para admin_segurasist en el futuro). Igual lo dejamos
-#   poblado para que admin-get-user devuelva la fila completa.
+#   TENANT_ATTR es lo que se mete en custom:tenant_id. Para superadmin
+#   (`role=admin_segurasist`) pasamos cadena vacía — M2: el JwtAuthGuard
+#   ahora detecta superadmin por `custom:role` y lo trata como cross-tenant
+#   sin tenant context. El sentinel viejo `GLOBAL` quedó deprecado.
 ensure_user() {
   local pool_id="$1"
   local email="$2"
@@ -148,16 +147,26 @@ ensure_user() {
     --username "${email}" \
     --query 'Username' --output text 2>/dev/null || echo "")
 
+  # Construir el array de atributos: custom:tenant_id sólo si tenant_attr no vacío.
+  local attrs_create=(
+    "Name=email,Value=${email}"
+    "Name=email_verified,Value=true"
+    "Name=custom:role,Value=${role}"
+  )
+  local attrs_update=(
+    "Name=custom:role,Value=${role}"
+  )
+  if [[ -n "${tenant_attr}" ]]; then
+    attrs_create+=("Name=custom:tenant_id,Value=${tenant_attr}")
+    attrs_update+=("Name=custom:tenant_id,Value=${tenant_attr}")
+  fi
+
   if [[ -z "${exists}" || "${exists}" == "None" ]]; then
-    echo "[user] creando ${email} en ${pool_id} (role=${role}, tenant=${tenant_attr})"
+    echo "[user] creando ${email} en ${pool_id} (role=${role}, tenant=${tenant_attr:-<none>})"
     cog admin-create-user \
       --user-pool-id "${pool_id}" \
       --username "${email}" \
-      --user-attributes \
-        "Name=email,Value=${email}" \
-        "Name=email_verified,Value=true" \
-        "Name=custom:tenant_id,Value=${tenant_attr}" \
-        "Name=custom:role,Value=${role}" \
+      --user-attributes "${attrs_create[@]}" \
       --message-action SUPPRESS >/dev/null
 
     cog admin-set-user-password \
@@ -170,9 +179,7 @@ ensure_user() {
     cog admin-update-user-attributes \
       --user-pool-id "${pool_id}" \
       --username "${email}" \
-      --user-attributes \
-        "Name=custom:tenant_id,Value=${tenant_attr}" \
-        "Name=custom:role,Value=${role}" >/dev/null
+      --user-attributes "${attrs_update[@]}" >/dev/null
     # Reset password permanente para que repetir el bootstrap deje pasar el e2e
     cog admin-set-user-password \
       --user-pool-id "${pool_id}" \
@@ -203,8 +210,10 @@ sync_sub() {
 }
 
 # Pool admin
+# Superadmin: tenant_attr vacío → no se setea custom:tenant_id en el pool. El
+# JwtAuthGuard usa `custom:role=admin_segurasist` como señal de cross-tenant.
 ensure_user "${ADMIN_POOL_ID}" "${ADMIN_EMAIL}"                "admin_mac"        "${TENANT_ID}" "${ADMIN_PASSWORD}"
-ensure_user "${ADMIN_POOL_ID}" "superadmin@segurasist.local"   "admin_segurasist" "GLOBAL"       "${DEMO_PASSWORD}"
+ensure_user "${ADMIN_POOL_ID}" "superadmin@segurasist.local"   "admin_segurasist" ""             "${DEMO_PASSWORD}"
 ensure_user "${ADMIN_POOL_ID}" "operator@mac.local"            "operator"         "${TENANT_ID}" "${DEMO_PASSWORD}"
 ensure_user "${ADMIN_POOL_ID}" "supervisor@mac.local"          "supervisor"       "${TENANT_ID}" "${DEMO_PASSWORD}"
 
@@ -230,7 +239,7 @@ echo ""
 printf "  %-34s  %-14s  %-18s  %-36s  %s\n" "USER" "POOL" "ROLE" "TENANT" "SUB"
 printf "  %-34s  %-14s  %-18s  %-36s  %s\n" "----" "----" "----" "------" "---"
 printf "  %-34s  %-14s  %-18s  %-36s  %s\n" "${ADMIN_EMAIL}"                "${POOL_ADMIN}"   "admin_mac"        "${TENANT_ID}" "${ADMIN_SUB}"
-printf "  %-34s  %-14s  %-18s  %-36s  %s\n" "superadmin@segurasist.local"  "${POOL_ADMIN}"   "admin_segurasist" "GLOBAL"       "${SUPER_SUB}"
+printf "  %-34s  %-14s  %-18s  %-36s  %s\n" "superadmin@segurasist.local"  "${POOL_ADMIN}"   "admin_segurasist" "<none>"       "${SUPER_SUB}"
 printf "  %-34s  %-14s  %-18s  %-36s  %s\n" "operator@mac.local"           "${POOL_ADMIN}"   "operator"         "${TENANT_ID}" "${OPERATOR_SUB}"
 printf "  %-34s  %-14s  %-18s  %-36s  %s\n" "supervisor@mac.local"         "${POOL_ADMIN}"   "supervisor"       "${TENANT_ID}" "${SUPERVISOR_SUB}"
 printf "  %-34s  %-14s  %-18s  %-36s  %s\n" "insured.demo@mac.local"       "${POOL_INSURED}" "insured"          "${TENANT_ID}" "${INSURED_SUB}"

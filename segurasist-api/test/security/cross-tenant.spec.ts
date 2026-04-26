@@ -175,6 +175,37 @@ describe('Cross-tenant isolation gate (RLS layer)', () => {
       }),
     ).rejects.toThrow();
   });
+
+  // M2 — Superadmin con BYPASSRLS (rol DB segurasist_admin).
+  // El cliente `admin` en este spec ya conecta como segurasist_admin.
+  it('superadmin (BYPASSRLS) ve insureds de tenant A y B sin SET LOCAL', async () => {
+    if (!canConnect) {
+      expect(true).toBe(true);
+      return;
+    }
+    const all = await admin.insured.findMany({
+      where: { tenantId: { in: [tenantA.id, tenantB.id] } },
+    });
+    const aRows = all.filter((r) => r.tenantId === tenantA.id);
+    const bRows = all.filter((r) => r.tenantId === tenantB.id);
+    expect(aRows.length).toBeGreaterThan(0);
+    expect(bRows.length).toBeGreaterThan(0);
+  });
+
+  // M2 — Defensa en profundidad: el cliente normal (segurasist_app, NOBYPASSRLS)
+  // sin SET LOCAL devuelve 0 filas aunque el caller sea conceptualmente
+  // superadmin. Esto evita que un bug en services superadmin (uso accidental
+  // de PrismaService en lugar de PrismaBypassRlsService) abra una fuga.
+  it('cliente normal (NOBYPASSRLS) sin SET LOCAL → 0 filas (defensa en profundidad para superadmin)', async () => {
+    if (!canConnect) {
+      expect(true).toBe(true);
+      return;
+    }
+    const rows = await app.insured.findMany({
+      where: { tenantId: { in: [tenantA.id, tenantB.id] } },
+    });
+    expect(rows).toHaveLength(0);
+  });
 });
 
 // ---------------------------------------------------------------------------

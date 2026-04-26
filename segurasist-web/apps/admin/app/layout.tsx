@@ -42,6 +42,12 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="es-MX" className={`${inter.variable} ${jbMono.variable}`} suppressHydrationWarning>
       <head>
+        {/*
+         * SAFE: el contenido es una constante hardcoded para prevenir FOUC del theme.
+         * NUNCA insertar input del usuario aquí. Cualquier modificación a este script
+         * requiere review de seguridad (XSS persistente vía SSR).
+         * Owner: Frontend Lead. Última revisión: 2026-04-26.
+         */}
         <script dangerouslySetInnerHTML={{ __html: themeBootstrap }} />
       </head>
       <body className="min-h-screen bg-bg text-fg antialiased">

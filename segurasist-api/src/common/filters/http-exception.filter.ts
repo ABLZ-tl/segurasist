@@ -60,7 +60,10 @@ export class HttpExceptionFilter implements ExceptionFilter {
         typeof response === 'string'
           ? response
           : (((response as { message?: unknown }).message as string | undefined) ?? exception.message);
-      return buildProblem(code, detail, traceId, { instance });
+      // Preservar el status HTTP exacto que tiró el caller (p.ej. 503, 418),
+      // independientemente del status canónico del ErrorCode mapeado. Esto
+      // arregla el bug que reescribía toda HttpException no-catalogada a 500.
+      return buildProblem(code, detail, traceId, { instance }, status);
     }
 
     return buildProblem(
@@ -84,6 +87,8 @@ function mapHttpStatusToCode(status: number): ErrorCode {
       return 'INSURED_DUPLICATED';
     case HttpStatus.PAYLOAD_TOO_LARGE:
       return 'BATCH_TOO_LARGE';
+    case HttpStatus.UNSUPPORTED_MEDIA_TYPE:
+      return 'UNSUPPORTED_FILE';
     case HttpStatus.UNPROCESSABLE_ENTITY:
       return 'VALIDATION_ERROR';
     case HttpStatus.TOO_MANY_REQUESTS:
@@ -91,6 +96,10 @@ function mapHttpStatusToCode(status: number): ErrorCode {
     case HttpStatus.NOT_IMPLEMENTED:
       return 'NOT_IMPLEMENTED';
     case HttpStatus.BAD_GATEWAY:
+      return 'UPSTREAM_AWS_ERROR';
+    case HttpStatus.SERVICE_UNAVAILABLE:
+      // 503 → tratamos al upstream como AWS para reusar la entrada del
+      // catálogo; el status HTTP se preserva via statusOverride en el filter.
       return 'UPSTREAM_AWS_ERROR';
     default:
       return status >= 500 ? 'INTERNAL_ERROR' : 'VALIDATION_ERROR';

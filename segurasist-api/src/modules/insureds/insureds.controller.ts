@@ -1,4 +1,4 @@
-import { Roles, Scopes } from '@common/decorators/roles.decorator';
+import { Roles } from '@common/decorators/roles.decorator';
 import { Tenant, TenantCtx } from '@common/decorators/tenant.decorator';
 import { JwtAuthGuard } from '@common/guards/jwt-auth.guard';
 import { RolesGuard } from '@common/guards/roles.guard';
@@ -35,7 +35,6 @@ export class InsuredsController {
 
   @Get()
   @Roles('admin_mac', 'operator', 'admin_segurasist', 'supervisor')
-  @Scopes('read:insureds')
   list(
     @Query(new ZodValidationPipe(ListInsuredsQuerySchema)) q: ListInsuredsQuery,
     @Tenant() tenant: TenantCtx,
@@ -45,14 +44,12 @@ export class InsuredsController {
 
   @Get(':id')
   @Roles('admin_mac', 'operator', 'admin_segurasist', 'supervisor')
-  @Scopes('read:insureds')
   findOne(@Param('id', new ParseUUIDPipe()) id: string, @Tenant() tenant: TenantCtx) {
     return this.insureds.findOne(id, tenant);
   }
 
   @Post()
   @Roles('admin_mac', 'operator', 'admin_segurasist')
-  @Scopes('write:insureds')
   @UsePipes(new ZodValidationPipe(CreateInsuredSchema))
   create(@Body() dto: CreateInsuredDto, @Tenant() tenant: TenantCtx) {
     return this.insureds.create(dto, tenant);
@@ -60,7 +57,6 @@ export class InsuredsController {
 
   @Patch(':id')
   @Roles('admin_mac', 'operator', 'admin_segurasist')
-  @Scopes('write:insureds')
   update(
     @Param('id', new ParseUUIDPipe()) id: string,
     @Body(new ZodValidationPipe(UpdateInsuredSchema)) dto: UpdateInsuredDto,
@@ -72,7 +68,6 @@ export class InsuredsController {
   @Delete(':id')
   @HttpCode(HttpStatus.NO_CONTENT)
   @Roles('admin_mac', 'admin_segurasist')
-  @Scopes('write:insureds')
   remove(@Param('id', new ParseUUIDPipe()) id: string, @Tenant() tenant: TenantCtx): Promise<void> {
     return this.insureds.softDelete(id, tenant);
   }

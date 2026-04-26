@@ -4,71 +4,115 @@ const booleanString = z.enum(['true', 'false', '0', '1']).transform((v) => v ===
 
 const logLevels = ['trace', 'debug', 'info', 'warn', 'error', 'fatal'] as const;
 
-export const EnvSchema = z.object({
-  // Runtime
-  NODE_ENV: z.enum(['development', 'test', 'staging', 'production']).default('development'),
-  PORT: z.coerce.number().int().min(1).max(65535).default(3000),
-  HOST: z.string().default('0.0.0.0'),
-  LOG_LEVEL: z.enum(logLevels).default('info'),
-  TRACE_SAMPLE_RATE: z.coerce.number().min(0).max(1).default(0.05),
+/**
+ * Regex que valida la URL del JWKS oficial de Cognito en cualquier región AWS.
+ * Cualquier override de `COGNITO_ENDPOINT` que NO matchee este patrón es
+ * tratado como hostil bajo `NODE_ENV=production` (M4 — footgun: un atacante
+ * con acceso a Secrets Manager podría apuntar JWKS a un host bajo su control).
+ */
+const COGNITO_AWS_PROD_PATTERN = /^https:\/\/cognito-idp\.[a-z0-9-]+\.amazonaws\.com(\/.*)?$/;
 
-  // Database
-  DATABASE_URL: z
-    .string()
-    .url()
-    .refine((u) => u.startsWith('postgres://') || u.startsWith('postgresql://'), {
+const PostgresUrl = z
+  .string()
+  .url()
+  .refine((u) => u.startsWith('postgres://') || u.startsWith('postgresql://'), {
+    message: 'must be a postgres connection string',
+  });
+
+export const EnvSchema = z
+  .object({
+    // Runtime
+    NODE_ENV: z.enum(['development', 'test', 'staging', 'production']).default('development'),
+    PORT: z.coerce.number().int().min(1).max(65535).default(3000),
+    HOST: z.string().default('0.0.0.0'),
+    LOG_LEVEL: z.enum(logLevels).default('info'),
+    TRACE_SAMPLE_RATE: z.coerce.number().min(0).max(1).default(0.05),
+
+    // Database
+    DATABASE_URL: PostgresUrl.refine((u) => u.length > 0, {
       message: 'DATABASE_URL must be a postgres connection string',
     }),
 
-  // Cache
-  REDIS_URL: z.string().url(),
+    /**
+     * URL al rol DB con BYPASSRLS (`segurasist_admin`). Se usa para paths
+     * superadmin (cross-tenant) y opcionalmente para el writer de auditoría
+     * (la pista append-only del otro agente puede reusar este DSN). El cliente
+     * normal sigue usando `DATABASE_URL` con rol `segurasist_app` (NOBYPASSRLS).
+     * Nullable: si está ausente, los services superadmin lanzan
+     * `NotImplementedException` en lugar de leer cross-tenant.
+     */
+    DATABASE_URL_BYPASS: PostgresUrl.optional(),
 
-  // AWS — region and Cognito user pools
-  AWS_REGION: z.string().min(1).default('mx-central-1'),
-  COGNITO_REGION: z.string().min(1),
-  COGNITO_USER_POOL_ID_ADMIN: z.string().min(1),
-  COGNITO_USER_POOL_ID_INSURED: z.string().min(1),
-  COGNITO_CLIENT_ID_ADMIN: z.string().min(1),
-  COGNITO_CLIENT_ID_INSURED: z.string().min(1),
-  // Override del endpoint Cognito para dev local (cognito-local).
-  // Si está presente, JwtAuthGuard arma issuer/JWKS contra esta base en lugar de
-  // `https://cognito-idp.<region>.amazonaws.com`. Producción: dejar vacío.
-  COGNITO_ENDPOINT: z.string().url().optional(),
+    /**
+     * URL al writer de auditoría. Si ausente: degradación a pino-only.
+     * Si presente: postgres URL válida (puede ser la misma que DATABASE_URL_BYPASS).
+     */
+    DATABASE_URL_AUDIT: PostgresUrl.optional(),
 
-  // S3 buckets
-  S3_BUCKET_UPLOADS: z.string().min(1),
-  S3_BUCKET_CERTIFICATES: z.string().min(1),
-  S3_BUCKET_AUDIT: z.string().min(1),
-  S3_BUCKET_EXPORTS: z.string().min(1),
+    // Cache
+    REDIS_URL: z.string().url(),
 
-  // SQS
-  SQS_QUEUE_LAYOUT: z.string().url(),
-  SQS_QUEUE_PDF: z.string().url(),
-  SQS_QUEUE_EMAIL: z.string().url(),
-  SQS_QUEUE_REPORTS: z.string().url(),
+    // AWS — region and Cognito user pools
+    AWS_REGION: z.string().min(1).default('mx-central-1'),
+    COGNITO_REGION: z.string().min(1),
+    COGNITO_USER_POOL_ID_ADMIN: z.string().min(1),
+    COGNITO_USER_POOL_ID_INSURED: z.string().min(1),
+    COGNITO_CLIENT_ID_ADMIN: z.string().min(1),
+    COGNITO_CLIENT_ID_INSURED: z.string().min(1),
+    // Override del endpoint Cognito para dev local (cognito-local).
+    // Si está presente, JwtAuthGuard arma issuer/JWKS contra esta base en lugar de
+    // `https://cognito-idp.<region>.amazonaws.com`. Producción: dejar vacío.
+    COGNITO_ENDPOINT: z.string().url().optional(),
 
-  // SES
-  SES_SENDER_DOMAIN: z.string().min(1),
-  SES_CONFIGURATION_SET: z.string().min(1),
+    // S3 buckets
+    S3_BUCKET_UPLOADS: z.string().min(1),
+    S3_BUCKET_CERTIFICATES: z.string().min(1),
+    S3_BUCKET_AUDIT: z.string().min(1),
+    S3_BUCKET_EXPORTS: z.string().min(1),
 
-  // KMS
-  KMS_KEY_ID: z.string().min(1),
+    // SQS
+    SQS_QUEUE_LAYOUT: z.string().url(),
+    SQS_QUEUE_PDF: z.string().url(),
+    SQS_QUEUE_EMAIL: z.string().url(),
+    SQS_QUEUE_REPORTS: z.string().url(),
 
-  // CORS / endpoints
-  CORS_ALLOWED_ORIGINS: z
-    .string()
-    .min(1)
-    .transform((s) =>
-      s
-        .split(',')
-        .map((v) => v.trim())
-        .filter(Boolean),
-    ),
+    // SES
+    SES_SENDER_DOMAIN: z.string().min(1),
+    SES_CONFIGURATION_SET: z.string().min(1),
 
-  // Optional
-  AWS_ENDPOINT_URL: z.string().url().optional(),
-  ENABLE_SWAGGER: booleanString.optional().default('false'),
-});
+    // KMS
+    KMS_KEY_ID: z.string().min(1),
+
+    // CORS / endpoints
+    CORS_ALLOWED_ORIGINS: z
+      .string()
+      .min(1)
+      .transform((s) =>
+        s
+          .split(',')
+          .map((v) => v.trim())
+          .filter(Boolean),
+      ),
+
+    // Optional
+    AWS_ENDPOINT_URL: z.string().url().optional(),
+    ENABLE_SWAGGER: booleanString.optional().default('false'),
+  })
+  .superRefine((env, ctx) => {
+    // M4 — Cross-validation: en producción no se permite un COGNITO_ENDPOINT
+    // que no apunte a `cognito-idp.<region>.amazonaws.com`. Si la env var queda
+    // accesible para un atacante con acceso a Secrets Manager, podría redirigir
+    // todo el JWKS y montar un bypass de auth.
+    if (env.NODE_ENV === 'production' && env.COGNITO_ENDPOINT !== undefined) {
+      if (!COGNITO_AWS_PROD_PATTERN.test(env.COGNITO_ENDPOINT)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['COGNITO_ENDPOINT'],
+          message: `COGNITO_ENDPOINT con valor no-AWS no es permitido en producción. Detected: ${env.COGNITO_ENDPOINT}`,
+        });
+      }
+    }
+  });
 
 export type Env = z.infer<typeof EnvSchema>;
 

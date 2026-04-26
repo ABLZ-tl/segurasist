@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { SESSION_COOKIE } from '@segurasist/auth';
 import { protectMiddleware } from '@segurasist/auth/middleware';
 import { readRoleFromToken } from './lib/jwt';
+import { checkOrigin } from './lib/origin-allowlist';
 
 const PUBLIC_PATTERNS = [
   '^/login',
@@ -61,7 +62,29 @@ function redirectIfInsured(token: string): NextResponse | null {
   return null;
 }
 
+/**
+ * Audit M6: enforce an Origin allowlist on mutating requests so that the
+ * SameSite=Strict cookie hardening is backed up by an explicit server-side
+ * CSRF check. Runs *before* the auth flow because rejecting CSRF takes
+ * priority over authenticating the request.
+ */
+function enforceOrigin(req: NextRequest): NextResponse | null {
+  const result = checkOrigin({
+    method: req.method,
+    pathname: req.nextUrl.pathname,
+    origin: req.headers.get('origin'),
+  });
+  if (!result.reject) return null;
+  return NextResponse.json(
+    { error: 'Origin not allowed' },
+    { status: 403 },
+  );
+}
+
 export async function middleware(req: NextRequest): Promise<NextResponse> {
+  const blocked = enforceOrigin(req);
+  if (blocked) return blocked;
+
   if (IS_DEV) return devMiddleware(req);
 
   // Production: run the full Cognito verifier first; if it returns a non-redirect

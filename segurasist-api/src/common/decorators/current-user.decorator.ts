@@ -9,6 +9,13 @@ export interface AuthUser {
   role: string;
   scopes: string[];
   mfaEnrolled: boolean;
+  /**
+   * Cognito user-pool de origen del token validado (defensa en profundidad
+   * H3). El `RolesGuard` puede usarlo para rechazar privilege escalation
+   * cross-pool: un token con `custom:role=admin_segurasist` pero
+   * `pool=insured` no debe poder operar como admin.
+   */
+  pool?: 'admin' | 'insured';
 }
 
 export const CurrentUser = createParamDecorator((_data: unknown, ctx: ExecutionContext): AuthUser => {

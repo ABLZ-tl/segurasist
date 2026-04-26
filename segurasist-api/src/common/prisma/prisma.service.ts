@@ -34,18 +34,27 @@ type TxClient = Omit<PrismaClient, '$connect' | '$disconnect' | '$on' | '$transa
  *
  * Endpoints públicos / health NO deben usar PrismaService (request-scoped y
  * sin tenant → ForbiddenException). Para tareas administrativas (BYPASSRLS)
- * crear un cliente con rol `segurasist_admin` aparte.
+ * inyectar `PrismaBypassRlsService` (rol DB `segurasist_admin`, BYPASSRLS).
+ *
+ * M2 — Branch superadmin:
+ *   Si el JwtAuthGuard marcó `req.bypassRls = true` (rol admin_segurasist),
+ *   este service IGUAL conserva el rol DB `segurasist_app` (NOBYPASSRLS):
+ *   intentar leer con él sin tenant context devuelve 0 filas o falla por
+ *   `assertTenant`. Esa es la defensa en profundidad — los services superadmin
+ *   DEBEN inyectar `PrismaBypassRlsService` explícitamente.
  */
 @Injectable({ scope: Scope.REQUEST })
 export class PrismaService implements OnModuleInit, OnModuleDestroy {
   private readonly log = new Logger(PrismaService.name);
   private readonly tenantId?: string;
+  private readonly bypassRls: boolean;
   private readonly root: PrismaClient;
   /** Cliente público con el wrapper RLS aplicado. Usar este en services. */
   public readonly client: ReturnType<PrismaService['buildExtended']>;
 
-  constructor(@Inject(REQUEST) req: FastifyRequest & { tenant?: TenantCtx }) {
+  constructor(@Inject(REQUEST) req: FastifyRequest & { tenant?: TenantCtx; bypassRls?: boolean }) {
     this.tenantId = req.tenant?.id;
+    this.bypassRls = req.bypassRls === true;
     this.root = new PrismaClient({ log: ['warn', 'error'] });
     this.client = this.buildExtended();
   }
@@ -62,8 +71,20 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
    * Ejecuta una callback dentro de una transacción explícita con
    * `app.current_tenant` ya fijado. Útil para handlers que requieran agrupar
    * varias mutaciones bajo una sola transacción (atomicidad cruzada).
+   *
+   * Para superadmin (`bypassRls=true`): NO seteamos el tenant — el rol DB
+   * BYPASSRLS hace que las policies se ignoren. Usar `withTenant` en path
+   * superadmin SÓLO si las queries son inocuas (e.g. no asumen tenant).
    */
   async withTenant<T>(fn: (tx: TxClient) => Promise<T>): Promise<T> {
+    if (this.bypassRls) {
+      // Superadmin: sin SET, defensa en profundidad → en PrismaService normal
+      // (rol segurasist_app NOBYPASSRLS) las queries devolverán 0 filas o
+      // fallarán por `tenant_id::text = current_setting(...)`. Lanzamos antes:
+      throw new ForbiddenException(
+        'PrismaService.withTenant invocado en path superadmin: usar PrismaBypassRlsService',
+      );
+    }
     const tenantId = this.assertTenant();
     return this.root.$transaction(async (tx) => {
       await tx.$executeRaw(Prisma.sql`SELECT set_config('app.current_tenant', ${tenantId}, true)`);
@@ -81,6 +102,7 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
     // Bind explícito: el callback se invoca por Prisma sin contexto.
     const root = this.root;
     const log = this.log;
+    const bypassRls = this.bypassRls;
     const assertTenant = (): string => this.assertTenant();
     return root.$extends({
       name: 'rls-tenant-context',
@@ -89,6 +111,17 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
           // Sin modelo (raw $executeRaw / $queryRaw) → quien lo invoque debe
           // usar `withTenant` o asumir contexto admin.
           if (!model) {
+            return query(args);
+          }
+          // Superadmin: NO seteamos app.current_tenant. El rol DB
+          // segurasist_app aplica RLS y devuelve 0 filas — eso es defensa en
+          // profundidad: el código superadmin NUNCA debe leer con este client.
+          // Si algún service lo hace por error, queda como un bug detectable
+          // (lista vacía / 404) en lugar de una fuga cross-tenant.
+          if (bypassRls) {
+            log.warn(
+              `PrismaService: query con bypassRls=true ignora tenant context (model=${model} op=${operation}); el cliente NOBYPASSRLS devolverá 0 filas. Usar PrismaBypassRlsService.`,
+            );
             return query(args);
           }
           const tenantId = assertTenant();

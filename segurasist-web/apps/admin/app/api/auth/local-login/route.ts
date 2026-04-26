@@ -1,5 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { REFRESH_COOKIE, SESSION_COOKIE } from '@segurasist/auth';
+import { buildSessionCookie } from '../../../../lib/cookie-config';
+import { checkOrigin } from '../../../../lib/origin-allowlist';
 
 /**
  * Same-origin bridge for the local credentials login flow (Sprint 1 Day 2).
@@ -43,6 +45,19 @@ function isLoginBody(body: unknown): body is LoginBody {
 }
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
+  // Audit M6 — defense-in-depth Origin allowlist. The admin middleware also
+  // enforces this on every mutating request, but we re-check inside the
+  // handler so the protection still applies when the route is exercised
+  // directly (unit tests, internal callers, future framework changes).
+  const originCheck = checkOrigin({
+    method: req.method,
+    pathname: req.nextUrl.pathname,
+    origin: req.headers.get('origin'),
+  });
+  if (originCheck.reject) {
+    return NextResponse.json({ error: 'Origin not allowed' }, { status: 403 });
+  }
+
   let parsed: unknown;
   try {
     parsed = await req.json();
@@ -144,24 +159,23 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     }
   }
 
+  // Cookies are built via the shared `buildSessionCookie` helper so that the
+  // SameSite=Strict + Secure-allowlist hardening (audit items M6 + L3) lives
+  // in exactly one place. Secure flips on for `production`/`staging` only;
+  // localhost keeps `secure=false` because the dev stack runs over plain HTTP.
   if (sessionToken) {
-    res.cookies.set(SESSION_COOKIE, sessionToken, {
-      httpOnly: true,
-      // Allow over plain http on localhost; production runs over https.
-      secure: process.env['NODE_ENV'] === 'production',
-      sameSite: 'lax',
-      path: '/',
-      maxAge: expiresIn ?? 60 * 15,
-    });
+    res.cookies.set(
+      buildSessionCookie(SESSION_COOKIE, sessionToken, {
+        maxAge: expiresIn ?? 60 * 15,
+      }),
+    );
   }
   if (refreshToken) {
-    res.cookies.set(REFRESH_COOKIE, refreshToken, {
-      httpOnly: true,
-      secure: process.env['NODE_ENV'] === 'production',
-      sameSite: 'lax',
-      path: '/',
-      maxAge: 60 * 60 * 24 * 7,
-    });
+    res.cookies.set(
+      buildSessionCookie(REFRESH_COOKIE, refreshToken, {
+        maxAge: 60 * 60 * 24 * 7,
+      }),
+    );
   }
 
   return res;

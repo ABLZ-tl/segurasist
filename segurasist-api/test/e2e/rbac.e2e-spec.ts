@@ -52,6 +52,12 @@ import { HttpExceptionFilter } from '../../src/common/filters/http-exception.fil
 // para que `JwtAuthGuard` resuelva el JWKS contra el mismo host que cognito-local
 // emite en el claim `iss`.
 process.env.COGNITO_ENDPOINT = 'http://0.0.0.0:9229';
+// M2 — superadmin path: `TenantsService.list()` usa PrismaBypassRlsService (rol DB
+// BYPASSRLS). En dev podemos reutilizar el rol superuser del docker-compose. Si
+// el spec corre en CI sin esta var, el endpoint /v1/tenants devuelve 403.
+process.env.DATABASE_URL_BYPASS =
+  process.env.DATABASE_URL_BYPASS ??
+  'postgresql://segurasist:segurasist@localhost:5432/segurasist?schema=public';
 
 type Role = 'admin_segurasist' | 'admin_mac' | 'operator' | 'supervisor' | 'insured';
 
@@ -76,7 +82,9 @@ interface MeResponseBody {
   id: string;
   email: string;
   role: string;
-  tenant: { id: string };
+  tenant: { id: string } | null;
+  tenantId: string | null;
+  pool: 'admin' | 'insured' | null;
 }
 
 async function bootstrapApp(): Promise<INestApplication> {
@@ -162,18 +170,27 @@ describe('RBAC matrix (full role coverage)', () => {
       expect((tokens[role] ?? '').length).toBeGreaterThan(20);
     });
 
-    it('GET /v1/auth/me devuelve role + tenant.id consistentes', async () => {
+    it('GET /v1/auth/me devuelve role + tenant + pool consistentes', async () => {
       const res = await request(server).get('/v1/auth/me').set('Authorization', `Bearer ${tokens[role]}`);
       expect(res.status).toBe(200);
       const body = res.body as MeResponseBody;
       expect(body.role).toBe(role);
-      // admin_segurasist usa el sentinel `GLOBAL`; el resto un UUID real.
+      // M2 — admin_segurasist es cross-tenant: tenant=null. El resto: UUID real.
+      // H3 — pool: admins viven en el pool admin, insured en el pool insured.
       if (role === 'admin_segurasist') {
-        expect(body.tenant.id).toBe('GLOBAL');
-      } else {
-        expect(body.tenant.id).toMatch(
+        expect(body.tenant).toBeNull();
+        expect(body.tenantId).toBeNull();
+        expect(body.pool).toBe('admin');
+      } else if (role === 'insured') {
+        expect(body.tenantId).toMatch(
           /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/,
         );
+        expect(body.pool).toBe('insured');
+      } else {
+        expect(body.tenantId).toMatch(
+          /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/,
+        );
+        expect(body.pool).toBe('admin');
       }
       expect(body.email).toBe(CREDS[role].email);
     });
@@ -247,17 +264,14 @@ describe('RBAC matrix (full role coverage)', () => {
 
     // batches.controller
     //
-    // NOTA: el controller declara `@Roles('admin_mac','operator','admin_segurasist','supervisor')`
-    // PERO también `@Scopes('read:batches')`. Los idTokens emitidos por
-    // cognito-local NO contienen el claim `scope` (eso requeriría un Resource
-    // Server con scopes definidos vía OAuth client credentials). Por lo tanto
-    // el RolesGuard devuelve 403 a TODOS los roles para este endpoint hasta
-    // que se mintee un access token con scope. Lo dejamos en `allowed: []`
-    // para reflejar el comportamiento real actual.
+    // M3 (Sprint 1): el `@Scopes(...)` fue removido del controller. RBAC ahora
+    // es sólo por rol (ver docs/adr/0003-rbac-roles-only-mvp.md). Los 4 roles
+    // listados en `@Roles` deben recibir 200/202/4xx-de-validación/500 stub,
+    // nunca 403 por scope ausente.
     {
       method: 'get',
       url: '/v1/batches',
-      allowed: [],
+      allowed: ['admin_mac', 'operator', 'admin_segurasist', 'supervisor'],
     },
   ];
 

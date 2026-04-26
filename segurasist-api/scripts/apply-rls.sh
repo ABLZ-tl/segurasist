@@ -2,6 +2,15 @@
 # Aplica el bootstrap de RLS contra el postgres del docker-compose local.
 # Idempotente: puede correrse múltiples veces sin efectos colaterales.
 #
+# Crea dos roles DB (idempotentemente, en `policies.sql`):
+#   - segurasist_app    NOBYPASSRLS  (cliente normal del API; aplica RLS)
+#   - segurasist_admin  BYPASSRLS    (cliente superadmin / writer auditoría)
+#
+# Pre-requisito: `prisma migrate deploy` (o `migrate dev`) debe haber corrido
+# antes — `policies.sql` referencia tablas concretas. Si la migración M2
+# (`20260426_superadmin_nullable_tenant`) no se aplicó, este script falla
+# limpio porque la columna `users.tenant_id` debe existir y ser nullable.
+#
 # Uso (después de `npx prisma migrate dev` o `migrate deploy`):
 #   ./scripts/apply-rls.sh
 #
@@ -31,6 +40,12 @@ elif command -v docker >/dev/null 2>&1; then
 else
   echo "[apply-rls] FATAL: ni psql ni docker disponibles en PATH" >&2
   exit 2
+fi
+
+# Sanity check: confirmar que ambos roles existen.
+if command -v psql >/dev/null 2>&1; then
+  ROLES=$(psql "${PGURL}" -tAc "SELECT string_agg(rolname, ',') FROM pg_roles WHERE rolname IN ('segurasist_app','segurasist_admin');" 2>/dev/null || echo "")
+  echo "[apply-rls] roles presentes: ${ROLES}"
 fi
 
 echo "[apply-rls] OK"

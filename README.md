@@ -42,3 +42,13 @@ PR → lint → test → security (SAST/SCA) → build → cross-tenant gate
 ## Estado del programa
 
 Ver `docs/PROGRESS.md` (actualizado por el Tech Lead al cierre de cada sprint).
+
+## Riesgos operativos vigentes
+
+Hasta el cierre de Sprint 5 los buckets / logs / audit trail son **mutables**
+(LocalStack + Postgres + Docker logs sin Object Lock). Si ocurre un incidente
+en ese intervalo, la evidencia post-incidente puede haber sido alterada — el
+Object Lock COMPLIANCE no aplica retroactivamente.
+
+Detalle, mitigaciones interim (`pg_dump` programado + snapshot ante hallazgos)
+y plan de cierre Sprint 5 en [`docs/INTERIM_RISKS.md`](./docs/INTERIM_RISKS.md).

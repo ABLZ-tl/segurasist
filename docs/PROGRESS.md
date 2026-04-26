@@ -3,7 +3,7 @@
 | Fase | Estado | Notas |
 |---|---|---|
 | Sprint 0 — Cimientos | ✅ Completado | 3 repos bootstrapped (api 101 / web 173 / infra 161 archivos), 12 docs externas, dominio `.app`, región primaria `mx-central-1` |
-| Sprint 1 — Auth + carga preview | ✅ Cerrado (S1-05 deferred) | Local-first stack docker-compose, RBAC 5 roles e2e green, 535 tests automatizados (192 BE unit + 113 admin unit + 162 packages unit + 83 BE e2e). S1-05 (validador upload) movido a Sprint 2 cuando MAC-002 desbloquee. |
+| Sprint 1 — Auth + carga preview | ✅ Cerrado (S1-05 deferred) + Audit endurecido | Local-first stack docker-compose, RBAC 5 roles e2e green, **650 tests automatizados** (248 BE unit + 6 cross-tenant + 86 BE e2e + 148 admin unit + 108 ui unit + 54 auth unit). S1-09 cerrado con 3 specs Playwright reales (admin login) + 2 skip justificados (portal OTP/cert dependen de Sprint 3). Audit de seguridad: 13 items aplicados (3 HIGH, 6 MEDIUM, 4 LOW). S1-05 (validador upload) movido a Sprint 2 cuando MAC-002 desbloquee. |
 | Sprint 2 — Carga end-to-end + Certificados | ⬜ Pendiente | |
 | Sprint 3 — Portal asegurado + Dashboard | ⬜ Pendiente | |
 | Sprint 4 — Reportes + Chatbot | ⬜ Pendiente | |
@@ -34,6 +34,24 @@ Ver `external/` para el detalle de cada uno. Marcar `[x]` cuando se resuelva.
 - [ ] OPS-003: UptimeRobot Pro (50 monitors)
 
 > **Nota:** los bloqueos AWS/GH/MAC-001/LEG/OPS-001..003 pueden gestionarse en paralelo en consola durante Sprints 1–4. No compiten con desarrollo.
+
+## Riesgos operativos vigentes
+
+> ⚠️ **Hasta Sprint 5 los buckets / logs / audit trail son MUTABLES.** El stack
+> local-first (LocalStack + Postgres + CloudWatch dev) no tiene retención de
+> evidencia inmutable. Si hay un incidente entre hoy y Sprint 5, la evidencia
+> post-incidente puede haber sido alterada — **no aplica Object Lock COMPLIANCE
+> retroactivamente**.
+
+Detalle, mitigaciones y plan de cierre en [`docs/INTERIM_RISKS.md`](./INTERIM_RISKS.md).
+
+Resumen rápido:
+
+- **Audit log**: persiste en Postgres; restorable desde backup, no inmutable.
+- **Buckets `audit/certificates/exports`**: mutables (LocalStack hoy, S3 sin Object Lock hasta S5).
+- **Logs**: Docker `docker logs` + CloudWatch dev; sin retention policy ni firma.
+- **Mitigación interim**: snapshots `pg_dump` diarios + dump de logs Docker archivados offline cifrados ante cualquier hallazgo.
+- **Cierre**: Sprint 5 activa S3 Object Lock COMPLIANCE en buckets sensibles con retención 730 días (24 meses).
 
 ## Sprint 1 — Detalle de avance
 
@@ -84,13 +102,44 @@ Ver `external/` para el detalle de cada uno. Marcar `[x]` cuando se resuelva.
 
 **Sprint 1 cerrado** — la única historia pendiente es **S1-05** (validador de upload del layout masivo) que está bloqueada por **MAC-002** (la doctora Lucía no ha validado el layout oficial). Se mueve a Sprint 2 cuando se desbloquee, sin riesgo arquitectónico: el endpoint S1-04 ya está, el FE puede construir el flujo download/upload/preview con el demo.
 
+### Día 4 (2026-04-26) — Audit de seguridad aplicado
+
+Audit estructurado de cierre de Sprint 1 sobre commits `ff90834 + f8b9546 + cf1f2e7`. 13 items en 3 niveles (HIGH/MEDIUM/LOW). Aplicados con 4 subagentes paralelos:
+
+| ID | Severidad | Item | Estado |
+|---|---|---|---|
+| H1 | 🔴 HIGH | Rate limiting real (Redis + APP_GUARD global, 60/min default, 5/min en auth) | ✅ |
+| H2 | 🔴 HIGH | Audit log persistente en `audit_log` (BYPASSRLS via PrismaClient dedicado) | ✅ |
+| H3 | 🔴 HIGH | Pool-aware JWT validation (aud claim + token_use, defensa role/pool en RolesGuard) | ✅ |
+| M1 | 🟠 MED | HttpExceptionFilter preserva status original (503/415/etc.) | ✅ |
+| M2 | 🟠 MED | `User.tenant_id NULLABLE` + superadmin con `prismaBypass` (rol `segurasist_admin`) | ✅ |
+| M3 | 🟠 MED | `@Scopes` deprecado para MVP (Roles-only); reactivable Fase 2 | ✅ |
+| M4 | 🟠 MED | `COGNITO_ENDPOINT` valida regex AWS en producción (anti-footgun) | ✅ |
+| M5 | 🟠 MED | `pino` redact recursivo (`scrubSensitiveDeep`, depth 12) | ✅ |
+| M6 | 🟠 MED | `sameSite=strict` + Origin allowlist en `local-login` + `middleware.ts` | ✅ |
+| L1 | 🟡 LOW | Helmet CSP siempre activa (`default-src 'none'`, `frame-ancestors 'none'`) | ✅ |
+| L2 | 🟡 LOW | Comment XSS sobre `dangerouslySetInnerHTML` del theme anti-FOUC | ✅ |
+| L3 | 🟡 LOW | Cookie `secure` con allowlist explícita `{production, staging}` | ✅ |
+| L4 | 🟡 LOW | Magic bytes en multipart upload (XLSX = ZIP + `xl/workbook.xml`; CSV = ASCII) | ✅ |
+| L5 | 🟡 LOW | Riesgo retención mutable documentado en `INTERIM_RISKS.md` | ✅ |
+
+**Tests añadidos por el audit: +96 (61 BE + 35 web)**:
+- BE unit: +56 (192 → 248). Throttler, file-magic-bytes, scrub-sensitive, jwt-auth pool-aware, env.schema, http-exception status, audit interceptor.
+- BE cross-tenant: +2 (4 → 6). BYPASSRLS lee cross-tenant, NOBYPASSRLS sin SET → 0 filas.
+- BE e2e: +3 (83 → 86). Superadmin (`/v1/tenants` + `/me`), batches upload magic-bytes, security-headers integration.
+- Web admin: +35 (113 → 148). Cookie-config (12), origin-allowlist (17), local-login Origin enforcement (5).
+
+**ADRs nuevos**:
+- [`0002-audit-log-persistence.md`](../segurasist-api/docs/adr/0002-audit-log-persistence.md) — BYPASSRLS, fire-and-forget, retención.
+- [`0003-rbac-roles-only-mvp.md`](../segurasist-api/docs/adr/0003-rbac-roles-only-mvp.md) — scopes diferidos a Fase 2.
+- [`0004-superadmin-nullable-tenant-bypass-rls.md`](../segurasist-api/docs/adr/0004-superadmin-nullable-tenant-bypass-rls.md) — modelo superadmin sin tenant.
+
 ### Backlog descubierto (Sprint 5)
 
-- `HttpExceptionFilter` reescribe el status original (e.g. `HttpException(503)` sale como 500). Decisión de producto antes de Sprint 5 pentest.
-- `users.tenant_id NOT NULL` vs `admin_segurasist` cross-tenant. Workaround actual: sentinel `GLOBAL` en JWT + asociado a tenant `mac` en BD. Migración a `tenant_id NULL` requiere branch en `JwtAuthGuard` y RLS bypass para superadmin.
-- `@Scopes('read:batches')` no funciona porque idTokens cognito-local no incluyen claim `scope` — todos los roles reciben 403 en `GET /v1/batches`. Definir cómo se emiten scopes (group claims o scope custom).
-- Logout button en topbar/drawer (no estaba en spec).
+- Logout button en topbar/drawer (no estaba en spec, no es seguridad).
 - Tenant switcher real (sigue mock con mac/demo).
+- Object Lock COMPLIANCE en buckets `audit/certificates/exports` (planeado Sprint 5; ver INTERIM_RISKS).
+- Pre Token Generation Lambda en Cognito si reactivamos `@Scopes` (Fase 2).
 
 ## Decisiones técnicas vivas
 

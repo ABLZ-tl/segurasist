@@ -21,6 +21,9 @@ const createRemoteJWKSetMock = jose.createRemoteJWKSet as unknown as jest.Mocked
   typeof jose.createRemoteJWKSet
 >;
 
+const ADMIN_CLIENT = 'client-admin';
+const INSURED_CLIENT = 'client-insured';
+
 function makeEnv(overrides: Partial<Env> = {}): Env {
   return {
     NODE_ENV: 'test',
@@ -34,8 +37,8 @@ function makeEnv(overrides: Partial<Env> = {}): Env {
     COGNITO_REGION: 'mx-central-1',
     COGNITO_USER_POOL_ID_ADMIN: 'pool-admin',
     COGNITO_USER_POOL_ID_INSURED: 'pool-insured',
-    COGNITO_CLIENT_ID_ADMIN: 'client-admin',
-    COGNITO_CLIENT_ID_INSURED: 'client-insured',
+    COGNITO_CLIENT_ID_ADMIN: ADMIN_CLIENT,
+    COGNITO_CLIENT_ID_INSURED: INSURED_CLIENT,
     COGNITO_ENDPOINT: 'http://localhost:9229',
     S3_BUCKET_UPLOADS: 'b1',
     S3_BUCKET_CERTIFICATES: 'b2',
@@ -55,7 +58,7 @@ function makeEnv(overrides: Partial<Env> = {}): Env {
   } as Env;
 }
 
-describe('JwtAuthGuard', () => {
+describe('JwtAuthGuard (basics)', () => {
   let guard: JwtAuthGuard;
   let reflector: Reflector;
 
@@ -109,12 +112,14 @@ describe('JwtAuthGuard', () => {
     await expect(guard.canActivate(ctx)).rejects.toThrow(UnauthorizedException);
   });
 
-  it('valida contra el pool admin y popula req.user / req.tenant', async () => {
+  it('valida contra el pool admin (aud=admin) y popula req.user / req.tenant con pool=admin', async () => {
     const tenantId = '11111111-1111-1111-1111-111111111111';
     jwtVerifyMock.mockResolvedValueOnce({
       payload: {
         sub: 'user-1',
         email: 'a@b.c',
+        aud: ADMIN_CLIENT,
+        token_use: 'id',
         'custom:tenant_id': tenantId,
         'custom:role': 'admin_mac',
         scope: 'read:insureds write:insureds',
@@ -132,6 +137,7 @@ describe('JwtAuthGuard', () => {
       role: 'admin_mac',
       scopes: ['read:insureds', 'write:insureds'],
       mfaEnrolled: true,
+      pool: 'admin',
     });
     expect(req.tenant).toEqual({ id: tenantId });
   });
@@ -141,6 +147,8 @@ describe('JwtAuthGuard', () => {
     jwtVerifyMock.mockRejectedValueOnce(new Error('admin pool: invalid issuer')).mockResolvedValueOnce({
       payload: {
         sub: 'insured-1',
+        aud: INSURED_CLIENT,
+        token_use: 'id',
         'custom:tenant_id': tenantId,
       },
       protectedHeader: { alg: 'RS256' },
@@ -149,7 +157,8 @@ describe('JwtAuthGuard', () => {
     const req: Record<string, unknown> = { headers: { authorization: 'Bearer xyz' } };
     const ctx = mockHttpContext(req);
     await expect(guard.canActivate(ctx)).resolves.toBe(true);
-    expect((req.user as { role: string }).role).toBe('insured');
+    expect((req.user as { role: string; pool?: string }).role).toBe('insured');
+    expect((req.user as { pool?: string }).pool).toBe('insured');
   });
 
   it('lanza UnauthorizedException si el token falla en ambos pools', async () => {
@@ -159,10 +168,10 @@ describe('JwtAuthGuard', () => {
     await expect(guard.canActivate(ctx)).rejects.toThrow(/Invalid token/);
   });
 
-  it('lanza ForbiddenException si el token NO trae custom:tenant_id', async () => {
+  it('lanza ForbiddenException si el token NO trae custom:tenant_id (rol no-superadmin)', async () => {
     // mockResolvedValue (no Once) porque el assert hace dos invocaciones.
     jwtVerifyMock.mockResolvedValue({
-      payload: { sub: 'user-1' },
+      payload: { sub: 'user-1', aud: ADMIN_CLIENT, token_use: 'id', 'custom:role': 'admin_mac' },
       protectedHeader: { alg: 'RS256' },
     } as unknown as Awaited<ReturnType<typeof jose.jwtVerify>>);
     const ctx = mockHttpContext({ headers: { authorization: 'Bearer x' } });
@@ -172,7 +181,12 @@ describe('JwtAuthGuard', () => {
 
   it('default role=insured y scopes=[] cuando claims no los traen', async () => {
     jwtVerifyMock.mockResolvedValueOnce({
-      payload: { sub: 'u', 'custom:tenant_id': '22222222-2222-2222-2222-222222222222' },
+      payload: {
+        sub: 'u',
+        aud: INSURED_CLIENT,
+        token_use: 'id',
+        'custom:tenant_id': '22222222-2222-2222-2222-222222222222',
+      },
       protectedHeader: { alg: 'RS256' },
     } as unknown as Awaited<ReturnType<typeof jose.jwtVerify>>);
 

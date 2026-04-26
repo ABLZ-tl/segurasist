@@ -33,8 +33,23 @@ async function bootstrap(): Promise<void> {
 
   app.useLogger(app.get(PinoLogger));
 
+  // L1 — CSP activa SIEMPRE (no sólo en prod). Esta es una API REST que
+  // jamás devuelve HTML; bloqueamos ejecución de cualquier script/imagen/
+  // iframe inline. Si una respuesta filtrada llegara a ser servida en un
+  // contexto HTML (p.ej. inline en un email phishing), el navegador no
+  // ejecuta nada. Las directivas más conservadoras posibles:
+  //   default-src 'none'  → nada por defecto.
+  //   frame-ancestors 'none' → no embedding (clickjacking).
+  //   base-uri 'none' / form-action 'none' → cierra vectores de inyección.
   await app.register(helmet, {
-    contentSecurityPolicy: env.NODE_ENV === 'production',
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc: ["'none'"],
+        frameAncestors: ["'none'"],
+        baseUri: ["'none'"],
+        formAction: ["'none'"],
+      },
+    },
     hsts: { maxAge: 63072000, includeSubDomains: true, preload: true },
   });
 

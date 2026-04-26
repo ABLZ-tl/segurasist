@@ -194,9 +194,20 @@ model Tenant {
   @@map("tenants")
 }
 
+/// User multi-tenant.
+/// `tenantId` es NULLABLE para soportar superadmin (`role=admin_segurasist`)
+/// que opera cross-tenant. La integridad la garantiza un CHECK constraint
+/// instalado por la migración `20260426_superadmin_nullable_tenant`:
+///
+///   CHECK ((tenant_id IS NULL AND role IN ('admin_segurasist'))
+///          OR (tenant_id IS NOT NULL))
+///
+/// Es decir: solo los superadmins pueden tener `tenant_id NULL`. Cualquier
+/// otro rol DEBE traer un tenant. RLS bypass del superadmin se hace al nivel
+/// de rol DB (`segurasist_admin` con BYPASSRLS) — ver `prisma-bypass-rls.service.ts`.
 model User {
   id          String     @id @default(uuid()) @db.Uuid
-  tenantId    String     @map("tenant_id") @db.Uuid
+  tenantId    String?    @map("tenant_id") @db.Uuid
   cognitoSub  String     @map("cognito_sub") @db.VarChar(64)
   email       String     @db.VarChar(254)
   fullName    String     @map("full_name") @db.VarChar(160)
@@ -208,7 +219,7 @@ model User {
   updatedAt   DateTime   @updatedAt @map("updated_at")
   deletedAt   DateTime?  @map("deleted_at")
 
-  tenant Tenant @relation(fields: [tenantId], references: [id])
+  tenant Tenant? @relation(fields: [tenantId], references: [id])
 
   @@unique([tenantId, email], name: "user_tenant_email_unique")
   @@unique([cognitoSub], name: "user_cognito_sub_unique")

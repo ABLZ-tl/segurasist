@@ -4,14 +4,20 @@ import { POST } from '../../../app/api/auth/local-login/route';
 
 function makeRequest(
   body: unknown,
-  init: { headers?: Record<string, string>; raw?: string } = {},
+  init: { headers?: Record<string, string>; raw?: string; omitOrigin?: boolean } = {},
 ): NextRequest {
+  const callerHeaders = init.headers ?? {};
+  const baseHeaders: Record<string, string> = {
+    'content-type': 'application/json',
+  };
+  if (init.omitOrigin !== true) {
+    // Default Origin matches the dev allowlist so legacy tests still pass
+    // through the M6 CSRF check unchanged.
+    baseHeaders['origin'] = 'http://localhost:3001';
+  }
   const reqInit: RequestInit = {
     method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      ...(init.headers ?? {}),
-    },
+    headers: { ...baseHeaders, ...callerHeaders },
   };
   if (init.raw !== undefined) {
     reqInit.body = init.raw;
@@ -27,6 +33,7 @@ interface ResponseLike {
   status: number;
   body: unknown;
   cookies: Record<string, string>;
+  rawCookies: string[];
   contentType: string | null;
 }
 
@@ -54,6 +61,7 @@ async function readResponse(res: Response): Promise<ResponseLike> {
     status: res.status,
     body,
     cookies,
+    rawCookies: setCookies,
     contentType: res.headers.get('content-type'),
   };
 }
@@ -219,5 +227,103 @@ describe('POST /api/auth/local-login', () => {
     );
     const res = await POST(req);
     expect(res.headers.get('x-trace-id')).toBe('trace-123');
+  });
+
+  // ---- Audit M6: Origin allowlist (CSRF defence) -------------------------
+
+  describe('Origin allowlist (audit M6)', () => {
+    it('returns 403 when the Origin header is missing', async () => {
+      const req = makeRequest(
+        { email: 'a@b.c', password: 'p' },
+        { omitOrigin: true },
+      );
+      const res = await POST(req);
+      const out = await readResponse(res);
+      expect(out.status).toBe(403);
+      expect((out.body as { error: string }).error).toBe('Origin not allowed');
+      expect(globalThis.fetch).not.toHaveBeenCalled();
+    });
+
+    it('returns 403 for a foreign Origin header', async () => {
+      const req = makeRequest(
+        { email: 'a@b.c', password: 'p' },
+        { headers: { origin: 'http://malicious.example' } },
+      );
+      const res = await POST(req);
+      const out = await readResponse(res);
+      expect(out.status).toBe(403);
+      expect((out.body as { error: string }).error).toBe('Origin not allowed');
+      expect(globalThis.fetch).not.toHaveBeenCalled();
+    });
+
+    it('proceeds normally when Origin matches the dev allowlist', async () => {
+      vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+        new Response(JSON.stringify({ idToken: 't' }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+      );
+      const req = makeRequest(
+        { email: 'a@b.c', password: 'p' },
+        { headers: { origin: 'http://localhost:3001' } },
+      );
+      const res = await POST(req);
+      expect(res.status).toBe(200);
+    });
+  });
+
+  // ---- Audit M6 + L3: cookie hardening ----------------------------------
+
+  describe('cookie hardening (audit M6 + L3)', () => {
+    it('emits sa_session/sa_refresh with SameSite=Strict + HttpOnly', async () => {
+      vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            idToken: 'id',
+            refreshToken: 'rt',
+            expiresIn: 900,
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        ),
+      );
+
+      const req = makeRequest({ email: 'a@b.c', password: 'p' });
+      const out = await readResponse(await POST(req));
+      expect(out.status).toBe(200);
+
+      const sessionCookie = out.rawCookies.find((c) => c.startsWith('sa_session='));
+      const refreshCookie = out.rawCookies.find((c) => c.startsWith('sa_refresh='));
+      expect(sessionCookie).toBeDefined();
+      expect(refreshCookie).toBeDefined();
+
+      // Strict — not Lax — closes the top-level POST CSRF gap.
+      expect(sessionCookie).toMatch(/SameSite=strict/i);
+      expect(refreshCookie).toMatch(/SameSite=strict/i);
+      expect(sessionCookie).toMatch(/HttpOnly/i);
+      expect(refreshCookie).toMatch(/HttpOnly/i);
+      expect(sessionCookie).toMatch(/Path=\//);
+    });
+
+    it('omits the Secure flag in development NODE_ENV', async () => {
+      // NODE_ENV is readonly under @types/node 20.6+; use vi.stubEnv to mutate.
+      vi.stubEnv('NODE_ENV', 'development');
+      try {
+        vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+          new Response(JSON.stringify({ idToken: 'id' }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          }),
+        );
+        const req = makeRequest({ email: 'a@b.c', password: 'p' });
+        const out = await readResponse(await POST(req));
+        const sessionCookie = out.rawCookies.find((c) =>
+          c.startsWith('sa_session='),
+        );
+        expect(sessionCookie).toBeDefined();
+        expect(sessionCookie).not.toMatch(/;\s*Secure/i);
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    });
   });
 });

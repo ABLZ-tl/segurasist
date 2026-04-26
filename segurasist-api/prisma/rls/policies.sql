@@ -36,6 +36,12 @@ GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO segurasist_admin;
 -- =========================================================================
 -- 2) Helper: enable RLS + crear políticas tenant-iso para cada tabla.
 --    (idempotente: drop policy if exists antes de crearla)
+--
+--    NOTA M2 — superadmin: `users.tenant_id` es NULLABLE. La política rejecta
+--    NULL como cualquier otro mismatch (NULL = current_setting → NULL → false)
+--    y eso es lo que queremos: el cliente normal `segurasist_app` jamás verá
+--    al superadmin desde un contexto tenant. El superadmin se lee con el rol
+--    `segurasist_admin` (BYPASSRLS) vía `PrismaBypassRlsService`.
 -- =========================================================================
 DO $$
 DECLARE

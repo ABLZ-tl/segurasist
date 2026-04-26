@@ -72,6 +72,84 @@ describe('EnvSchema', () => {
     expect(EnvSchema.safeParse({ ...VALID_ENV, COGNITO_ENDPOINT: 'not-a-url' }).success).toBe(false);
   });
 
+  // M4 — Cross-validation: footgun de COGNITO_ENDPOINT en producción.
+  describe('COGNITO_ENDPOINT prod-guard (M4)', () => {
+    it('NODE_ENV=production + COGNITO_ENDPOINT apuntando a un host atacante → falla', () => {
+      const r = EnvSchema.safeParse({
+        ...VALID_ENV,
+        NODE_ENV: 'production',
+        COGNITO_ENDPOINT: 'https://attacker.example/',
+      });
+      expect(r.success).toBe(false);
+      if (!r.success) {
+        const msg = r.error.issues.map((i) => i.message).join('|');
+        expect(msg).toMatch(/COGNITO_ENDPOINT con valor no-AWS/);
+        expect(msg).toMatch(/https:\/\/attacker\.example\//);
+      }
+    });
+
+    it('NODE_ENV=production + COGNITO_ENDPOINT cognito-idp AWS (con path) → ok', () => {
+      const r = EnvSchema.safeParse({
+        ...VALID_ENV,
+        NODE_ENV: 'production',
+        COGNITO_ENDPOINT: 'https://cognito-idp.mx-central-1.amazonaws.com/foo',
+      });
+      expect(r.success).toBe(true);
+    });
+
+    it('NODE_ENV=production + COGNITO_ENDPOINT undefined → ok (default AWS)', () => {
+      const env: Record<string, string | undefined> = { ...VALID_ENV, NODE_ENV: 'production' };
+      delete env.COGNITO_ENDPOINT;
+      const r = EnvSchema.safeParse(env);
+      expect(r.success).toBe(true);
+    });
+
+    it('NODE_ENV=development + COGNITO_ENDPOINT cognito-local → ok', () => {
+      const r = EnvSchema.safeParse({
+        ...VALID_ENV,
+        NODE_ENV: 'development',
+        COGNITO_ENDPOINT: 'http://0.0.0.0:9229/',
+      });
+      expect(r.success).toBe(true);
+    });
+
+    it('NODE_ENV=production + COGNITO_ENDPOINT con http (no https) cognito-idp → falla', () => {
+      const r = EnvSchema.safeParse({
+        ...VALID_ENV,
+        NODE_ENV: 'production',
+        COGNITO_ENDPOINT: 'http://cognito-idp.mx-central-1.amazonaws.com/',
+      });
+      expect(r.success).toBe(false);
+    });
+  });
+
+  describe('DATABASE_URL_BYPASS / DATABASE_URL_AUDIT (M2/M4)', () => {
+    it('ausente → ok (degradación documentada)', () => {
+      const env: Record<string, string | undefined> = { ...VALID_ENV };
+      delete env.DATABASE_URL_BYPASS;
+      delete env.DATABASE_URL_AUDIT;
+      const r = EnvSchema.safeParse(env);
+      expect(r.success).toBe(true);
+    });
+
+    it('presente con URL postgres válida → ok', () => {
+      const r = EnvSchema.safeParse({
+        ...VALID_ENV,
+        DATABASE_URL_BYPASS: 'postgresql://segurasist_admin:pwd@localhost:5432/segurasist',
+        DATABASE_URL_AUDIT: 'postgresql://segurasist_admin:pwd@localhost:5432/segurasist',
+      });
+      expect(r.success).toBe(true);
+    });
+
+    it('presente pero NO postgres → falla', () => {
+      const r = EnvSchema.safeParse({
+        ...VALID_ENV,
+        DATABASE_URL_BYPASS: 'mysql://x:y@host/db',
+      });
+      expect(r.success).toBe(false);
+    });
+  });
+
   it('aplica defaults para NODE_ENV/PORT/HOST/LOG_LEVEL cuando faltan', () => {
     const minimal = { ...VALID_ENV };
     delete minimal.NODE_ENV;

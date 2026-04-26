@@ -153,14 +153,18 @@ describe('Auth E2E (admin flow contra cognito-local)', () => {
       id: string;
       email: string;
       role: string;
-      tenant: { id: string };
+      tenant: { id: string } | null;
+      tenantId: string | null;
+      pool: 'admin' | 'insured' | null;
     };
     expect(body.email).toBe(ADMIN_EMAIL);
     expect(body.role).toBe('admin_mac');
     expect(typeof body.id).toBe('string');
-    expect(body.tenant.id).toMatch(
+    expect(body.tenantId).toMatch(
       /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/,
     );
+    // H3 — admin_mac vive en el pool admin.
+    expect(body.pool).toBe('admin');
   }, 30_000);
 
   it('POST /v1/auth/logout con bearer válido → 204 (revoca refresh, sin body)', async () => {

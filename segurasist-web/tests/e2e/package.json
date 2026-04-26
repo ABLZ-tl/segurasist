@@ -3,7 +3,11 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "test": "playwright test --config=./playwright.config.ts"
+    "test": "playwright test --config=./playwright.config.ts",
+    "test:ui": "playwright test --config=./playwright.config.ts --ui",
+    "test:no-webserver": "PLAYWRIGHT_NO_WEBSERVER=1 playwright test --config=./playwright.config.ts",
+    "test:headed": "playwright test --config=./playwright.config.ts --headed",
+    "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
     "@axe-core/playwright": "4.9.1",
