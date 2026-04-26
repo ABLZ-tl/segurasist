@@ -28,6 +28,16 @@ interface ProblemDetails {
 export const dynamic = 'force-dynamic';
 
 export default function AdminLoginPage(): JSX.Element {
+  // useSearchParams() requires a Suspense boundary during static prerender,
+  // even on dynamic pages — Next.js 14 enforces this at build time.
+  return (
+    <React.Suspense fallback={<div className="min-h-screen bg-bg" aria-hidden />}>
+      <LoginForm />
+    </React.Suspense>
+  );
+}
+
+function LoginForm(): JSX.Element {
   const router = useRouter();
   const searchParams = useSearchParams();
   const nextPath = searchParams.get('next') ?? '/dashboard';

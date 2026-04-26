@@ -1,8 +1,10 @@
 import Link from 'next/link';
+import type { Route } from 'next';
+import type { LucideIcon } from 'lucide-react';
 import { ChatWidget } from '@segurasist/ui';
 import { Home, ShieldCheck, FileText, HelpCircle } from 'lucide-react';
 
-const NAV = [
+const NAV: Array<{ href: Route; label: string; icon: LucideIcon }> = [
   { href: '/', label: 'Inicio', icon: Home },
   { href: '/coverages', label: 'Coberturas', icon: ShieldCheck },
   { href: '/certificate', label: 'Certificado', icon: FileText },

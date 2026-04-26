@@ -20,7 +20,7 @@
     "lint": "eslint \"src/**/*.{ts,tsx}\"",
     "typecheck": "tsc --noEmit",
     "openapi:gen": "openapi-typescript ${OPENAPI_URL:-https://api.segurasist.app/openapi.json} -o ./src/generated/openapi.d.ts",
-    "test:unit": "vitest run"
+    "test:unit": "vitest run --passWithNoTests"
   },
   "dependencies": {
     "@tanstack/react-query": "5.51.11",

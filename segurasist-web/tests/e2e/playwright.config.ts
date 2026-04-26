@@ -1,7 +1,7 @@
 import { defineConfig, devices } from '@playwright/test';
 
-const ADMIN_URL = process.env['ADMIN_BASE_URL'] ?? 'http://localhost:3000';
-const PORTAL_URL = process.env['PORTAL_BASE_URL'] ?? 'http://localhost:3001';
+const ADMIN_URL = process.env['ADMIN_BASE_URL'] ?? 'http://localhost:3001';
+const PORTAL_URL = process.env['PORTAL_BASE_URL'] ?? 'http://localhost:3002';
 
 export default defineConfig({
   testDir: './specs',

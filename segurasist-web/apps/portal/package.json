@@ -8,7 +8,7 @@
     "start": "next start -p 3002",
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
-    "test:unit": "vitest run",
+    "test:unit": "vitest run --passWithNoTests",
     "lighthouse": "lhci autorun --config=lighthouserc.js"
   },
   "dependencies": {
