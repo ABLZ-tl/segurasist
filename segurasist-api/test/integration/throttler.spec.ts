@@ -30,6 +30,7 @@ import { Throttle } from '../../src/common/throttler/throttler.decorators';
 import {
   THROTTLER_DEFAULT_TOKEN,
   THROTTLER_STORAGE_TOKEN,
+  THROTTLER_TENANT_DEFAULT_TOKEN,
   ThrottlerGuard,
 } from '../../src/common/throttler/throttler.guard';
 import type { ThrottleConfig, ThrottlerStorage } from '../../src/common/throttler/throttler.types';
@@ -66,6 +67,14 @@ class FakeAuthController {
   controllers: [FakeAuthController],
   providers: [
     { provide: THROTTLER_DEFAULT_TOKEN, useValue: { ttl: 60_000, limit: 60 } as ThrottleConfig },
+    // S3-10 — el guard ahora requiere también un tenant-default. En este
+    // suite no hay req.tenant (FakeAuthController es @Public), así que el
+    // bucket tenant es no-op; igual hay que registrar el provider para que
+    // Nest pueda resolver el constructor.
+    {
+      provide: THROTTLER_TENANT_DEFAULT_TOKEN,
+      useValue: { ttl: 60_000, limit: 1000 } as ThrottleConfig,
+    },
     { provide: THROTTLER_STORAGE_TOKEN, useClass: InMemoryStorage },
     { provide: APP_GUARD, useClass: ThrottlerGuard },
     { provide: APP_FILTER, useClass: HttpExceptionFilter },

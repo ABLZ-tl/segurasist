@@ -1,5 +1,5 @@
 import type { RedisService } from '@infra/cache/redis.service';
-import { ThrottlerRedisStorage } from './throttler-redis.storage';
+import { buildTenantKey, ThrottlerRedisStorage } from './throttler-redis.storage';
 
 interface FakeMulti {
   incr(key: string): FakeMulti;
@@ -106,5 +106,56 @@ describe('ThrottlerRedisStorage', () => {
     expect(out.totalHits).toBe(3);
     expect(out.timeToExpireMs).toBe(60_000);
     expect(pexpire).toHaveBeenCalledTimes(1);
+  });
+
+  // S3-10 — helper de tenant key
+  describe('buildTenantKey', () => {
+    it('compone "<route>|t:<tenantId>" con prefix tenant agnóstico de IP', () => {
+      const k = buildTenantKey('tenant-foo', 'POST:/v1/batches');
+      expect(k).toBe('POST:/v1/batches|t:tenant-foo');
+      // No debe contener prefijos user/IP — separación clara para `redis-cli KEYS t:*`.
+      expect(k).not.toContain('u:');
+      expect(k).not.toContain('ip:');
+    });
+
+    it('genera keys distintas por route (mismo tenant) — buckets independientes', () => {
+      const k1 = buildTenantKey('tenant-foo', 'POST:/v1/batches');
+      const k2 = buildTenantKey('tenant-foo', 'POST:/v1/insureds/export');
+      expect(k1).not.toBe(k2);
+    });
+  });
+
+  describe('increment + expire para keys tenant-level (S3-10)', () => {
+    it('primer hit en una tenant key fija PEXPIRE con el ttl del tenantConfig', async () => {
+      const { redis, pexpire } = buildFakeRedis({
+        incrSequence: [1],
+        pttlSequence: [-1],
+      });
+      const storage = new ThrottlerRedisStorage(redis);
+      const tenantKey = buildTenantKey('tenant-foo', 'POST:/v1/batches');
+      const out = await storage.increment(tenantKey, 60_000);
+      expect(out.totalHits).toBe(1);
+      expect(out.timeToExpireMs).toBe(60_000);
+      expect(pexpire).toHaveBeenCalledTimes(1);
+      // Validar que la redisKey final lleva el prefijo `throttle:` y la
+      // tenant key como subcomponente — sirve de smoke-test del namespacing.
+      const calledWith = (pexpire.mock.calls[0]?.[0] ?? '') as string;
+      expect(calledWith.startsWith('throttle:')).toBe(true);
+      expect(calledWith.includes('t:tenant-foo')).toBe(true);
+    });
+
+    it('hits subsecuentes en una tenant key conservan el TTL existente', async () => {
+      const { redis, pexpire } = buildFakeRedis({
+        incrSequence: [5],
+        pttlSequence: [38_000],
+      });
+      const storage = new ThrottlerRedisStorage(redis);
+      const tenantKey = buildTenantKey('tenant-bar', 'POST:/v1/batches');
+      const out = await storage.increment(tenantKey, 60_000);
+      expect(out.totalHits).toBe(5);
+      expect(out.timeToExpireMs).toBe(38_000);
+      // PEXPIRE NO se vuelve a llamar — TTL ya en curso.
+      expect(pexpire).not.toHaveBeenCalled();
+    });
   });
 });

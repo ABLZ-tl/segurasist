@@ -21,7 +21,10 @@ export interface EmailTemplatePair {
 
 const TEMPLATES_DIR = path.resolve(__dirname, 'templates');
 const CACHE_TTL_MS = 5 * 60 * 1000;
-const KNOWN: ReadonlySet<string> = new Set(['certificate-issued']);
+// `otp-code` lo usa AuthService para los emails de OTP del portal asegurado
+// (Sprint 3 / S3-01). El resolver es agnóstico: el caller pide la plantilla por
+// nombre y nosotros validamos contra esta allow-list para evitar path traversal.
+const KNOWN: ReadonlySet<string> = new Set(['certificate-issued', 'otp-code']);
 
 interface CacheEntry {
   pair: EmailTemplatePair;

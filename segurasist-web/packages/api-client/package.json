@@ -7,6 +7,7 @@
   "types": "./src/index.ts",
   "exports": {
     ".": "./src/index.ts",
+    "./src/client": "./src/client.ts",
     "./hooks/insureds": "./src/hooks/insureds.ts",
     "./hooks/batches": "./src/hooks/batches.ts",
     "./hooks/certificates": "./src/hooks/certificates.ts",
@@ -14,7 +15,8 @@
     "./hooks/reports": "./src/hooks/reports.ts",
     "./hooks/dashboard": "./src/hooks/dashboard.ts",
     "./hooks/chat": "./src/hooks/chat.ts",
-    "./hooks/auth": "./src/hooks/auth.ts"
+    "./hooks/auth": "./src/hooks/auth.ts",
+    "./hooks/exports": "./src/hooks/exports.ts"
   },
   "files": ["src"],
   "scripts": {

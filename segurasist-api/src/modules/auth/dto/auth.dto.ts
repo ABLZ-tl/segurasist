@@ -11,9 +11,14 @@ export const LoginSchema = z.union([
 ]);
 export type LoginDto = z.infer<typeof LoginSchema>;
 
+/**
+ * OTP request — el `channel` es opcional con default `email`. SMS está disponible
+ * a nivel de validación pero el adapter de salida (CognitoService.startInsuredOtp)
+ * fallbacks a email mientras Pinpoint no esté cableado (S5).
+ */
 export const OtpRequestSchema = z.object({
   curp: z.string().regex(/^[A-Z]{4}\d{6}[HM][A-Z]{5}[A-Z0-9]\d$/),
-  channel: z.enum(['email', 'sms']),
+  channel: z.enum(['email', 'sms']).optional().default('email'),
 });
 export type OtpRequestDto = z.infer<typeof OtpRequestSchema>;
 

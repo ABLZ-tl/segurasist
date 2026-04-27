@@ -129,6 +129,13 @@ export class AuditInterceptor implements NestInterceptor {
         const ip = (req.ip || '').toString() || undefined;
         const userAgent = req.headers['user-agent'] ?? undefined;
         const traceId = (req.id as string | undefined) ?? undefined;
+        // S3-08 — si el request fue marcado por el JwtAuthGuard como override,
+        // enriquecemos el payloadDiff para que el row del audit_log refleje
+        // explícitamente que fue una operación cross-tenant del superadmin.
+        // Visible en vista 360 admin.
+        const tenantOverride = (
+          req as unknown as { tenantOverride?: { active: boolean; overrideTenant: string } }
+        ).tenantOverride;
 
         const action = methodToAction(method, url);
         const resourceType = extractResourceType(url);
@@ -141,6 +148,10 @@ export class AuditInterceptor implements NestInterceptor {
         if (body !== undefined && body !== null) payloadDiff.body = redact(body);
         if (query && Object.keys(query as Record<string, unknown>).length > 0) {
           payloadDiff.query = redact(query);
+        }
+        if (tenantOverride?.active === true) {
+          payloadDiff._overrideTenant = tenantOverride.overrideTenant;
+          payloadDiff._overriddenBy = 'admin_segurasist';
         }
 
         // Log a pino siempre — es la fuente de verdad para CloudWatch → S3.

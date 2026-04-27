@@ -1,17 +1,12 @@
-import {
-  Avatar,
-  AvatarFallback,
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@segurasist/ui';
+import { Avatar, AvatarFallback } from '@segurasist/ui';
 import { ThemeToggle } from '../_components/theme-toggle';
 import { SidebarNav } from '../_components/sidebar-nav';
 import { CommandKTrigger } from '../_components/command-k-trigger';
 import { MobileDrawer } from '../_components/mobile-drawer';
 import { MobileSearchTrigger } from '../_components/mobile-search-trigger';
+import { TenantSwitcher } from '../../components/header/tenant-switcher';
+import { TenantOverrideBridge } from '../../components/header/tenant-override-bridge';
+import { TenantOverrideBanner } from '../../components/layout/tenant-override-banner';
 import { ROLE_LABEL } from '../../lib/rbac';
 import { fetchMe } from '../../lib/auth-server';
 
@@ -45,6 +40,8 @@ export default async function AppLayout({ children }: { children: React.ReactNod
 
   return (
     <div className="flex min-h-screen flex-col bg-bg">
+      {/* S3-08 — registra el getter del store Zustand en el wrapper api-client. */}
+      <TenantOverrideBridge />
       <header
         className="sticky top-0 z-30 flex h-14 items-center justify-between gap-2 border-b border-border bg-bg/80 px-3 backdrop-blur-md sm:gap-4 sm:px-4 lg:px-6"
         style={{ paddingTop: 'env(safe-area-inset-top)' }}
@@ -63,17 +60,8 @@ export default async function AppLayout({ children }: { children: React.ReactNod
             <span>SegurAsist</span>
           </a>
           <span className="hidden h-4 w-px bg-border lg:inline-block" />
-          <div className="hidden w-48 lg:block">
-            <Select defaultValue="mac">
-              <SelectTrigger aria-label="Cambiar tenant" className="h-8 text-[13px]">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="mac">Hospitales MAC</SelectItem>
-                <SelectItem value="demo">Demo Tenant</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
+          {/* S3-08 — switcher real (admin_segurasist) o read-only para los demás. */}
+          <TenantSwitcher role={me.role} ownTenantLabel={me.tenantId ?? undefined} />
         </div>
 
         <div className="hidden flex-1 justify-center lg:flex">
@@ -96,6 +84,9 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           </Avatar>
         </div>
       </header>
+
+      {/* S3-08 — banner amber persistente cuando el switcher está activo. */}
+      <TenantOverrideBanner />
 
       <div className="flex flex-1">
         <aside className="hidden w-60 shrink-0 border-r border-border bg-bg lg:block">

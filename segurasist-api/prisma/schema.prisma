@@ -163,6 +163,20 @@ enum AuditAction {
   @@map("audit_action")
 }
 
+/// S3-09 — Estado del job asíncrono de export. Transiciones legales:
+///   pending → processing → ready
+///   pending → processing → failed
+/// El worker no permite retroceder estados; un job failed se descarta
+/// (el user puede re-disparar uno nuevo).
+enum ExportStatus {
+  pending
+  processing
+  ready
+  failed
+
+  @@map("export_status")
+}
+
 // ============== MODELS ==============
 
 model Tenant {
@@ -189,6 +203,7 @@ model Tenant {
   chatMessages  ChatMessage[]
   chatKb        ChatKb[]
   auditLogs     AuditLog[]
+  exports       Export[]
 
   @@index([status])
   @@map("tenants")
@@ -544,4 +559,52 @@ model AuditLog {
   @@index([tenantId, resourceType, resourceId])
   @@index([tenantId, actorId])
   @@map("audit_log")
+}
+
+/// S3-09 — Job asíncrono de exportación XLSX/PDF de listados (insureds).
+///
+/// Lifecycle:
+///   1. Controller persiste fila con `status='pending'`, encola SQS
+///      `reports-queue` y devuelve `{exportId}` al cliente.
+///   2. Worker (`ReportsWorkerService`) leee SQS, marca `status='processing'`,
+///      genera el archivo, sube a S3 (SSE-KMS), calcula SHA-256, persiste
+///      `s3_key`, `hash`, `row_count` y marca `status='ready'`.
+///   3. Cliente polea `GET /v1/exports/:id`; cuando `ready`, recibe
+///      `downloadUrl` (presigned 24h) + `expiresAt`.
+///
+/// Anti-abuso (PII):
+///   - Rate limit a nivel controller (1/min por user; 10/día por tenant).
+///   - Audit log obligatorio en request + completed.
+///   - Filename excluye IDs internos (cognito_sub, exportId).
+///   - Hash SHA-256 persistido para verificar integridad post-descarga.
+///
+/// Lectura: el endpoint GET filtra adicionalmente por `requested_by = user.id`
+/// (cada user sólo ve sus propios exports). Los superadmins pueden inspeccionar
+/// cross-user vía `PrismaBypassRlsService` (no expuesto en MVP).
+model Export {
+  id          String       @id @db.Uuid
+  tenantId    String       @map("tenant_id") @db.Uuid
+  requestedBy String       @map("requested_by") @db.Uuid
+  /// Tipo de export. En MVP sólo `insureds`. CHECK constraint en migración.
+  kind        String       @db.Text
+  /// Formato de salida. CHECK constraint en migración (xlsx | pdf).
+  format      String       @db.Text
+  /// Snapshot inmutable de los filtros aplicados. Reproducibilidad + forensics.
+  filters     Json         @default("{}")
+  status      ExportStatus @default(pending)
+  rowCount    Int?         @map("row_count")
+  s3Key       String?      @map("s3_key") @db.Text
+  /// SHA-256 hex del archivo final. Permite que el cliente valide integridad
+  /// recomputando contra el archivo descargado.
+  hash        String?      @db.Text
+  error       String?      @db.Text
+  requestedAt DateTime     @default(now()) @map("requested_at") @db.Timestamptz(3)
+  completedAt DateTime?    @map("completed_at") @db.Timestamptz(3)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  @@index([tenantId, status], map: "exports_tenant_status_idx")
+  @@index([tenantId, requestedBy, requestedAt(sort: Desc)], map: "exports_requester_idx")
+  @@index([tenantId, requestedAt(sort: Desc)], map: "exports_tenant_requested_at_idx")
+  @@map("exports")
 }

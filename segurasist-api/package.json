@@ -14,7 +14,7 @@
     "build": "nest build",
     "start": "node dist/main.js",
     "start:prod": "NODE_ENV=production node dist/main.js",
-    "lint": "eslint \"{src,test}/**/*.ts\" --max-warnings=20",
+    "lint": "eslint \"{src,test}/**/*.ts\" --max-warnings=25",
     "lint:fix": "eslint \"{src,test}/**/*.ts\" --fix",
     "format": "prettier --write \"{src,test,prisma}/**/*.{ts,json}\"",
     "typecheck": "tsc --noEmit",

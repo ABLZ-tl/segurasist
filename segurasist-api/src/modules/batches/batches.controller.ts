@@ -4,6 +4,7 @@ import { Tenant, TenantCtx } from '@common/decorators/tenant.decorator';
 import { JwtAuthGuard } from '@common/guards/jwt-auth.guard';
 import { RolesGuard } from '@common/guards/roles.guard';
 import { ZodValidationPipe } from '@common/pipes/zod-validation.pipe';
+import { TenantThrottle } from '@common/throttler/throttler.decorators';
 import { detectFileType, DETECTED_MIME } from '@common/utils/file-magic-bytes';
 import {
   Body,
@@ -60,6 +61,11 @@ export class BatchesController {
 
   @Post()
   @Roles('admin_mac', 'operator', 'admin_segurasist')
+  // S3-10 — cap tenant-level del endpoint más caro del API (parser XLSX +
+  // S3 upload + dedup). Sin este cap, un tenant puede saturar el procesador
+  // batch desde múltiples IPs distintas (call-center scraping cross-tenant).
+  // 100 req/min/tenant = 1.67 batches/seg = >> que la operativa real (~5/día).
+  @TenantThrottle({ ttl: 60_000, limit: 100 })
   async upload(@Req() req: FastifyRequest, @Tenant() tenant: TenantCtx, @CurrentUser() user: AuthUser) {
     // multipart parsing handled by @fastify/multipart; service stub for sprint 0.
     const file = await (

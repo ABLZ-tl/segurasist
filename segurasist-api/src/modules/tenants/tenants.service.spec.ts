@@ -22,6 +22,21 @@ describe('TenantsService (M2 — superadmin via PrismaBypassRlsService)', () => 
     };
   }
 
+  it('listActive() devuelve sólo tenants activos con id/name/slug (S3-08)', async () => {
+    const rows = [
+      { id: 't1', name: 'Hospitales MAC', slug: 'mac' },
+      { id: 't2', name: 'Demo', slug: 'demo' },
+    ];
+    const { svc, findMany } = makeBypass({ enabled: true, rows });
+    const out = await svc.listActive();
+    expect(findMany).toHaveBeenCalledWith({
+      where: { deletedAt: null, status: 'active' },
+      orderBy: { name: 'asc' },
+      select: { id: true, name: true, slug: true },
+    });
+    expect(out).toEqual(rows);
+  });
+
   it('list() consulta tenants vía bypass client', async () => {
     const { svc, findMany } = makeBypass({ enabled: true, rows: [{ id: 't1' }, { id: 't2' }] });
     const out = await svc.list();

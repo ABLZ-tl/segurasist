@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <title>Tu código de acceso a Mi Membresía MAC</title>
+  </head>
+  <body style="margin:0;padding:0;background:#f4f6f8;font-family:Helvetica,Arial,sans-serif;color:#1a1a1a;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="padding:32px 0;">
+      <tr>
+        <td align="center">
+          <table role="presentation" width="600" cellpadding="0" cellspacing="0"
+                 style="background:#fff;border-radius:8px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,0.08);">
+            <tr>
+              <td style="padding:24px 32px;border-bottom:3px solid #0B5394;">
+                <h1 style="margin:0;font-size:18px;color:#0B5394;">Mi Membresía MAC</h1>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:32px;">
+                <h2 style="margin:0 0 16px;font-size:20px;">Hola {{insured.fullName}},</h2>
+                <p style="line-height:1.6;font-size:14px;">
+                  Recibimos una solicitud para iniciar sesión en tu portal. Usa el siguiente
+                  código de 6 dígitos para confirmar que eres tú. El código expira en 5 minutos.
+                </p>
+                <p style="margin:32px 0;text-align:center;">
+                  <span style="display:inline-block;background:#f4f6f8;color:#0B5394;
+                               padding:16px 32px;border-radius:8px;
+                               font-size:32px;letter-spacing:8px;font-weight:700;font-family:monospace;">
+                    {{code}}
+                  </span>
+                </p>
+                <p style="line-height:1.6;font-size:13px;color:#a94442;background:#fdecea;
+                          padding:12px;border-radius:6px;border-left:3px solid #a94442;">
+                  <strong>Importante:</strong> nunca compartas este código con nadie.
+                  El equipo de MAC nunca te lo pedirá por teléfono ni por mensaje.
+                </p>
+                <p style="line-height:1.6;font-size:12px;color:#666;margin-top:24px;">
+                  Si no solicitaste este código, ignora este correo. Tu cuenta sigue segura.
+                </p>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:16px 32px;background:#fafbfc;font-size:11px;color:#777;border-top:1px solid #e5e5e5;">
+                Este email fue enviado por SegurAsist en nombre de Hospitales MAC.
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>

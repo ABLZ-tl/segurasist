@@ -20,6 +20,8 @@ import Link from 'next/link';
 import { useInsureds } from '@segurasist/api-client/hooks/insureds';
 import { usePackages } from '@segurasist/api-client/hooks/packages';
 import type { Insured, ListParams } from '@segurasist/api-client';
+import { ExportButton } from '../../../components/insureds/export-button';
+import { useDebouncedValue } from '../../../lib/hooks/use-debounced-value';
 
 /**
  * S2-06 — Listado asegurados.
@@ -34,17 +36,13 @@ import type { Insured, ListParams } from '@segurasist/api-client';
  */
 export default function InsuredsPage() {
   const [searchInput, setSearchInput] = React.useState('');
-  const [debouncedSearch, setDebouncedSearch] = React.useState('');
+  // S3-07 — debounce 300ms via hook reutilizable. El hook hace .trim() en el
+  // page para que la representación URL/query sea estable.
+  const debouncedSearch = useDebouncedValue(searchInput.trim(), 300);
   const [packageId, setPackageId] = React.useState<string>('all');
   const [status, setStatus] = React.useState<string>('all');
   const [bouncedOnly, setBouncedOnly] = React.useState(false);
   const [cursorStack, setCursorStack] = React.useState<string[]>([]);
-
-  // Debounce 300ms (RF-203).
-  React.useEffect(() => {
-    const t = setTimeout(() => setDebouncedSearch(searchInput.trim()), 300);
-    return () => clearTimeout(t);
-  }, [searchInput]);
 
   // Reset paginación al cambiar filtros.
   React.useEffect(() => {
@@ -100,6 +98,30 @@ export default function InsuredsPage() {
   const hasNext = Boolean(data?.nextCursor);
   const hasPrev = cursorStack.length > 0;
 
+  // S3-09 — resumen de filtros para mostrar en el drawer del export.
+  const filtersSummary = React.useMemo(() => {
+    const parts: string[] = [];
+    if (debouncedSearch) parts.push(`Q="${debouncedSearch}"`);
+    if (packageId !== 'all') {
+      const name = (packages ?? []).find((p) => p.id === packageId)?.name ?? packageId;
+      parts.push(`Paquete=${name}`);
+    }
+    if (status !== 'all') parts.push(`Estado=${status}`);
+    if (bouncedOnly) parts.push('Solo bounce');
+    return parts.join(' · ');
+  }, [debouncedSearch, packageId, status, bouncedOnly, packages]);
+
+  // Filters payload para el export (subset de ListParams; sin cursor/limit).
+  const exportFilters = React.useMemo(
+    () => ({
+      ...(debouncedSearch ? { q: debouncedSearch } : {}),
+      ...(packageId !== 'all' ? { packageId } : {}),
+      ...(status !== 'all' ? { status: status as 'active' | 'suspended' | 'cancelled' | 'expired' } : {}),
+      ...(bouncedOnly ? { bouncedOnly: true } : {}),
+    }),
+    [debouncedSearch, packageId, status, bouncedOnly],
+  );
+
   return (
     <div className="space-y-4">
       <Section
@@ -107,6 +129,7 @@ export default function InsuredsPage() {
         description="Búsqueda y administración de membresías."
         actions={
           <div className="flex gap-2">
+            <ExportButton filters={exportFilters} filtersSummary={filtersSummary} />
             <Button variant="secondary" asChild>
               <Link href="/batches/new">
                 <Upload aria-hidden className="mr-2 h-4 w-4" />
@@ -170,6 +193,12 @@ export default function InsuredsPage() {
         </label>
       </div>
 
+      <div className="text-[13px] text-fg-muted" aria-live="polite">
+        {isLoading
+          ? 'Buscando...'
+          : `${items.length}${hasNext ? '+' : ''} resultado${items.length === 1 ? '' : 's'}`}
+      </div>
+
       {isError ? (
         <div className="rounded-lg border border-danger/30 bg-danger/10 p-4 text-[13px] text-danger">
           No pudimos cargar el listado. Intenta nuevamente.
@@ -181,8 +210,8 @@ export default function InsuredsPage() {
           rowKey={(r) => r.id}
           caption="Listado de asegurados"
           loading={isLoading}
-          emptyTitle="Sin asegurados"
-          emptyDescription="No hay asegurados con esos filtros"
+          emptyTitle="Sin resultados"
+          emptyDescription="Prueba ajustar los filtros."
         />
       )}
 

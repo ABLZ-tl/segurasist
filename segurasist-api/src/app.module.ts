@@ -4,6 +4,7 @@ import { TerminusModule } from '@nestjs/terminus';
 import { LoggerModule } from 'nestjs-pino';
 import { HealthController } from './common/health.controller';
 import { AuditInterceptor } from './common/interceptors/audit.interceptor';
+import { TenantOverrideAuditInterceptor } from './common/interceptors/tenant-override-audit.interceptor';
 import { PrismaModule } from './common/prisma/prisma.module';
 import { ThrottlerGuard } from './common/throttler/throttler.guard';
 import { ThrottlerModule } from './common/throttler/throttler.module';
@@ -118,6 +119,10 @@ import { WorkersModule } from './workers/workers.module';
     { provide: APP_GUARD, useClass: ThrottlerGuard },
     // H2 — interceptor global que persiste mutaciones en audit_log.
     { provide: APP_INTERCEPTOR, useClass: AuditInterceptor },
+    // S3-08 — interceptor global que registra `tenant.override.used` en cada
+    // request del superadmin con `X-Tenant-Override` (cubre los reads, donde
+    // el AuditInterceptor estándar no escribe nada).
+    { provide: APP_INTERCEPTOR, useClass: TenantOverrideAuditInterceptor },
   ],
 })
 export class AppModule {}

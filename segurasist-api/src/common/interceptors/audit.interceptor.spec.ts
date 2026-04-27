@@ -126,6 +126,29 @@ describe('AuditInterceptor (Sprint 1 — H2 persistencia)', () => {
     expect(logSpy).toHaveBeenCalled();
   });
 
+  it('S3-08: cuando req.tenantOverride.active=true, payloadDiff incluye _overrideTenant + _overriddenBy', async () => {
+    const writer = { record: jest.fn().mockResolvedValue(undefined) };
+    const interceptor = new AuditInterceptor(writer as never);
+    const ctx = mockHttpContext({
+      id: 'tid-ovr',
+      method: 'POST',
+      url: '/v1/insureds',
+      tenant: { id: 'tenant-impersonated' },
+      user: { id: 'super-1' },
+      tenantOverride: { active: true, overrideTenant: 'tenant-impersonated' },
+      ip: '8.8.8.8',
+      headers: { 'user-agent': 'ua' },
+      body: { fullName: 'X' },
+    });
+    const handler: CallHandler = { handle: () => of({ id: 'created' }) };
+    await firstValueFrom(interceptor.intercept(ctx, handler));
+    expect(writer.record).toHaveBeenCalledTimes(1);
+    const ev = writer.record.mock.calls[0][0];
+    expect(ev.payloadDiff._overrideTenant).toBe('tenant-impersonated');
+    expect(ev.payloadDiff._overriddenBy).toBe('admin_segurasist');
+    expect(ev.tenantId).toBe('tenant-impersonated');
+  });
+
   it('action mapping: DELETE → delete, PATCH → update, /reissue → reissue', async () => {
     const writer = { record: jest.fn().mockResolvedValue(undefined) };
 

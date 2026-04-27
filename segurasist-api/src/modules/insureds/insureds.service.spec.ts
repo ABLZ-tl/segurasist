@@ -1,4 +1,5 @@
 import type { PrismaBypassRlsService } from '@common/prisma/prisma-bypass-rls.service';
+import type { AuditWriterService } from '@modules/audit/audit-writer.service';
 import { ConflictException, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { mockDeep, type DeepMockProxy } from 'jest-mock-extended';
@@ -16,11 +17,13 @@ describe('InsuredsService', () => {
     svc: InsuredsService;
     prisma: ReturnType<typeof mockPrismaService>;
     bypass: DeepMockProxy<PrismaBypassRlsService>;
+    audit: DeepMockProxy<AuditWriterService>;
   } {
     const prisma = mockPrismaService();
     const bypass = mockDeep<PrismaBypassRlsService>();
-    const svc = new InsuredsService(prisma, bypass);
-    return { svc, prisma, bypass };
+    const audit = mockDeep<AuditWriterService>();
+    const svc = new InsuredsService(prisma, bypass, audit);
+    return { svc, prisma, bypass, audit };
   }
 
   describe('cursor codec', () => {
@@ -59,7 +62,7 @@ describe('InsuredsService', () => {
       expect(call?.take).toBe(51);
     });
 
-    it('aplica búsqueda fuzzy q en (fullName, curp, rfc)', async () => {
+    it('aplica búsqueda fuzzy q en (fullName, curp, rfc, metadata.numeroEmpleadoExterno)', async () => {
       const { svc, prisma } = build();
       prisma.client.insured.findMany.mockResolvedValue([] as never);
       prisma.client.certificate.findMany.mockResolvedValue([] as never);
@@ -67,8 +70,13 @@ describe('InsuredsService', () => {
       const call = prisma.client.insured.findMany.mock.calls[0]?.[0];
       expect((call?.where as { OR?: unknown }).OR).toBeDefined();
       const or = (call?.where as { OR: Array<Record<string, unknown>> }).OR;
-      expect(or.length).toBe(3);
+      // S3-07 — agregamos búsqueda en metadata.numeroEmpleadoExterno como
+      // proxy de "número de póliza".
+      expect(or.length).toBe(4);
       expect(or[0]).toMatchObject({ fullName: { contains: 'lopez', mode: 'insensitive' } });
+      expect(or[3]).toMatchObject({
+        metadata: { path: ['numeroEmpleadoExterno'], string_contains: 'lopez' },
+      });
     });
 
     it('mappea filas a InsuredListItem y nextCursor cuando hay más resultados', async () => {
@@ -248,6 +256,351 @@ describe('InsuredsService', () => {
       await svc.findOne('i1', { platformAdmin: true, actorId: 'super-1' });
       expect(prisma.client.insured.findFirst).not.toHaveBeenCalled();
       expect(bypass.client.insured.findFirst).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // S3-06 — Vista 360°.
+  // -------------------------------------------------------------------------
+  describe('find360', () => {
+    const insuredId = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa1';
+    const now = new Date('2026-04-25T12:00:00Z');
+    const baseInsured = {
+      id: insuredId,
+      tenantId: tenant.id,
+      curp: 'AAAA800101HDFRRR01',
+      rfc: null,
+      fullName: 'Carmen López',
+      dob: new Date('1980-01-01'),
+      email: 'carmen@example.com',
+      phone: '+525555555555',
+      packageId: 'p1',
+      validFrom: new Date('2026-01-01'),
+      validTo: new Date('2027-01-01'),
+      status: 'active' as const,
+      metadata: { entidad: 'CDMX', numeroEmpleadoExterno: 'EMP-1234' },
+      createdAt: now,
+      updatedAt: now,
+      package: { id: 'p1', name: 'Plan Plus' },
+      beneficiaries: [
+        {
+          id: 'b1',
+          fullName: 'Hijo López',
+          dob: new Date('2010-05-10'),
+          relationship: 'child',
+        },
+      ],
+    };
+
+    function seedFulfilledClient(prisma: ReturnType<typeof mockPrismaService>) {
+      prisma.client.insured.findFirst.mockResolvedValue(baseInsured as never);
+      prisma.client.coverage.findMany.mockResolvedValue([
+        {
+          id: 'cov1',
+          packageId: 'p1',
+          name: 'Consultas',
+          type: 'consultation',
+          limitCount: 12,
+          limitAmount: null,
+          createdAt: now,
+        },
+        {
+          id: 'cov2',
+          packageId: 'p1',
+          name: 'Estudios',
+          type: 'laboratory',
+          limitCount: null,
+          limitAmount: '5000.00',
+          createdAt: now,
+        },
+      ] as never);
+      prisma.client.claim.findMany.mockResolvedValue([
+        {
+          id: 'cl1',
+          insuredId,
+          type: 'consultation',
+          reportedAt: now,
+          description: 'Consulta de rutina',
+          status: 'reported',
+          amountEstimated: '350.00',
+        },
+      ] as never);
+      prisma.client.certificate.findMany.mockResolvedValue([
+        {
+          id: 'cert1',
+          insuredId,
+          version: 2,
+          issuedAt: now,
+          validTo: new Date('2027-01-01'),
+          status: 'issued',
+          hash: 'abc',
+          qrPayload: 'qr-1',
+        },
+      ] as never);
+      prisma.client.auditLog.findMany.mockResolvedValue([
+        {
+          id: 'au1',
+          action: 'read',
+          actorId: 'u-actor-1',
+          resourceType: 'insureds',
+          resourceId: insuredId,
+          ip: '10.0.0.1',
+          occurredAt: now,
+          payloadDiff: { subAction: 'viewed_360' },
+        },
+      ] as never);
+      prisma.client.coverageUsage.findMany.mockResolvedValue([
+        { id: 'u1', insuredId, coverageId: 'cov1', usedAt: now, amount: null },
+        { id: 'u2', insuredId, coverageId: 'cov1', usedAt: now, amount: null },
+        { id: 'u3', insuredId, coverageId: 'cov2', usedAt: now, amount: '120.50' },
+      ] as never);
+      prisma.client.user.findMany.mockResolvedValue([{ id: 'u-actor-1', email: 'op@mac.local' }] as never);
+    }
+
+    it('happy path: arma las 5 secciones en paralelo y mappea Decimal/dates', async () => {
+      const { svc, prisma } = build();
+      seedFulfilledClient(prisma);
+
+      const out = await svc.find360(insuredId, scope);
+
+      // 1) Insured base.
+      expect(out.insured.id).toBe(insuredId);
+      expect(out.insured.dob).toBe('1980-01-01');
+      expect(out.insured.packageName).toBe('Plan Plus');
+      expect(out.insured.entidad).toBe('CDMX');
+      expect(out.insured.numeroEmpleadoExterno).toBe('EMP-1234');
+      expect(out.insured.beneficiaries).toHaveLength(1);
+      expect(out.insured.beneficiaries[0]?.relationship).toBe('child');
+
+      // 2) Coberturas con consumo agregado.
+      expect(out.coverages).toHaveLength(2);
+      const consultas = out.coverages.find((c) => c.id === 'cov1');
+      expect(consultas?.type).toBe('count');
+      expect(consultas?.limit).toBe(12);
+      expect(consultas?.used).toBe(2); // 2 usages count.
+      const estudios = out.coverages.find((c) => c.id === 'cov2');
+      expect(estudios?.type).toBe('amount');
+      expect(estudios?.limit).toBe(5000);
+      expect(estudios?.used).toBeCloseTo(120.5);
+
+      // 3) Eventos = claims.
+      expect(out.events).toHaveLength(1);
+      expect(out.events[0]?.amountEstimated).toBe(350);
+
+      // 4) Certificados.
+      expect(out.certificates).toHaveLength(1);
+      expect(out.certificates[0]?.version).toBe(2);
+
+      // 5) Audit con email del actor hidratado.
+      expect(out.audit).toHaveLength(1);
+      expect(out.audit[0]?.actorEmail).toBe('op@mac.local');
+      expect(out.audit[0]?.payloadDiff).toEqual({ subAction: 'viewed_360' });
+    });
+
+    it('lanza NotFoundException si el insured no existe (anti-enumeration)', async () => {
+      const { svc, prisma } = build();
+      prisma.client.insured.findFirst.mockResolvedValue(null);
+      await expect(svc.find360(insuredId, scope)).rejects.toThrow(NotFoundException);
+    });
+
+    it('persiste audit log con action=read y subAction=viewed_360', async () => {
+      const { svc, prisma, audit } = build();
+      seedFulfilledClient(prisma);
+      await svc.find360(insuredId, scope, { ip: '189.1.2.3', userAgent: 'jest', traceId: 't1' });
+      expect(audit.record).toHaveBeenCalledTimes(1);
+      const evt = audit.record.mock.calls[0]?.[0];
+      expect(evt).toMatchObject({
+        tenantId: tenant.id,
+        actorId: 'u1',
+        action: 'read',
+        resourceType: 'insureds',
+        resourceId: insuredId,
+        ip: '189.1.2.3',
+        userAgent: 'jest',
+        traceId: 't1',
+        payloadDiff: { subAction: 'viewed_360' },
+      });
+    });
+
+    it('una query secundaria que falle (allSettled) NO bloquea el resto: devuelve [] en esa sección', async () => {
+      const { svc, prisma } = build();
+      seedFulfilledClient(prisma);
+      // Forzamos un fallo en audit (ej. timeout / disconnect).
+      prisma.client.auditLog.findMany.mockRejectedValue(new Error('PG timeout audit'));
+
+      const out = await svc.find360(insuredId, scope);
+      expect(out.audit).toEqual([]);
+      // El resto se mantiene poblado.
+      expect(out.coverages.length).toBeGreaterThan(0);
+      expect(out.events.length).toBeGreaterThan(0);
+      expect(out.certificates.length).toBeGreaterThan(0);
+    });
+
+    it('cross-tenant: scope tenant-scoped → SOLO usa client RLS (prisma), nunca bypass', async () => {
+      const { svc, prisma, bypass } = build();
+      seedFulfilledClient(prisma);
+      await svc.find360(insuredId, scope);
+      expect(bypass.client.insured.findFirst).not.toHaveBeenCalled();
+      expect(prisma.client.insured.findFirst).toHaveBeenCalledTimes(1);
+    });
+
+    it('platformAdmin=true: usa bypass client', async () => {
+      const { svc, prisma, bypass } = build();
+      bypass.client.insured.findFirst.mockResolvedValue(baseInsured as never);
+      bypass.client.coverage.findMany.mockResolvedValue([] as never);
+      bypass.client.claim.findMany.mockResolvedValue([] as never);
+      bypass.client.certificate.findMany.mockResolvedValue([] as never);
+      bypass.client.auditLog.findMany.mockResolvedValue([] as never);
+      bypass.client.coverageUsage.findMany.mockResolvedValue([] as never);
+      bypass.client.user.findMany.mockResolvedValue([] as never);
+
+      await svc.find360(insuredId, { platformAdmin: true, actorId: 'super-1' });
+      expect(prisma.client.insured.findFirst).not.toHaveBeenCalled();
+      expect(bypass.client.insured.findFirst).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // S3-09 — Exportación XLSX/PDF.
+  // exportRequest debe persistir la fila + encolar SQS + audit.
+  // findExport debe filtrar por requestedBy + retornar presigned cuando ready.
+  // ---------------------------------------------------------------------------
+  describe('exportRequest / findExport', () => {
+    const ENV_FAKE: { SQS_QUEUE_REPORTS: string; S3_BUCKET_EXPORTS: string } = {
+      SQS_QUEUE_REPORTS: 'http://localhost:4566/000000000000/reports-queue',
+      S3_BUCKET_EXPORTS: 'segurasist-dev-exports',
+    };
+    const actor = { id: 'u1', ip: '127.0.0.1', userAgent: 'jest', traceId: 't1' };
+
+    function buildExport(): {
+      svc: InsuredsService;
+      prisma: ReturnType<typeof mockPrismaService>;
+      sqs: { sendMessage: jest.Mock };
+      s3: { getPresignedGetUrl: jest.Mock };
+      audit: DeepMockProxy<AuditWriterService>;
+    } {
+      const prisma = mockPrismaService();
+      const bypass = mockDeep<PrismaBypassRlsService>();
+      const audit = mockDeep<AuditWriterService>();
+      const sqs = { sendMessage: jest.fn().mockResolvedValue('msg-id') };
+      const s3 = { getPresignedGetUrl: jest.fn().mockResolvedValue('https://s3.local/signed') };
+      const svc = new InsuredsService(prisma, bypass, audit, sqs as never, s3 as never, ENV_FAKE as never);
+      // El INSERT pasa por withTenant — devolvemos lo que crea el callback.
+      prisma.withTenant.mockImplementation(async (fn: (tx: never) => Promise<unknown>) =>
+        fn({ export: { create: jest.fn().mockResolvedValue({}) } } as never),
+      );
+      return { svc, prisma, sqs, s3, audit };
+    }
+
+    it('exportRequest persiste fila + encola SQS + audit', async () => {
+      const { svc, sqs, audit } = buildExport();
+      const out = await svc.exportRequest('xlsx', { status: 'active' }, tenant, actor);
+      expect(out.exportId).toMatch(/^[0-9a-f-]{36}$/);
+      expect(out.status).toBe('pending');
+      expect(sqs.sendMessage).toHaveBeenCalledTimes(1);
+      const [queueUrl, body] = sqs.sendMessage.mock.calls[0]!;
+      expect(queueUrl).toBe(ENV_FAKE.SQS_QUEUE_REPORTS);
+      expect(body).toMatchObject({ kind: 'export.requested', format: 'xlsx', tenantId: tenant.id });
+      expect(audit.record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'export',
+          resourceType: 'insureds',
+          payloadDiff: expect.objectContaining({ subAction: 'requested', format: 'xlsx' }),
+        }),
+      );
+    });
+
+    it('exportRequest sin SQS injection lanza ForbiddenException', async () => {
+      const prisma = mockPrismaService();
+      const bypass = mockDeep<PrismaBypassRlsService>();
+      const svc = new InsuredsService(prisma, bypass);
+      await expect(svc.exportRequest('xlsx', {}, tenant, actor)).rejects.toThrow(
+        'Export subsystem not available',
+      );
+    });
+
+    it('findExport rechaza si requestedBy no matchea (anti-leak inter-operador)', async () => {
+      const { svc, prisma } = buildExport();
+      prisma.client.export.findFirst.mockResolvedValue(null as never);
+      await expect(
+        svc.findExport('00000000-0000-0000-0000-000000000099', tenant, { id: 'u-otra' }),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('findExport con status=ready devuelve downloadUrl + expiresAt 24h', async () => {
+      const { svc, prisma, s3 } = buildExport();
+      const expId = '11111111-1111-1111-1111-111111111122';
+      prisma.client.export.findFirst.mockResolvedValue({
+        id: expId,
+        tenantId: tenant.id,
+        requestedBy: actor.id,
+        status: 'ready',
+        format: 'xlsx',
+        rowCount: 42,
+        s3Key: `exports/${tenant.id}/${expId}.xlsx`,
+        hash: 'a'.repeat(64),
+        error: null,
+        requestedAt: new Date('2026-04-25T10:00:00Z'),
+        completedAt: new Date('2026-04-25T10:00:08Z'),
+      } as never);
+      const out = await svc.findExport(expId, tenant, actor);
+      expect(out.status).toBe('ready');
+      expect(out.downloadUrl).toBe('https://s3.local/signed');
+      expect(out.hash).toBe('a'.repeat(64));
+      expect(out.rowCount).toBe(42);
+      expect(s3.getPresignedGetUrl).toHaveBeenCalledWith(
+        ENV_FAKE.S3_BUCKET_EXPORTS,
+        `exports/${tenant.id}/${expId}.xlsx`,
+        24 * 60 * 60,
+      );
+      // Expira en ~24h.
+      const exp = new Date(out.expiresAt as string).getTime();
+      const now = Date.now();
+      expect(exp - now).toBeGreaterThan(23 * 60 * 60 * 1000);
+      expect(exp - now).toBeLessThanOrEqual(24 * 60 * 60 * 1000 + 1000);
+    });
+
+    it('findExport con status=pending NO devuelve downloadUrl', async () => {
+      const { svc, prisma, s3 } = buildExport();
+      const expId = '11111111-1111-1111-1111-111111111133';
+      prisma.client.export.findFirst.mockResolvedValue({
+        id: expId,
+        tenantId: tenant.id,
+        requestedBy: actor.id,
+        status: 'pending',
+        format: 'pdf',
+        rowCount: null,
+        s3Key: null,
+        hash: null,
+        error: null,
+        requestedAt: new Date(),
+        completedAt: null,
+      } as never);
+      const out = await svc.findExport(expId, tenant, actor);
+      expect(out.status).toBe('pending');
+      expect(out.downloadUrl).toBeUndefined();
+      expect(s3.getPresignedGetUrl).not.toHaveBeenCalled();
+    });
+
+    it('findExport defense-in-depth: rechaza export con tenantId distinto del JWT', async () => {
+      const { svc, prisma } = buildExport();
+      const expId = '11111111-1111-1111-1111-111111111144';
+      // Si por algún bug RLS dejara pasar la fila, el chequeo explícito tiene
+      // que cortarla → 404.
+      prisma.client.export.findFirst.mockResolvedValue({
+        id: expId,
+        tenantId: '99999999-9999-9999-9999-999999999999',
+        requestedBy: actor.id,
+        status: 'pending',
+        format: 'xlsx',
+        rowCount: null,
+        s3Key: null,
+        hash: null,
+        error: null,
+        requestedAt: new Date(),
+        completedAt: null,
+      } as never);
+      await expect(svc.findExport(expId, tenant, actor)).rejects.toThrow(NotFoundException);
     });
   });
 });

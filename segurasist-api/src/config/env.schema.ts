@@ -141,6 +141,30 @@ export const EnvSchema = z
      * explícito.
      */
     MFA_ENFORCEMENT: z.enum(['strict', 'log', 'off']).optional(),
+
+    /**
+     * S3-01 — Portal asegurado.
+     * Password compartida que el bootstrap de cognito-local le pone a todos los
+     * insureds del pool. AuthService la usa para invocar AdminInitiateAuth tras
+     * verificar el OTP en nuestro propio Redis. En producción este flujo se
+     * reemplaza por CUSTOM_AUTH (cognito Lambda triggers); en MVP/dev local es
+     * el atajo más simple sin perder seguridad: el atacante necesita el OTP que
+     * jamás abandona el correo del titular.
+     */
+    INSURED_DEFAULT_PASSWORD: z.string().min(8).default('Demo123!'),
+
+    /**
+     * S3-01 — TTL del OTP en Redis. 5 minutos es el balance recomendado por
+     * NIST SP 800-63B (>=60s, <=10min). Se mantiene como env override para
+     * poder bajarlo a 60s en pentests.
+     */
+    OTP_TTL_SECONDS: z.coerce.number().int().min(60).max(900).default(300),
+
+    /** S3-01 — Máximo de intentos de OTP por sesión antes de invalidarla. */
+    OTP_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(10).default(5),
+
+    /** S3-01 — Lockout temporal por CURP tras superar OTP_MAX_ATTEMPTS varias veces (segundos). */
+    OTP_LOCKOUT_SECONDS: z.coerce.number().int().min(60).max(86_400).default(900),
   })
   .superRefine((env, ctx) => {
     // M4 — Cross-validation: en producción no se permite un COGNITO_ENDPOINT

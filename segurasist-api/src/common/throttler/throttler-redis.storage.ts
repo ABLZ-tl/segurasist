@@ -3,6 +3,25 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ThrottlerStorage } from './throttler.types';
 
 /**
+ * S3-10 — Helper estable para construir la key del bucket "tenant-level".
+ *
+ * Por qué un helper en vez de inline en el guard: la auditoría Sprint 1 H1
+ * detectó que un mismo tenant podía saturar `/v1/batches` con miles de
+ * requests *desde IPs distintas* (call center con NAT-pool / VPN rotativa).
+ * El bucket user+IP no agarra ese ataque porque cada request "se ve" como un
+ * cliente distinto. La defensa es un segundo bucket cuya key sólo depende de
+ * `(tenantId, route)` — agnóstico de IP/usuario — para imponer un techo
+ * agregado por tenant.
+ *
+ * Usamos prefix `t:` para que sea trivialmente diferenciable en `MONITOR` /
+ * `redis-cli KEYS` de las keys user-IP (`u:` / `ip:`). El TTL/limit lo
+ * resuelve el guard porque puede sobrescribirse vía `@TenantThrottle`.
+ */
+export function buildTenantKey(tenantId: string, route: string): string {
+  return `${route}|t:${tenantId}`;
+}
+
+/**
  * Storage Redis del rate limiter.
  *
  * Usa `INCR` + `PEXPIRE` para mantener un contador por (key + ventana).

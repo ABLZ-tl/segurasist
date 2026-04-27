@@ -55,6 +55,19 @@ Toma snapshot inmediato (ver [Mitigación interim](#mitigación-interim)).
 
 - Mailpit es **dev-only**: NO está en el path productivo. Cuando salgamos del sandbox SES (AWS-002) los correos van directo a SES y de ahí al destinatario; no hay copia en Mailpit fuera de dev. Su estado mutable no es un riesgo regulatorio.
 
+### 1.5 WAF (perímetro CDN/edge) — diferido a Sprint 5
+
+- **Estado Sprint 3 (S3-10)**: el módulo `segurasist-infra/modules/waf-web-acl` está **completo y validado syntácticamente** con AWS Managed Rules (CommonRuleSet, KnownBadInputs, SQLi, AmazonIpReputation, AnonymousIpList) + rate-based per-IP + logging redactado. Las instancias REGIONAL (App Runner) y CLOUDFRONT (Amplify Hosting) ya están declaradas en `envs/prod/main.tf`.
+- **Apply diferido**: hasta que `AWS-001` (Organizations + cuentas) cierre, no podemos `terraform apply`. El stack productivo no existe; el WAF tampoco.
+- **Defensa en profundidad mientras tanto** — toda la cadena ya está activa en backend:
+  1. **Helmet / @fastify/helmet**: CSP, HSTS, X-Frame-Options, X-Content-Type-Options en cada response.
+  2. **Throttler app-level (Sprint 1 + S3-10)**: rate limit user-IP (defensa contra brute force) **+ rate limit tenant-level** (defensa contra ataques distribuidos cross-tenant — tenant Foo no puede saturar `/v1/batches` con 1k req/min desde un call-center NAT-pool). Configurado per-route con `@TenantThrottle`.
+  3. **Cross-tenant tests** (`npm run test:cross-tenant`): regression suite que verifica que un user del tenant A no puede leer/escribir datos del tenant B. Corre en CI.
+  4. **CSP estricto** + cookies `SameSite=Strict + Secure + HttpOnly` ya en producción de DEV.
+  5. **Magic-bytes validation** en uploads (`/v1/batches`): un EXE renombrado .xlsx se rechaza con 415 antes de tocar S3.
+- **Limitación interim**: SIN WAF perimetral, un ataque volumétrico (DDoS L7, scraping masivo) llega directo al backend. El Throttler aplicación lo absorbe parcialmente pero el costo computacional (CPU + Redis ops) lo paga el API. Mitigación: tests de carga en Sprint 4 dimensionan App Runner para sostener picos sin WAF.
+- **Cierre**: Sprint 5 instancia el módulo en AWS real, asocia con App Runner + CloudFront (Amplify), valida managed rules en COUNT 30 días y promueve AnonymousIpList a BLOCK con doble firma CISO. Detalle en `segurasist-infra/docs/security/waf-managed-rules.md` y `RB-012-waf-rules.md`.
+
 ---
 
 ## 2. Implicaciones de seguridad / cumplimiento

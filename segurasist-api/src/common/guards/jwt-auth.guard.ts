@@ -7,6 +7,8 @@ import {
   Inject,
   Injectable,
   Logger,
+  NotFoundException,
+  Optional,
   UnauthorizedException,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
@@ -15,6 +17,7 @@ import { JWTPayload, createRemoteJWKSet, jwtVerify, type JWTVerifyGetKey } from 
 import { AuthUser } from '../decorators/current-user.decorator';
 import { PUBLIC_KEY } from '../decorators/roles.decorator';
 import { TenantCtx } from '../decorators/tenant.decorator';
+import { PrismaBypassRlsService } from '../prisma/prisma-bypass-rls.service';
 
 interface CognitoClaims extends JWTPayload {
   sub: string;
@@ -50,6 +53,21 @@ export type MfaEnforcement = 'strict' | 'log' | 'off';
 /** Roles para los que la política MFA aplica (admin pool). */
 const MFA_REQUIRED_ROLES = new Set(['admin_segurasist', 'admin_mac']);
 
+const UUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+
+/**
+ * S3-08 — Marker request-scoped que el `JwtAuthGuard` setea cuando un superadmin
+ * envía `X-Tenant-Override: <tenantId>` válido. Lo consumen el
+ * `AuditInterceptor` (para enriquecer el payload con `_overrideTenant` /
+ * `_overriddenBy`) y un `TenantOverrideAuditInterceptor` que persiste el evento
+ * `tenant.override.used` también en GETs (los reads no caen en la lógica
+ * estándar de mutación-only del audit interceptor).
+ */
+export interface TenantOverrideCtx {
+  active: true;
+  overrideTenant: string;
+}
+
 export type AuthPool = 'admin' | 'insured';
 
 /**
@@ -78,6 +96,14 @@ export class JwtAuthGuard implements CanActivate {
   constructor(
     @Inject(ENV_TOKEN) env: Env,
     private readonly reflector: Reflector,
+    /**
+     * S3-08 — Inyectado para validar `X-Tenant-Override` contra el catálogo
+     * `tenants` (BYPASSRLS). Se marca `@Optional()` para no romper unit tests
+     * que instancian el guard con `new JwtAuthGuard(env, reflector)` sin
+     * `PrismaBypassRlsService`. En esos casos, si llega un override sin el
+     * service configurado, el guard devuelve 503 (defensa en profundidad).
+     */
+    @Optional() private readonly prismaBypass?: PrismaBypassRlsService,
   ) {
     // En dev local con cognito-local: COGNITO_ENDPOINT=http://localhost:9229
     // → issuer http://localhost:9229/<pool_id>, JWKS http://localhost:9229/<pool_id>/.well-known/jwks.json.
@@ -119,6 +145,7 @@ export class JwtAuthGuard implements CanActivate {
         user?: AuthUser;
         tenant?: TenantCtx;
         bypassRls?: boolean;
+        tenantOverride?: TenantOverrideCtx;
       }
     >();
     const auth = req.headers['authorization'];
@@ -182,6 +209,14 @@ export class JwtAuthGuard implements CanActivate {
       // explícitamente con "Tenant decorator used without JwtAuthGuard" o por
       // el assertTenant del PrismaService normal (segurasist_app NOBYPASSRLS),
       // que es la defensa en profundidad esperada.
+
+      // S3-08 — Branch tenant-override: SÓLO admin_segurasist puede usar
+      // `X-Tenant-Override`. Cualquier otro rol que envíe el header recibe 403
+      // (ver bloque debajo). Cuando es válido: req.tenant pasa a ser el
+      // override Y bajamos bypassRls a false para que las RLS apliquen al
+      // tenant impersonado (el superadmin opera EN nombre del tenant, no como
+      // root). Defense in depth: dos capas (header check + RLS).
+      await this.applyTenantOverride(req);
       return true;
     }
 
@@ -201,7 +236,132 @@ export class JwtAuthGuard implements CanActivate {
       pool,
     };
     req.tenant = { id: tenantId };
+
+    // S3-08 — Cualquier rol distinto de admin_segurasist que envíe el header
+    // X-Tenant-Override es un intento de privilege escalation: 403 + log.
+    const overrideAttempt = this.readOverrideHeader(req);
+    if (overrideAttempt !== null) {
+      this.logger.warn(
+        {
+          actorId: claims.sub,
+          role,
+          pool,
+          attempted: overrideAttempt,
+          ip: (req.ip || '').toString() || undefined,
+          userAgent: req.headers['user-agent'] ?? undefined,
+          traceId: (req.id as string | undefined) ?? undefined,
+          requestPath: req.url,
+        },
+        'Tenant override attempt denied (rol no autorizado)',
+      );
+      throw new ForbiddenException('Tenant override no permitido');
+    }
+
     return true;
+  }
+
+  /**
+   * Lee y normaliza el header `X-Tenant-Override`. Devuelve `null` si está
+   * ausente o vacío. Acepta `string` y `string[]` (Fastify normaliza repetidos).
+   * Si llega como array y no todos los valores coinciden, devuelve el primero
+   * (el guard validará después que sea UUID + tenant existente).
+   */
+  private readOverrideHeader(req: FastifyRequest): string | null {
+    const raw = req.headers['x-tenant-override'];
+    if (raw === undefined || raw === null) return null;
+    if (typeof raw === 'string') {
+      const trimmed = raw.trim();
+      return trimmed.length > 0 ? trimmed : null;
+    }
+    if (Array.isArray(raw)) {
+      const first = raw[0];
+      if (typeof first === 'string') {
+        const trimmed = first.trim();
+        return trimmed.length > 0 ? trimmed : null;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Aplica el override de tenant para superadmin. Validaciones (en orden):
+   *  1. Header con formato UUID (sino: 403 — evita filtración via timing).
+   *  2. PrismaBypassRlsService disponible (sino: 503/Forbidden con mensaje
+   *     claro — el guard NO debe abrir el path sin la capa de validación).
+   *  3. Tenant existe (sino: 404 explícito; nunca 400/403 — antiguamente
+   *     filtraba info de qué tenants existen).
+   *  4. Tenant activo (sino: 403 — evita operar sobre tenants suspendidos).
+   *
+   * Side effects en req:
+   *  - req.tenant = { id: overrideTenant }
+   *  - req.bypassRls = false   (CRÍTICO: bajamos bypass para que RLS aplique)
+   *  - req.tenantOverride = { active: true, overrideTenant }
+   */
+  private async applyTenantOverride(
+    req: FastifyRequest & {
+      user?: AuthUser;
+      tenant?: TenantCtx;
+      bypassRls?: boolean;
+      tenantOverride?: TenantOverrideCtx;
+    },
+  ): Promise<void> {
+    const overrideTenant = this.readOverrideHeader(req);
+    if (overrideTenant === null) return;
+
+    if (!UUID_RE.test(overrideTenant)) {
+      // Formato inválido → 403 (NO 404: 404 implicaría que el lookup ocurrió
+      // y filtraría que el formato es válido pero no existe).
+      throw new ForbiddenException('Tenant override formato inválido');
+    }
+
+    if (!this.prismaBypass) {
+      // Defense in depth: si el guard no fue inicializado con el bypass
+      // service no podemos validar el tenant. Antes de abrir el path en
+      // ciego, fallamos cerrado.
+      throw new ForbiddenException('Tenant override deshabilitado: bypass service no disponible');
+    }
+
+    let row: { id: string; status: string } | null;
+    try {
+      row = await this.prismaBypass.client.tenant.findUnique({
+        where: { id: overrideTenant },
+        select: { id: true, status: true },
+      });
+    } catch (err) {
+      this.logger.error(
+        { err: err instanceof Error ? err.message : String(err), overrideTenant },
+        'Tenant override lookup falló',
+      );
+      throw new ForbiddenException('Tenant override no validable');
+    }
+
+    if (!row) {
+      throw new NotFoundException(`Tenant override no encontrado: ${overrideTenant}`);
+    }
+    if (row.status !== 'active') {
+      throw new ForbiddenException('Tenant override está inactivo');
+    }
+
+    // Aplicar el override: req.tenant pasa a ser el override Y bajamos bypass
+    // para que RLS aplique al tenant impersonado.
+    req.tenant = { id: overrideTenant };
+    req.bypassRls = false;
+    req.tenantOverride = { active: true, overrideTenant };
+    if (req.user) {
+      // Aún cross-tenant: el actor sigue siendo platformAdmin (las queries
+      // siguen pudiendo necesitar el cliente bypass para writes en audit_log).
+      // Pero el tenant CONTEXT pasa a ser el override.
+      req.user.platformAdmin = true;
+    }
+    this.logger.log(
+      {
+        actorId: req.user?.id,
+        overrideTenant,
+        traceId: (req.id as string | undefined) ?? undefined,
+        requestPath: req.url,
+      },
+      'Tenant override applied',
+    );
   }
 
   /**

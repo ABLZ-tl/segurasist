@@ -74,12 +74,73 @@ export class CognitoService {
     }
   }
 
+  /**
+   * S3-01 — los stubs originales de Sprint 0 quedan delegando al `AuthService`
+   * que orquesta la persistencia del OTP en Redis + envío del email + lockout.
+   * El intento de invocarlos desde otra capa lanza para evitar fugas de
+   * responsabilidad: el flujo OTP NO debe bypassear las protecciones del
+   * AuthService (rate-limit por CURP, audit log, anti-enumeration).
+   */
   async startInsuredOtp(_curp: string, _channel: 'email' | 'sms'): Promise<{ session: string }> {
-    throw new NotImplementedException('CognitoService.startInsuredOtp');
+    throw new NotImplementedException(
+      'CognitoService.startInsuredOtp — usar AuthService.otpRequest (orquesta Redis + SES)',
+    );
   }
 
   async verifyInsuredOtp(_session: string, _code: string): Promise<AuthTokens> {
-    throw new NotImplementedException('CognitoService.verifyInsuredOtp');
+    throw new NotImplementedException(
+      'CognitoService.verifyInsuredOtp — usar AuthService.otpVerify (orquesta Redis + Cognito)',
+    );
+  }
+
+  /**
+   * S3-01 — Tras verificar el OTP en Redis, el `AuthService` necesita un id
+   * token Cognito para que `JwtAuthGuard` lo acepte como `pool=insured`. En
+   * cognito-local (dev/test) y en el MVP la cuenta del insured tiene una
+   * password de sistema fija (`INSURED_DEFAULT_PASSWORD`); pedimos los tokens
+   * con `ADMIN_USER_PASSWORD_AUTH` contra el pool insured.
+   *
+   * En producción (post-MVP) este método se reemplaza por:
+   *   - CUSTOM_AUTH flow con un Cognito Lambda trigger que valida el OTP, o
+   *   - AdminInitiateAuth + Lambda pre-token-generation que enriquece custom:*.
+   * Mientras tanto, esta solución mantiene la garantía de seguridad porque el
+   * OTP es nuestro factor real de autenticación: la password de sistema NUNCA
+   * sale del backend.
+   */
+  async loginInsuredWithSystemPassword(email: string, password: string): Promise<AuthTokens> {
+    try {
+      const out = await this.client.send(
+        new AdminInitiateAuthCommand({
+          UserPoolId: this.env.COGNITO_USER_POOL_ID_INSURED,
+          ClientId: this.env.COGNITO_CLIENT_ID_INSURED,
+          AuthFlow: 'ADMIN_USER_PASSWORD_AUTH',
+          AuthParameters: { USERNAME: email, PASSWORD: password },
+        }),
+      );
+      const r = out.AuthenticationResult;
+      if (!r?.AccessToken) {
+        throw new UnauthorizedException('Cognito (insured): no AuthenticationResult');
+      }
+      return {
+        accessToken: r.AccessToken,
+        refreshToken: r.RefreshToken,
+        idToken: r.IdToken,
+        expiresIn: r.ExpiresIn ?? 3600,
+      };
+    } catch (err) {
+      if (
+        err instanceof CognitoNotAuthorizedException ||
+        err instanceof UserNotFoundException ||
+        err instanceof InvalidPasswordException
+      ) {
+        // No filtramos: el caller (AuthService.otpVerify) ya validó el OTP,
+        // un fallo aquí es config drift, NO credencial inválida del usuario.
+        this.log.error({ err: err.name }, 'loginInsuredWithSystemPassword falló pese a OTP válido');
+        throw new UnauthorizedException('No se pudo emitir el token. Contacta a soporte.');
+      }
+      this.log.error({ err }, 'loginInsuredWithSystemPassword upstream error');
+      throw err;
+    }
   }
 
   async refresh(refreshToken: string): Promise<AuthTokens> {

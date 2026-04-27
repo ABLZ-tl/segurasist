@@ -146,7 +146,14 @@ resource "aws_ecr_lifecycle_policy" "api" {
 }
 
 ############################################
-# WAF
+# WAF — S3-10
+#
+# Dos Web ACLs porque WAFv2 separa scopes:
+#  - REGIONAL (mx-central-1) → App Runner API.
+#  - CLOUDFRONT (us-east-1) → Amplify Hosting (admin + portal).
+#
+# Cada uno con su propio CloudWatch Log Group también con prefijo
+# `aws-waf-logs-` (constraint AWS para que el WAF lo acepte como destino).
 ############################################
 
 resource "aws_cloudwatch_log_group" "waf" {
@@ -157,14 +164,51 @@ resource "aws_cloudwatch_log_group" "waf" {
   tags = local.common_tags
 }
 
+# WAF REGIONAL — App Runner API (mx-central-1).
+# rate_limit_per_ip = 100 req/min/IP (config conservadora para API; un
+# operador "frenético" hace ~20 req/min en altas masivas, así que 100 deja
+# 5x de holgura sin facilitar scraping).
 module "waf_api" {
   source              = "../../modules/waf-web-acl"
   name                = "${local.name_prefix}-api-waf"
   scope               = "REGIONAL"
-  rate_limit_per_5min = 500
+  rate_limit_per_ip   = 100
   log_destination_arn = aws_cloudwatch_log_group.waf.arn
+  log_retention_days  = 365
+  anonymous_ip_action = "count" # Elevar a "block" tras 30d de baseline + firma CISO.
 
-  tags = merge(local.common_tags, { Component = "waf" })
+  tags = merge(local.common_tags, { Component = "waf-api", WafScope = "REGIONAL" })
+}
+
+# Log Group para WAF CLOUDFRONT en us-east-1 (los logs deben vivir en la
+# misma región que el Web ACL CLOUDFRONT).
+resource "aws_cloudwatch_log_group" "waf_cf" {
+  provider          = aws.us_east_1
+  name              = "aws-waf-logs-${local.name_prefix}-cf"
+  retention_in_days = 365
+  # KMS dedicado para us-east-1 vendría de un módulo análogo a kms_general
+  # pero en us_east_1; mientras Sprint 5 no provisione esa key, el log
+  # group queda con SSE-S3 default (AWS managed key). Aceptable para un
+  # contenido ya redactado (sin authorization/cookie).
+
+  tags = merge(local.common_tags, { Component = "waf-cf", Region = "edge" })
+}
+
+# WAF CLOUDFRONT — Amplify Hosting (admin + portal). rate_limit_per_ip
+# más permisivo (200 req/min) porque el web frontend hace varias requests
+# en paralelo por page load (assets, fetch de datos, telemetry).
+module "waf_cloudfront" {
+  source    = "../../modules/waf-web-acl"
+  providers = { aws = aws.us_east_1 }
+
+  name                = "${local.name_prefix}-cf-waf"
+  scope               = "CLOUDFRONT"
+  rate_limit_per_ip   = 200
+  log_destination_arn = aws_cloudwatch_log_group.waf_cf.arn
+  log_retention_days  = 365
+  anonymous_ip_action = "count"
+
+  tags = merge(local.common_tags, { Component = "waf-cloudfront", WafScope = "CLOUDFRONT" })
 }
 
 ############################################

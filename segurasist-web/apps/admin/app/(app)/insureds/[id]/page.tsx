@@ -1,70 +1,20 @@
-import Link from 'next/link';
-import {
-  Badge,
-  Breadcrumbs,
-  Button,
-  Section,
-  Tabs,
-  TabsContent,
-  TabsList,
-  TabsTrigger,
-} from '@segurasist/ui';
-import { FileSignature } from 'lucide-react';
+/**
+ * S3-06 — Vista 360° del asegurado.
+ *
+ * Server Component thin wrapper que delega al `Insured360Client`. El client
+ * pega contra `/v1/insureds/:id/360` con `useInsured360`, controla URL state
+ * de tabs y dispara `notFound()` cuando el backend responde 404.
+ *
+ * Mantenemos las subrutas hijas (`/coverages`, `/claims`, `/audit`,
+ * `/certificates`) como deep-links legacy — Sprint 4 las consolida o las
+ * elimina; por ahora no rompen nada porque siguen siendo accesibles vía URL.
+ */
+import { Insured360Client } from './insured-360-client';
 
 interface PageProps {
   params: { id: string };
 }
 
 export default function InsuredDetailPage({ params }: PageProps) {
-  const insuredId = params.id;
-  return (
-    <div className="space-y-4">
-      <Breadcrumbs
-        items={[
-          { label: 'Inicio', href: '/dashboard' },
-          { label: 'Asegurados', href: '/insureds' },
-          { label: insuredId },
-        ]}
-      />
-      <Section
-        title={
-          <span className="flex items-center gap-3">
-            Carmen López <Badge variant="success">Vigente</Badge>
-          </span>
-        }
-        description={`CURP: ${insuredId}`}
-        actions={
-          <Button>
-            <FileSignature aria-hidden className="mr-2 h-4 w-4" />
-            Reemitir certificado
-          </Button>
-        }
-      />
-
-      <Tabs defaultValue="data">
-        <TabsList>
-          <TabsTrigger value="data" asChild>
-            <Link href={`/insureds/${insuredId}`}>Datos</Link>
-          </TabsTrigger>
-          <TabsTrigger value="coverages" asChild>
-            <Link href={`/insureds/${insuredId}/coverages`}>Coberturas</Link>
-          </TabsTrigger>
-          <TabsTrigger value="claims" asChild>
-            <Link href={`/insureds/${insuredId}/claims`}>Eventos</Link>
-          </TabsTrigger>
-          <TabsTrigger value="certificates" asChild>
-            <Link href={`/insureds/${insuredId}/certificates`}>Certificados</Link>
-          </TabsTrigger>
-          <TabsTrigger value="audit" asChild>
-            <Link href={`/insureds/${insuredId}/audit`}>Auditoría</Link>
-          </TabsTrigger>
-        </TabsList>
-        <TabsContent value="data">
-          <p className="text-sm text-fg-muted">
-            Pendiente: panel con datos personales editables y datos de la póliza.
-          </p>
-        </TabsContent>
-      </Tabs>
-    </div>
-  );
+  return <Insured360Client insuredId={params.id} />;
 }

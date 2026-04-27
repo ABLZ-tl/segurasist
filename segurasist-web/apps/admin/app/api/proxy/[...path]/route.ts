@@ -25,6 +25,13 @@ async function handle(req: NextRequest, path: string[]) {
   if (token) headers.set('authorization', `Bearer ${token}`);
   const trace = req.headers.get('x-trace-id');
   if (trace) headers.set('x-trace-id', trace);
+  // S3-08 — Forward X-Tenant-Override from client (Zustand store) to upstream.
+  // Solo `admin_segurasist` puede usar este header con éxito; el backend
+  // (JwtAuthGuard) rechaza con 403 cualquier otro rol que lo envíe. El proxy
+  // se limita a forwardear (defense in depth: validación del rol vive en el
+  // backend, no acá).
+  const overrideTenant = req.headers.get('x-tenant-override');
+  if (overrideTenant) headers.set('x-tenant-override', overrideTenant);
 
   const init: RequestInit = {
     method: req.method,

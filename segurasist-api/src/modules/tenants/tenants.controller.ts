@@ -15,6 +15,16 @@ export class TenantsController {
     return this.tenants.list();
   }
 
+  /**
+   * S3-08 — Lista de tenants activos para popular el dropdown del Tenant
+   * Switcher en `apps/admin`. Restringida a `admin_segurasist` (mismo RBAC
+   * que el resto del controller). Devuelve `[{id, name, slug}]`.
+   */
+  @Get('active')
+  listActive() {
+    return this.tenants.listActive();
+  }
+
   @Post()
   create() {
     return this.tenants.create();

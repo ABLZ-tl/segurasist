@@ -58,3 +58,27 @@ output "audit_bucket_name" {
   description = "Audit S3 bucket name (Object Lock 24m + cross-region replication)"
   value       = module.s3_audit.bucket_id
 }
+
+# WAF outputs (S3-10) — exponemos los ARNs para que pipelines downstream
+# (smoke tests post-apply, association de App Runner / CloudFront) puedan
+# referenciarlos sin depender del state interno del módulo.
+
+output "waf_regional_arn" {
+  description = "ARN del Web ACL REGIONAL (App Runner mx-central-1)"
+  value       = module.waf_api.web_acl_arn
+}
+
+output "waf_cloudfront_arn" {
+  description = "ARN del Web ACL CLOUDFRONT (Amplify Hosting us-east-1). Pasalo a aws_cloudfront_distribution.web_acl_id."
+  value       = module.waf_cloudfront.web_acl_arn
+}
+
+output "waf_regional_capacity" {
+  description = "WCU consumida por el Web ACL REGIONAL — alarma >80% (1500 WCU límite default)."
+  value       = module.waf_api.web_acl_capacity
+}
+
+output "waf_cloudfront_capacity" {
+  description = "WCU consumida por el Web ACL CLOUDFRONT."
+  value       = module.waf_cloudfront.web_acl_capacity
+}

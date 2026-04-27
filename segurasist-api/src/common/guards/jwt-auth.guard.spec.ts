@@ -1,10 +1,11 @@
 import type { Env } from '@config/env.schema';
-import { ForbiddenException, Logger, UnauthorizedException } from '@nestjs/common';
+import { ForbiddenException, Logger, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import * as jose from 'jose';
 import type * as JoseTypes from 'jose';
 import { mockHttpContext } from '../../../test/mocks/execution-context.mock';
 import { PUBLIC_KEY } from '../decorators/roles.decorator';
+import type { PrismaBypassRlsService } from '../prisma/prisma-bypass-rls.service';
 import { JwtAuthGuard, resolveMfaEnforcement, type MfaEnforcement } from './jwt-auth.guard';
 
 jest.mock('jose', () => {
@@ -382,5 +383,206 @@ describe('JwtAuthGuard MFA enforcement', () => {
     });
     const ctx = mockHttpContext({ headers: { authorization: 'Bearer x' } });
     await expect(guard.canActivate(ctx)).rejects.toThrow('MFA required for admin role');
+  });
+});
+
+/**
+ * S3-08 — Tenant override branch tests.
+ *
+ * Cubre la matriz completa: superadmin OK, superadmin con tenant inexistente,
+ * tenant inactivo, header con formato inválido, roles no-superadmin, y el
+ * camino feliz sin override.
+ */
+describe('JwtAuthGuard — X-Tenant-Override (S3-08)', () => {
+  const VALID_TENANT = '11111111-1111-4111-8111-111111111111';
+  const OVERRIDE_TENANT = '22222222-2222-4222-8222-222222222222';
+  const INACTIVE_TENANT = '33333333-3333-4333-8333-333333333333';
+  const NON_EXISTENT_TENANT = '99999999-9999-4999-8999-999999999999';
+  let reflector: Reflector;
+  let bypass: { client: { tenant: { findUnique: jest.Mock } } };
+  let warnSpy: jest.SpyInstance;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    reflector = new Reflector();
+    bypass = {
+      client: {
+        tenant: {
+          findUnique: jest.fn().mockImplementation(async ({ where }: { where: { id: string } }) => {
+            if (where.id === OVERRIDE_TENANT) return { id: OVERRIDE_TENANT, status: 'active' };
+            if (where.id === INACTIVE_TENANT) return { id: INACTIVE_TENANT, status: 'suspended' };
+            return null;
+          }),
+        },
+      },
+    };
+    warnSpy = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+  });
+
+  afterEach(() => warnSpy.mockRestore());
+
+  function buildGuard(): JwtAuthGuard {
+    return new JwtAuthGuard(makeEnv(), reflector, bypass as unknown as PrismaBypassRlsService);
+  }
+
+  function mockSuperClaims(): void {
+    jwtVerifyMock.mockResolvedValue({
+      payload: {
+        sub: 'super-1',
+        email: 'super@segurasist.local',
+        aud: ADMIN_CLIENT,
+        token_use: 'id',
+        'custom:role': 'admin_segurasist',
+        amr: ['pwd', 'mfa'],
+      },
+      protectedHeader: { alg: 'RS256' },
+    } as unknown as Awaited<ReturnType<typeof jose.jwtVerify>>);
+  }
+
+  function mockAdminMacClaims(): void {
+    jwtVerifyMock.mockResolvedValue({
+      payload: {
+        sub: 'admin-mac-1',
+        email: 'admin@mac.local',
+        aud: ADMIN_CLIENT,
+        token_use: 'id',
+        'custom:role': 'admin_mac',
+        'custom:tenant_id': VALID_TENANT,
+        amr: ['pwd', 'mfa'],
+      },
+      protectedHeader: { alg: 'RS256' },
+    } as unknown as Awaited<ReturnType<typeof jose.jwtVerify>>);
+  }
+
+  function mockInsuredClaims(): void {
+    jwtVerifyMock.mockResolvedValue({
+      payload: {
+        sub: 'insured-1',
+        aud: INSURED_CLIENT,
+        token_use: 'id',
+        'custom:role': 'insured',
+        'custom:tenant_id': VALID_TENANT,
+      },
+      protectedHeader: { alg: 'RS256' },
+    } as unknown as Awaited<ReturnType<typeof jose.jwtVerify>>);
+  }
+
+  it('admin_segurasist + X-Tenant-Override válido → req.tenant = override, bypassRls=false, tenantOverride.active=true', async () => {
+    mockSuperClaims();
+    const guard = buildGuard();
+    const req: Record<string, unknown> = {
+      id: 'trace-ovr-1',
+      url: '/v1/insureds',
+      method: 'GET',
+      ip: '1.2.3.4',
+      headers: { authorization: 'Bearer x', 'x-tenant-override': OVERRIDE_TENANT },
+    };
+    await expect(guard.canActivate(mockHttpContext(req))).resolves.toBe(true);
+    expect(req.tenant).toEqual({ id: OVERRIDE_TENANT });
+    expect(req.bypassRls).toBe(false);
+    expect(req.tenantOverride).toEqual({ active: true, overrideTenant: OVERRIDE_TENANT });
+    const user = req.user as { role: string; platformAdmin?: boolean };
+    expect(user.role).toBe('admin_segurasist');
+    expect(user.platformAdmin).toBe(true);
+    expect(bypass.client.tenant.findUnique).toHaveBeenCalledWith({
+      where: { id: OVERRIDE_TENANT },
+      select: { id: true, status: true },
+    });
+  });
+
+  it('admin_mac con X-Tenant-Override → 403 + warn log de intento', async () => {
+    mockAdminMacClaims();
+    const guard = buildGuard();
+    const ctx = mockHttpContext({
+      id: 'trace-ovr-2',
+      url: '/v1/insureds',
+      method: 'GET',
+      ip: '1.2.3.4',
+      headers: { authorization: 'Bearer x', 'x-tenant-override': OVERRIDE_TENANT, 'user-agent': 'curl' },
+    });
+    await expect(guard.canActivate(ctx)).rejects.toThrow(ForbiddenException);
+    await expect(guard.canActivate(ctx)).rejects.toThrow('Tenant override no permitido');
+    // El bypass NUNCA debe consultarse para roles no-superadmin (defensa en
+    // profundidad: rechazo temprano antes de tocar la BD).
+    expect(bypass.client.tenant.findUnique).not.toHaveBeenCalled();
+    const matched = warnSpy.mock.calls.some((call: unknown[]) =>
+      call.some((arg: unknown) => typeof arg === 'string' && arg.includes('Tenant override attempt denied')),
+    );
+    expect(matched).toBe(true);
+  });
+
+  it('insured con X-Tenant-Override → 403', async () => {
+    mockInsuredClaims();
+    const guard = buildGuard();
+    const ctx = mockHttpContext({
+      url: '/v1/insureds',
+      method: 'GET',
+      headers: { authorization: 'Bearer x', 'x-tenant-override': OVERRIDE_TENANT },
+    });
+    await expect(guard.canActivate(ctx)).rejects.toThrow(ForbiddenException);
+    expect(bypass.client.tenant.findUnique).not.toHaveBeenCalled();
+  });
+
+  it('admin_segurasist + X-Tenant-Override apuntando a tenant inexistente → 404', async () => {
+    mockSuperClaims();
+    const guard = buildGuard();
+    const ctx = mockHttpContext({
+      url: '/v1/insureds',
+      method: 'GET',
+      headers: { authorization: 'Bearer x', 'x-tenant-override': NON_EXISTENT_TENANT },
+    });
+    await expect(guard.canActivate(ctx)).rejects.toThrow(NotFoundException);
+    await expect(guard.canActivate(ctx)).rejects.toThrow(/no encontrado/i);
+  });
+
+  it('admin_segurasist + X-Tenant-Override apuntando a tenant suspendido → 403', async () => {
+    mockSuperClaims();
+    const guard = buildGuard();
+    const ctx = mockHttpContext({
+      url: '/v1/insureds',
+      method: 'GET',
+      headers: { authorization: 'Bearer x', 'x-tenant-override': INACTIVE_TENANT },
+    });
+    await expect(guard.canActivate(ctx)).rejects.toThrow(ForbiddenException);
+    await expect(guard.canActivate(ctx)).rejects.toThrow(/inactivo/i);
+  });
+
+  it('admin_segurasist + X-Tenant-Override con formato no-UUID → 403 (NO 404 — evita filtración via timing)', async () => {
+    mockSuperClaims();
+    const guard = buildGuard();
+    const ctx = mockHttpContext({
+      url: '/v1/insureds',
+      method: 'GET',
+      headers: { authorization: 'Bearer x', 'x-tenant-override': 'not-a-uuid' },
+    });
+    await expect(guard.canActivate(ctx)).rejects.toThrow(ForbiddenException);
+    expect(bypass.client.tenant.findUnique).not.toHaveBeenCalled();
+  });
+
+  it('admin_segurasist sin X-Tenant-Override → comportamiento normal (bypassRls=true, sin req.tenant)', async () => {
+    mockSuperClaims();
+    const guard = buildGuard();
+    const req: Record<string, unknown> = {
+      url: '/v1/insureds',
+      method: 'GET',
+      headers: { authorization: 'Bearer x' },
+    };
+    await expect(guard.canActivate(mockHttpContext(req))).resolves.toBe(true);
+    expect(req.bypassRls).toBe(true);
+    expect(req.tenant).toBeUndefined();
+    expect(req.tenantOverride).toBeUndefined();
+    expect(bypass.client.tenant.findUnique).not.toHaveBeenCalled();
+  });
+
+  it('admin_segurasist + X-Tenant-Override pero bypass service ausente → 403 (fail-closed)', async () => {
+    mockSuperClaims();
+    // Construimos el guard SIN inyectar el bypass service (escenario defensa).
+    const guard = new JwtAuthGuard(makeEnv(), reflector);
+    const ctx = mockHttpContext({
+      url: '/v1/insureds',
+      method: 'GET',
+      headers: { authorization: 'Bearer x', 'x-tenant-override': OVERRIDE_TENANT },
+    });
+    await expect(guard.canActivate(ctx)).rejects.toThrow(ForbiddenException);
   });
 });

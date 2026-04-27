@@ -149,6 +149,32 @@ describe('Cross-tenant isolation gate (RLS layer)', () => {
     expect(result).toBeNull();
   });
 
+  // S3-06 — vista 360°: el filtro find360 también debe respetar RLS al leer
+  // todas las secciones (insured, coverages, claims, certs, audit).
+  // Probamos directamente al nivel BD: SET LOCAL al tenant A ⇒ findFirst del
+  // insured de B devuelve null. La capa HTTP devuelve 404 sobre ese null
+  // (verificado además en e2e/insured-360.e2e-spec.ts).
+  it('S3-06 find360 cross-tenant: SET LOCAL=A + findFirst(insured de B) → null (RLS bloquea)', async () => {
+    if (!canConnect) {
+      expect(true).toBe(true);
+      return;
+    }
+    const insuredsB = await admin.insured.findMany({ where: { tenantId: tenantB.id } });
+    const targetB = insuredsB[0];
+    if (!targetB) throw new Error('seed inválido: tenant B sin insureds');
+
+    const result = await app.$transaction(async (tx) => {
+      await tx.$executeRawUnsafe(`SELECT set_config('app.current_tenant', '${tenantA.id}', true)`);
+      // Replica el query exacto que hace InsuredsService.find360 antes del
+      // throw NotFoundException (id + deletedAt:null + include package/beneficiaries).
+      return tx.insured.findFirst({
+        where: { id: targetB.id, deletedAt: null },
+        include: { package: { select: { id: true, name: true } } },
+      });
+    });
+    expect(result).toBeNull();
+  });
+
   it('app role intentando INSERT en tenant B mientras context=A → WITH CHECK falla', async () => {
     if (!canConnect) {
       expect(true).toBe(true);
@@ -216,6 +242,7 @@ describe('Cross-tenant isolation gate (HTTP layer — pending)', () => {
   describe('insureds', () => {
     it.todo('GET /v1/insureds — sólo devuelve insureds del tenant A');
     it.todo('GET /v1/insureds/:id (id de tenant B) — responde 404');
+    it.todo('GET /v1/insureds/:id/360 (id de tenant B) — responde 404'); // S3-06 e2e
     it.todo('PATCH /v1/insureds/:id (id de tenant B) — responde 404');
     it.todo('DELETE /v1/insureds/:id (id de tenant B) — responde 404');
   });
@@ -246,5 +273,15 @@ describe('Cross-tenant isolation gate (HTTP layer — pending)', () => {
   });
   describe('reports', () => {
     it.todo('GET /v1/reports/* — sólo agregados del tenant A');
+  });
+  // S3-08 — gates del tenant override (HTTP-layer). La implementación real
+  // vive en `test/e2e/tenant-override.e2e-spec.ts` (requiere bootstrap del
+  // app.module + cognito-local). Estos `it.todo` mantienen visible la matriz
+  // desde el security suite (mismo gate de PR que el resto).
+  describe('tenant-override (S3-08)', () => {
+    it.todo('admin_segurasist + X-Tenant-Override=mac → ve sólo insureds de mac');
+    it.todo('admin_segurasist + X-Tenant-Override=tenant-falso → 404');
+    it.todo('admin_mac + X-Tenant-Override=mac → 403');
+    it.todo('operator + X-Tenant-Override=mac → 403');
   });
 });

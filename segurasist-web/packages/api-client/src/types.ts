@@ -54,6 +54,71 @@ export type UpdateInsuredDto = Partial<Omit<CreateInsuredDto, 'curp'>>;
 
 export type InsuredsList = CursorPage<Insured>;
 
+/**
+ * S3-06 — Vista 360° del asegurado.
+ *
+ * Shape devuelta por `GET /v1/insureds/:id/360` — agrupa en una sola request
+ * los 5 dominios (datos, coberturas con consumo, eventos=claims, certificados,
+ * audit log) que pinta el admin en tabs.
+ */
+export interface Insured360 {
+  insured: {
+    id: string;
+    curp: string;
+    rfc: string | null;
+    fullName: string;
+    dob: string;
+    email: string | null;
+    phone: string | null;
+    packageId: string;
+    packageName: string;
+    validFrom: string;
+    validTo: string;
+    status: 'active' | 'suspended' | 'cancelled' | 'expired';
+    entidad: string | null;
+    numeroEmpleadoExterno: string | null;
+    beneficiaries: Array<{ id: string; fullName: string; dob: string; relationship: string }>;
+    createdAt: string;
+    updatedAt: string;
+  };
+  coverages: Array<{
+    id: string;
+    name: string;
+    type: 'count' | 'amount';
+    limit: number;
+    used: number;
+    unit: string;
+    lastUsedAt: string | null;
+  }>;
+  events: Array<{
+    id: string;
+    type: string;
+    reportedAt: string;
+    description: string;
+    status: string;
+    amountEstimated: number | null;
+  }>;
+  certificates: Array<{
+    id: string;
+    version: number;
+    issuedAt: string;
+    validTo: string;
+    status: string;
+    hash: string;
+    qrPayload: string | null;
+  }>;
+  audit: Array<{
+    id: string;
+    action: string;
+    actorEmail: string;
+    resourceType: string;
+    resourceId: string;
+    occurredAt: string;
+    ip: string;
+    payloadDiff: Record<string, unknown> | null;
+  }>;
+}
+
 export interface Batch {
   id: string;
   status: 'validating' | 'preview_ready' | 'processing' | 'completed' | 'failed';

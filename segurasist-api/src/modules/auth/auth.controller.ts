@@ -3,7 +3,7 @@ import { Public } from '@common/decorators/roles.decorator';
 import { TenantCtx } from '@common/decorators/tenant.decorator';
 import { JwtAuthGuard } from '@common/guards/jwt-auth.guard';
 import { ZodValidationPipe } from '@common/pipes/zod-validation.pipe';
-import { Throttle } from '@common/throttler/throttler.decorators';
+import { TenantThrottle, Throttle } from '@common/throttler/throttler.decorators';
 import { Body, Controller, HttpCode, HttpStatus, Post, Get, Req, UseGuards, UsePipes } from '@nestjs/common';
 import type { FastifyRequest } from 'fastify';
 import { AuthService } from './auth.service';
@@ -33,8 +33,16 @@ export class AuthController {
   }
 
   @Public()
-  // Anti bombing de SMS/email OTP.
+  // Anti bombing de SMS/email OTP per-IP.
   @Throttle({ ttl: 60_000, limit: 5 })
+  // S3-10 — anti CURP-spray cross-tenant. Hoy la ruta es `@Public` y no
+  // tiene `req.tenant`, así que este decorator es NO-OP en runtime — el
+  // bucket tenant requiere `req.tenant` poblado por JwtAuthGuard. Se deja
+  // declarativamente para forward-compat: cuando S5 introduzca resolución
+  // de tenant pre-auth (subdomain o tenant-hint en payload), el guard
+  // empezará a aplicar este cap automáticamente sin tocar el controller.
+  // El cap real per-CURP hoy vive en `AuthService.checkCurpRateLimit` (5/min).
+  @TenantThrottle({ ttl: 60_000, limit: 50 })
   @Post('otp/request')
   @HttpCode(HttpStatus.OK)
   @UsePipes(new ZodValidationPipe(OtpRequestSchema))

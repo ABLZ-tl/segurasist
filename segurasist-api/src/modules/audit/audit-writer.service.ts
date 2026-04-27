@@ -62,6 +62,20 @@ export interface AuditEvent {
 }
 
 /**
+ * S3-08 — Contexto request-only de un override de tenant. Lo consume
+ * `recordOverrideUse(...)` para construir el payloadDiff del evento
+ * `tenant.override.used`.
+ */
+export interface TenantOverrideUseContext {
+  actorId: string;
+  overrideTenant: string;
+  ip?: string;
+  userAgent?: string;
+  requestPath: string;
+  traceId?: string;
+}
+
+/**
  * Cliente Prisma dedicado a la escritura de audit. Usa `DATABASE_URL_AUDIT`
  * cuando está presente para que el rol detrás (idealmente
  * `segurasist_admin` con BYPASSRLS) pueda insertar entradas para CUALQUIER
@@ -212,6 +226,41 @@ export class AuditWriterService implements OnModuleInit, OnModuleDestroy {
         'AuditWriter.record persist failed',
       );
     }
+  }
+
+  /**
+   * S3-08 — Registra el uso del header `X-Tenant-Override` por un superadmin.
+   *
+   * Persiste un evento `read` con `resourceType='tenant.override'` cuyo
+   * `payloadDiff` documenta:
+   *   { _overrideTenant, _overriddenBy: 'admin_segurasist', requestPath }
+   *
+   * El `tenantId` del row es el del tenant impersonado — esto permite que la
+   * vista 360 del tenant (filtrada por su `tenant_id`) muestre los accesos
+   * cross-tenant del superadmin. El actor es el superadmin (no el tenant).
+   *
+   * Llamado por:
+   *   - `AuditInterceptor` indirecto: para mutaciones, las que ya emite el
+   *     interceptor estándar contienen `_overrideTenant` en su payloadDiff.
+   *   - `TenantOverrideAuditInterceptor`: para reads (GET/HEAD), donde el
+   *     interceptor estándar no escribe nada.
+   */
+  async recordOverrideUse(ctx: TenantOverrideUseContext): Promise<void> {
+    await this.record({
+      tenantId: ctx.overrideTenant,
+      actorId: ctx.actorId,
+      action: 'read',
+      resourceType: 'tenant.override',
+      ip: ctx.ip,
+      userAgent: ctx.userAgent,
+      payloadDiff: {
+        event: 'tenant.override.used',
+        _overrideTenant: ctx.overrideTenant,
+        _overriddenBy: 'admin_segurasist',
+        requestPath: ctx.requestPath,
+      },
+      traceId: ctx.traceId,
+    });
   }
 
   /**

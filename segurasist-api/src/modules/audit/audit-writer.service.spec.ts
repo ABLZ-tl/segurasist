@@ -280,6 +280,29 @@ describe('AuditWriterService (hash chain)', () => {
     expect(res.totalRows).toBe(3);
   });
 
+  it('recordOverrideUse() persiste un row read/tenant.override con payload del evento (S3-08)', async () => {
+    await writer.recordOverrideUse({
+      actorId: 'super-1',
+      overrideTenant: TENANT_A,
+      ip: '1.2.3.4',
+      userAgent: 'curl',
+      requestPath: '/v1/insureds',
+      traceId: 'trace-x',
+    });
+    expect(fake.rows).toHaveLength(1);
+    const row = fake.rows[0];
+    expect(row?.tenantId).toBe(TENANT_A);
+    expect(row?.actorId).toBe('super-1');
+    expect(row?.action).toBe('read');
+    expect(row?.resourceType).toBe('tenant.override');
+    expect(row?.traceId).toBe('trace-x');
+    const diff = row?.payloadDiff as Record<string, unknown> | null;
+    expect(diff?.event).toBe('tenant.override.used');
+    expect(diff?._overrideTenant).toBe(TENANT_A);
+    expect(diff?._overriddenBy).toBe('admin_segurasist');
+    expect(diff?.requestPath).toBe('/v1/insureds');
+  });
+
   it('verifyChain: prev_hash adulterado → valid=false', async () => {
     await writer.record(buildEvent({ resourceId: 'a' }));
     await writer.record(buildEvent({ resourceId: 'b' }));
