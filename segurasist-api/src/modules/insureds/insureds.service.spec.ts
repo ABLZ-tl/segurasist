@@ -1,6 +1,7 @@
+import type { AuthUser } from '@common/decorators/current-user.decorator';
 import type { PrismaBypassRlsService } from '@common/prisma/prisma-bypass-rls.service';
 import type { AuditWriterService } from '@modules/audit/audit-writer.service';
-import { ConflictException, NotFoundException } from '@nestjs/common';
+import { ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { mockDeep, type DeepMockProxy } from 'jest-mock-extended';
 import { mockPrismaService } from '../../../test/mocks/prisma.mock';
@@ -601,6 +602,183 @@ describe('InsuredsService', () => {
         completedAt: null,
       } as never);
       await expect(svc.findExport(expId, tenant, actor)).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Sprint 4 — Portal asegurado: findSelf / coveragesForSelf.
+  //
+  // El RBAC `insured` se enforza por dos razones:
+  //   1) RolesGuard a nivel handler (defensa principal).
+  //   2) Chequeo explícito en el service (defensa en profundidad / unit-testable).
+  //
+  // El status se deriva de `validTo` vs hoy: vigente / proxima_a_vencer / vencida.
+  // ---------------------------------------------------------------------------
+  describe('findSelf', () => {
+    const cognitoSub = 'cog-sub-insured-1';
+    const insuredUser: AuthUser = {
+      id: cognitoSub,
+      cognitoSub,
+      email: 'asegurado@example.com',
+      role: 'insured',
+      scopes: [],
+      mfaEnrolled: false,
+    };
+
+    function buildBaseInsured(overrides: { validTo: Date; brandJson?: unknown }) {
+      return {
+        id: 'ins-1',
+        tenantId: tenant.id,
+        cognitoSub,
+        fullName: 'Carmen López',
+        packageId: 'pkg-1',
+        validFrom: new Date('2026-01-01'),
+        validTo: overrides.validTo,
+        package: { id: 'pkg-1', name: 'Plan Plus' },
+        tenant: { brandJson: overrides.brandJson ?? null },
+      };
+    }
+
+    it('happy path: status=vigente cuando validTo > today + 7d', async () => {
+      const { svc, prisma } = build();
+      const validTo = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+      prisma.client.insured.findFirst.mockResolvedValue(buildBaseInsured({ validTo }) as never);
+
+      const out = await svc.findSelf(insuredUser);
+
+      expect(out.id).toBe('ins-1');
+      expect(out.fullName).toBe('Carmen López');
+      expect(out.packageName).toBe('Plan Plus');
+      expect(out.status).toBe('vigente');
+      expect(out.daysUntilExpiry).toBeGreaterThan(7);
+      // Sin brandJson.supportPhone → fallback hardcoded MVP.
+      expect(out.supportPhone).toBe('+528000000000');
+    });
+
+    it('rol distinto de insured → ForbiddenException (defensa en profundidad)', async () => {
+      const { svc } = build();
+      const adminUser: AuthUser = { ...insuredUser, role: 'admin_segurasist' };
+      await expect(svc.findSelf(adminUser)).rejects.toThrow(ForbiddenException);
+    });
+
+    it('cognitoSub sin match → NotFoundException (anti-enumeration)', async () => {
+      const { svc, prisma } = build();
+      prisma.client.insured.findFirst.mockResolvedValue(null);
+      await expect(svc.findSelf(insuredUser)).rejects.toThrow(NotFoundException);
+    });
+
+    it('status=proxima_a_vencer cuando validTo está entre today y today+7d', async () => {
+      const { svc, prisma } = build();
+      // validTo = today + 3 días → dentro del threshold de 7d.
+      const validTo = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000);
+      prisma.client.insured.findFirst.mockResolvedValue(buildBaseInsured({ validTo }) as never);
+
+      const out = await svc.findSelf(insuredUser);
+      expect(out.status).toBe('proxima_a_vencer');
+      expect(out.daysUntilExpiry).toBeGreaterThanOrEqual(2);
+      expect(out.daysUntilExpiry).toBeLessThanOrEqual(3);
+    });
+
+    it('status=vencida cuando validTo < today', async () => {
+      const { svc, prisma } = build();
+      const validTo = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000);
+      prisma.client.insured.findFirst.mockResolvedValue(buildBaseInsured({ validTo }) as never);
+
+      const out = await svc.findSelf(insuredUser);
+      expect(out.status).toBe('vencida');
+      expect(out.daysUntilExpiry).toBeLessThan(0);
+    });
+
+    it('supportPhone respeta tenant.brandJson.supportPhone si existe', async () => {
+      const { svc, prisma } = build();
+      const validTo = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+      prisma.client.insured.findFirst.mockResolvedValue(
+        buildBaseInsured({ validTo, brandJson: { supportPhone: '+525511112222' } }) as never,
+      );
+
+      const out = await svc.findSelf(insuredUser);
+      expect(out.supportPhone).toBe('+525511112222');
+    });
+  });
+
+  describe('coveragesForSelf', () => {
+    const cognitoSub = 'cog-sub-insured-2';
+    const insuredUser: AuthUser = {
+      id: cognitoSub,
+      cognitoSub,
+      email: 'asegurado2@example.com',
+      role: 'insured',
+      scopes: [],
+      mfaEnrolled: false,
+    };
+
+    function seedSelf(prisma: ReturnType<typeof mockPrismaService>) {
+      prisma.client.insured.findFirst.mockResolvedValue({
+        id: 'ins-2',
+        tenantId: tenant.id,
+        cognitoSub,
+        fullName: 'Juan Pérez',
+        packageId: 'pkg-2',
+        validFrom: new Date('2026-01-01'),
+        validTo: new Date(Date.now() + 60 * 24 * 60 * 60 * 1000),
+        package: { id: 'pkg-2', name: 'Plan Básico' },
+        tenant: { brandJson: null },
+      } as never);
+    }
+
+    it('agrega usage por cobertura (count + amount) y mappea unit', async () => {
+      const { svc, prisma } = build();
+      seedSelf(prisma);
+      prisma.client.coverage.findMany.mockResolvedValue([
+        {
+          id: 'cov-count',
+          name: 'Consultas',
+          packageId: 'pkg-2',
+          limitCount: 12,
+          limitAmount: null,
+        },
+        {
+          id: 'cov-amount',
+          name: 'Estudios',
+          packageId: 'pkg-2',
+          limitCount: null,
+          limitAmount: '5000.00',
+        },
+      ] as never);
+      const lastUsedAt = new Date('2026-04-20T10:00:00Z');
+      prisma.client.coverageUsage.aggregate
+        .mockResolvedValueOnce({
+          _sum: { amount: null },
+          _count: { id: 3 },
+          _max: { usedAt: lastUsedAt },
+        } as never)
+        .mockResolvedValueOnce({
+          _sum: { amount: '750.50' },
+          _count: { id: 2 },
+          _max: { usedAt: lastUsedAt },
+        } as never);
+
+      const out = await svc.coveragesForSelf(insuredUser);
+
+      expect(out).toHaveLength(2);
+      const count = out.find((c) => c.id === 'cov-count');
+      expect(count?.type).toBe('count');
+      expect(count?.limit).toBe(12);
+      expect(count?.used).toBe(3);
+      expect(count?.unit).toBe('eventos');
+      expect(count?.lastUsedAt).toBe(lastUsedAt.toISOString());
+
+      const amount = out.find((c) => c.id === 'cov-amount');
+      expect(amount?.type).toBe('amount');
+      expect(amount?.limit).toBe(5000);
+      expect(amount?.used).toBeCloseTo(750.5);
+      expect(amount?.unit).toBe('MXN');
+    });
+
+    it('rol distinto de insured → ForbiddenException (heredado de findSelf)', async () => {
+      const { svc } = build();
+      const adminUser: AuthUser = { ...insuredUser, role: 'operator' };
+      await expect(svc.coveragesForSelf(adminUser)).rejects.toThrow(ForbiddenException);
     });
   });
 });

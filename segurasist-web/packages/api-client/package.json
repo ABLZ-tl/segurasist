@@ -16,7 +16,8 @@
     "./hooks/dashboard": "./src/hooks/dashboard.ts",
     "./hooks/chat": "./src/hooks/chat.ts",
     "./hooks/auth": "./src/hooks/auth.ts",
-    "./hooks/exports": "./src/hooks/exports.ts"
+    "./hooks/exports": "./src/hooks/exports.ts",
+    "./hooks/claims": "./src/hooks/claims.ts"
   },
   "files": ["src"],
   "scripts": {

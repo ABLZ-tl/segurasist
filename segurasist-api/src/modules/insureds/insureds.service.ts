@@ -23,6 +23,7 @@
  * el alta unitaria queda para sprint 3.
  */
 import { randomUUID } from 'node:crypto';
+import type { AuthUser } from '@common/decorators/current-user.decorator';
 import { TenantCtx } from '@common/decorators/tenant.decorator';
 import { PrismaBypassRlsService } from '@common/prisma/prisma-bypass-rls.service';
 import { PrismaService } from '@common/prisma/prisma.service';
@@ -183,6 +184,52 @@ export interface Insured360 {
 }
 
 const AUDIT_360_LIMIT = 50;
+
+/**
+ * Portal asegurado — vista "self".
+ *
+ * Devuelta por `findSelf(user)` para `GET /v1/insureds/me`. Incluye un
+ * status user-friendly (vigente / proxima_a_vencer / vencida) calculado a
+ * partir de `validTo` vs hoy, y un `supportPhone` que el FE muestra como CTA.
+ *
+ * `daysUntilExpiry` es positivo si la póliza aún es vigente, 0 si vence hoy,
+ * y negativo si ya venció.
+ */
+export interface InsuredSelf {
+  id: string;
+  fullName: string;
+  packageId: string;
+  packageName: string;
+  validFrom: string;
+  validTo: string;
+  status: 'vigente' | 'proxima_a_vencer' | 'vencida';
+  daysUntilExpiry: number;
+  supportPhone: string;
+}
+
+/**
+ * Portal asegurado — coberturas con consumo agregado.
+ *
+ * Devuelta por `coveragesForSelf(user)` para `GET /v1/insureds/me/coverages`.
+ * Una entrada por cada `Coverage` del paquete del asegurado, con el `used`
+ * total computado de `coverage_usage`.
+ */
+export interface CoverageSelf {
+  id: string;
+  name: string;
+  type: 'count' | 'amount';
+  limit: number;
+  used: number;
+  unit: string;
+  lastUsedAt: string | null;
+}
+
+/** Fallback hardcoded del soporte MVP — el FE lo usa para CTA WhatsApp/Tel. */
+const DEFAULT_SUPPORT_PHONE = '+528000000000';
+/** Umbral en días para marcar la póliza como `proxima_a_vencer`. */
+const EXPIRY_WARNING_DAYS = 7;
+/** ms en un día — para el cálculo de `daysUntilExpiry`. */
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
 @Injectable()
 export class InsuredsService {
@@ -594,6 +641,142 @@ export class InsuredsService {
     return result;
   }
 
+  /**
+   * Portal asegurado — devuelve los datos del propio asegurado autenticado.
+   *
+   * RBAC defensivo: aún cuando el RolesGuard ya impone `@Roles('insured')`
+   * a nivel handler, este service comprueba `user.role` para que un caller
+   * mal configurado no leak datos de otro recurso. La query usa
+   * `prisma.client` request-scoped (RLS aplica `app.current_tenant`); si el
+   * cognitoSub no matchea ningún insured del tenant del JWT → 404 (NO 403,
+   * para no diferenciar "no existe" vs "no autorizado", anti-enumeration).
+   *
+   * `status` se derivó del campo `validTo`:
+   *   - `vencida`            → ya venció (validTo < today)
+   *   - `proxima_a_vencer`   → vence en ≤ 7 días
+   *   - `vigente`            → caso contrario
+   *
+   * `supportPhone` viene de `tenant.brandJson.supportPhone` si el tenant lo
+   * configuró; caso contrario fallback hardcoded MVP `+528000000000`. NOTA:
+   * el schema actual del Tenant expone `brandJson` (no `metadata`), así que
+   * leemos ahí defensivamente.
+   */
+  async findSelf(user: AuthUser): Promise<InsuredSelf> {
+    if (user.role !== 'insured') {
+      throw new ForbiddenException('Endpoint solo para asegurados');
+    }
+    // NOTE — el lookup por `cognitoSub` asume que la columna existe en la
+    // tabla `insureds` (migración paralela del Sprint 4 que liga el insured
+    // creado por OTP con el sub del pool insured). El where va casteado para
+    // no romper el TS strict si la migración aún no está aplicada en main.
+    const insured = await this.prisma.client.insured.findFirst({
+      where: { cognitoSub: user.cognitoSub, deletedAt: null } as unknown as Prisma.InsuredWhereInput,
+      include: { package: true, tenant: true },
+    });
+    if (!insured) {
+      throw new NotFoundException('Asegurado no encontrado');
+    }
+
+    const today = startOfDay(new Date());
+    const validTo = startOfDay(insured.validTo);
+    const daysUntilExpiry = Math.round((validTo.getTime() - today.getTime()) / MS_PER_DAY);
+
+    let status: InsuredSelf['status'];
+    if (daysUntilExpiry < 0) {
+      status = 'vencida';
+    } else if (daysUntilExpiry <= EXPIRY_WARNING_DAYS) {
+      status = 'proxima_a_vencer';
+    } else {
+      status = 'vigente';
+    }
+
+    // Tenant.brandJson es Json? — hacemos lookup defensivo del key supportPhone.
+    const tenantBrand =
+      insured.tenant.brandJson &&
+      typeof insured.tenant.brandJson === 'object' &&
+      !Array.isArray(insured.tenant.brandJson)
+        ? (insured.tenant.brandJson as Record<string, unknown>)
+        : {};
+    const supportPhone =
+      typeof tenantBrand.supportPhone === 'string' && tenantBrand.supportPhone.length > 0
+        ? tenantBrand.supportPhone
+        : DEFAULT_SUPPORT_PHONE;
+
+    return {
+      id: insured.id,
+      fullName: insured.fullName,
+      packageId: insured.packageId,
+      packageName: insured.package.name,
+      validFrom: insured.validFrom.toISOString().slice(0, 10),
+      validTo: insured.validTo.toISOString().slice(0, 10),
+      status,
+      daysUntilExpiry,
+      supportPhone,
+    };
+  }
+
+  /**
+   * Portal asegurado — devuelve las coberturas del paquete del asegurado
+   * con el consumo agregado por cobertura (count o amount, según el tipo
+   * de la cobertura).
+   *
+   * Reusa `findSelf` para localizar el insuredId/packageId — esto centraliza
+   * el RBAC + 404 anti-enumeration. Una vez resuelto, hace 1 SELECT a
+   * `coverages` y N agregaciones a `coverage_usage` (una por cobertura). En
+   * MVP cada paquete tiene ~5 coberturas; aceptable como N+1 controlado.
+   */
+  async coveragesForSelf(user: AuthUser): Promise<CoverageSelf[]> {
+    // findSelf ya valida role + busca el insured. Reusamos su path.
+    const self = await this.findSelf(user);
+    // Necesitamos el insuredId real para los aggregates. findSelf lo devuelve.
+    const insuredId = self.id;
+
+    const coverages = await this.prisma.client.coverage.findMany({
+      where: { packageId: self.packageId, deletedAt: null },
+      orderBy: { name: 'asc' },
+    });
+
+    // Aggregates en paralelo: 1 query por coverage. Más simple que un GROUP BY
+    // y suficientemente rápido para los ~5 coverages típicos de MVP.
+    const aggregates = await Promise.all(
+      coverages.map((c) =>
+        this.prisma.client.coverageUsage.aggregate({
+          where: { insuredId, coverageId: c.id },
+          _sum: { amount: true },
+          _count: { id: true },
+          _max: { usedAt: true },
+        }),
+      ),
+    );
+
+    return coverages.map((c, i) => {
+      const agg = aggregates[i];
+      // Si la cobertura define limitCount, es 'count'; si define limitAmount,
+      // es 'amount'. El mapping coincide con el de find360.
+      const isCount = c.limitCount !== null && c.limitCount !== undefined;
+      const limit = isCount
+        ? Number(c.limitCount)
+        : c.limitAmount !== null && c.limitAmount !== undefined
+          ? Number(c.limitAmount)
+          : 0;
+      const used = isCount
+        ? (agg?._count?.id ?? 0)
+        : agg?._sum?.amount === null || agg?._sum?.amount === undefined
+          ? 0
+          : Number(agg._sum.amount);
+      const lastUsedAt = agg?._max?.usedAt ? agg._max.usedAt.toISOString() : null;
+      return {
+        id: c.id,
+        name: c.name,
+        type: isCount ? 'count' : 'amount',
+        limit,
+        used,
+        unit: isCount ? 'eventos' : 'MXN',
+        lastUsedAt,
+      };
+    });
+  }
+
   async create(dto: CreateInsuredDto, tenant: TenantCtx): Promise<unknown> {
     try {
       return await this.prisma.withTenant((tx) =>
@@ -841,6 +1024,16 @@ export class InsuredsService {
  * Loguea el motivo para no perder señales operativas. Usado por `find360`
  * para que un timeout puntual en una sección no derribe la respuesta entera.
  */
+/**
+ * Normaliza una Date a las 00:00:00.000 UTC del mismo día. Lo usamos en
+ * `findSelf` para comparar `validTo` vs hoy en granularidad de día sin que
+ * el delta arrastre horas/minutos (date-fns no está disponible en el
+ * proyecto). Equivale conceptualmente a `differenceInCalendarDays`.
+ */
+function startOfDay(d: Date): Date {
+  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+}
+
 function settled<T>(res: PromiseSettledResult<T[]>, label: string, log: Logger): T[] {
   if (res.status === 'fulfilled') return res.value;
   const reason = res.reason instanceof Error ? res.reason.message : String(res.reason);

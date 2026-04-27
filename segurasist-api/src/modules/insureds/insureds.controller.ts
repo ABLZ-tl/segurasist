@@ -1,4 +1,4 @@
-import type { AuthUser } from '@common/decorators/current-user.decorator';
+import { CurrentUser, type AuthUser } from '@common/decorators/current-user.decorator';
 import { Roles } from '@common/decorators/roles.decorator';
 import { Tenant, TenantCtx } from '@common/decorators/tenant.decorator';
 import { JwtAuthGuard } from '@common/guards/jwt-auth.guard';
@@ -65,6 +65,26 @@ export class InsuredsController {
     @Req() req: FastifyRequest & { user?: AuthUser; tenant?: TenantCtx },
   ) {
     return this.insureds.list(q, this.buildScope(req, q.tenantId));
+  }
+
+  /**
+   * Portal asegurado — datos del propio asegurado autenticado.
+   *
+   * IMPORTANTE: este handler debe declararse ANTES de `@Get(':id')` para
+   * que Nest no interprete `me` como un UUID inválido (ParseUUIDPipe lanza
+   * BadRequest). Nest usa orden de declaración en el path matching.
+   */
+  @Get('me')
+  @Roles('insured')
+  findMe(@CurrentUser() user: AuthUser) {
+    return this.insureds.findSelf(user);
+  }
+
+  /** Portal asegurado — coberturas del paquete del asegurado con consumo. */
+  @Get('me/coverages')
+  @Roles('insured')
+  coveragesMe(@CurrentUser() user: AuthUser) {
+    return this.insureds.coveragesForSelf(user);
   }
 
   @Get(':id')

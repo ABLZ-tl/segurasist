@@ -16,7 +16,9 @@ import { ENV_TOKEN } from '@config/config.module';
 import { Env } from '@config/env.schema';
 import { S3Service } from '@infra/aws/s3.service';
 import { SqsService } from '@infra/aws/sqs.service';
-import { ForbiddenException, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { AuditWriterService } from '@modules/audit/audit-writer.service';
+import { ForbiddenException, Inject, Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
+import type { Prisma } from '@prisma/client';
 import {
   CERTIFICATE_REISSUE_REQUESTED_KIND,
   type CertificateReissueRequestedEvent,
@@ -58,6 +60,7 @@ export class CertificatesService {
     private readonly s3: S3Service,
     private readonly sqs: SqsService,
     @Inject(ENV_TOKEN) private readonly env: Env,
+    @Optional() private readonly auditWriter?: AuditWriterService,
   ) {}
 
   private readClientFor(
@@ -162,6 +165,89 @@ export class CertificatesService {
     const url = await this.s3.getPresignedGetUrl(this.env.S3_BUCKET_CERTIFICATES, cert.s3Key, ttlSeconds);
     const expiresAt = new Date(Date.now() + ttlSeconds * 1000).toISOString();
     return { url, expiresAt };
+  }
+
+  /**
+   * Portal asegurado — devuelve presigned URL del último certificado del
+   * asegurado autenticado (TTL 7 días, mismo que el flow admin).
+   *
+   * RBAC defensivo: aún cuando el RolesGuard ya impone `@Roles('insured')`
+   * a nivel handler, el service comprueba `user.role` para defensa en
+   * profundidad. Audit log obligatorio: `action='read'`,
+   * `resourceType='certificates'`, con `subAction='downloaded'` codificado en
+   * `payloadDiff` (el enum `AuditAction` no tiene un verb 'download' explícito).
+   *
+   * Devuelve 404 si todavía no se emitió el certificado del asegurado — el FE
+   * pinta empty state con CTA "tu certificado está siendo generado".
+   */
+  async urlForSelf(
+    user: AuthUser,
+    audit?: { ip?: string; userAgent?: string; traceId?: string },
+  ): Promise<{
+    url: string;
+    expiresAt: string;
+    certificateId: string;
+    version: number;
+    issuedAt: string;
+    validTo: string;
+  }> {
+    if (user.role !== 'insured') {
+      throw new ForbiddenException('Endpoint solo para asegurados');
+    }
+
+    // Lookup del insured propio por cognitoSub. NOTE: la columna depende de la
+    // migración Sprint 4 que liga insured ↔ pool insured (ver findSelf en
+    // InsuredsService); cast where input para no romper TS strict.
+    const insured = await this.prisma.client.insured.findFirst({
+      where: { cognitoSub: user.cognitoSub, deletedAt: null } as unknown as Prisma.InsuredWhereInput,
+      select: { id: true, tenantId: true },
+    });
+    if (!insured) {
+      throw new NotFoundException('Aún no se ha emitido tu certificado');
+    }
+
+    const cert = await this.prisma.client.certificate.findFirst({
+      where: { insuredId: insured.id, deletedAt: null },
+      orderBy: { issuedAt: 'desc' },
+    });
+    if (!cert) {
+      throw new NotFoundException('Aún no se ha emitido tu certificado');
+    }
+
+    const ttlSeconds = 7 * 24 * 60 * 60;
+    const url = await this.s3.getPresignedGetUrl(this.env.S3_BUCKET_CERTIFICATES, cert.s3Key, ttlSeconds);
+    const expiresAt = new Date(Date.now() + ttlSeconds * 1000).toISOString();
+
+    // Audit fire-and-forget. La descarga PII pasa por nuestros servidores
+    // (presigned generation), así que el evento queda trazado al cognitoSub
+    // del actor. Sin auditWriter inyectado (unit tests) → log y skip.
+    if (this.auditWriter) {
+      void this.auditWriter.record({
+        tenantId: insured.tenantId,
+        actorId: user.id,
+        action: 'read',
+        resourceType: 'certificates',
+        resourceId: cert.id,
+        ip: audit?.ip,
+        userAgent: audit?.userAgent,
+        traceId: audit?.traceId,
+        payloadDiff: { subAction: 'downloaded' },
+      });
+    } else {
+      this.log.log(
+        { msg: 'cert.urlForSelf without auditWriter', certificateId: cert.id, actorId: user.id },
+        'cert.urlForSelf',
+      );
+    }
+
+    return {
+      url,
+      expiresAt,
+      certificateId: cert.id,
+      version: cert.version,
+      issuedAt: cert.issuedAt.toISOString(),
+      validTo: cert.validTo.toISOString().slice(0, 10),
+    };
   }
 
   /**

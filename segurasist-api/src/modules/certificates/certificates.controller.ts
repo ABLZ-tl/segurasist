@@ -66,6 +66,24 @@ export class CertificatesController {
     return this.certs.list(q, this.buildScope(req, q.tenantId), user);
   }
 
+  /**
+   * Portal asegurado — presigned URL del último certificado propio.
+   *
+   * IMPORTANTE: handler `mine` declarado ANTES de `:id` para evitar que
+   * `ParseUUIDPipe` rompa con `BadRequest('mine' is not a valid UUID)`.
+   */
+  @Get('mine')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('insured')
+  mine(@CurrentUser() user: AuthUser, @Req() req: FastifyRequest & { user?: AuthUser }) {
+    const ip = (req.ip ?? '').toString() || undefined;
+    const ua = req.headers['user-agent'];
+    const userAgent = typeof ua === 'string' ? ua : undefined;
+    const reqId = req.id;
+    const traceId = typeof reqId === 'string' ? reqId : undefined;
+    return this.certs.urlForSelf(user, { ip, userAgent, traceId });
+  }
+
   @Get(':id')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('admin_segurasist', 'admin_mac', 'operator', 'supervisor', 'insured')

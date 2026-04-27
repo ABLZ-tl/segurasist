@@ -16,7 +16,57 @@ export const insuredsKeys = {
   detail: (id: string) => ['insureds', 'detail', id] as const,
   /** S3-06 — vista 360°. Cache key separada para invalidar independiente del detail. */
   view360: (id: string) => ['insureds', '360', id] as const,
+  /** Portal asegurado — `/v1/insureds/me`. Identidad self-scoped (no admin). */
+  self: ['insured-self'] as const,
+  /** Portal asegurado — `/v1/insureds/me/coverages`. */
+  coveragesSelf: ['coverages-self'] as const,
 };
+
+/**
+ * Portal asegurado — vista self del titular logueado. El backend resuelve
+ * el insuredId desde el JWT (no se acepta path param). `staleTime` 60s para
+ * que la home no haga refetch al volver de coberturas/certificado.
+ */
+export interface InsuredSelf {
+  id: string;
+  fullName: string;
+  packageId: string;
+  packageName: string;
+  validFrom: string;
+  validTo: string;
+  status: 'vigente' | 'proxima_a_vencer' | 'vencida';
+  daysUntilExpiry: number;
+  supportPhone: string;
+}
+
+/**
+ * Portal asegurado — coberturas con consumo. El backend devuelve `type`
+ * (`count` para visitas, `amount` para topes en MXN) + `unit` para que el FE
+ * pueda formatear con `Intl.NumberFormat` cuando aplica.
+ */
+export interface CoverageSelf {
+  id: string;
+  name: string;
+  type: 'count' | 'amount';
+  limit: number;
+  used: number;
+  unit: string;
+  lastUsedAt: string | null;
+}
+
+export const useInsuredSelf = () =>
+  useQuery({
+    queryKey: insuredsKeys.self,
+    queryFn: () => api<InsuredSelf>('/v1/insureds/me'),
+    staleTime: 60_000,
+  });
+
+export const useCoveragesSelf = () =>
+  useQuery({
+    queryKey: insuredsKeys.coveragesSelf,
+    queryFn: () => api<CoverageSelf[]>('/v1/insureds/me/coverages'),
+    staleTime: 60_000,
+  });
 
 export const useInsureds = (params: ListParams) =>
   useQuery({

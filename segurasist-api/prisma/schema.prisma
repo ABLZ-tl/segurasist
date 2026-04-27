@@ -295,6 +295,10 @@ model Insured {
   dob       DateTime      @db.Date
   email     String?       @db.VarChar(254)
   phone     String?       @db.VarChar(20)
+  /// Cognito sub del insured pool. Nullable hasta que el flow OTP del Sprint 3
+  /// popule el campo en el primer login (post-verify). Unique para evitar
+  /// que dos insureds compartan identidad federada.
+  cognitoSub String?      @unique @map("cognito_sub") @db.VarChar(64)
   packageId String        @map("package_id") @db.Uuid
   validFrom DateTime      @map("valid_from") @db.Date
   validTo   DateTime      @map("valid_to") @db.Date
