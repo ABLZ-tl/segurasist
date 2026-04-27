@@ -1,4 +1,11 @@
-import { PrismaClient, TenantStatus, UserRole, UserStatus } from '@prisma/client';
+import {
+  InsuredStatus,
+  PackageStatus,
+  PrismaClient,
+  TenantStatus,
+  UserRole,
+  UserStatus,
+} from '@prisma/client';
 
 const prisma = new PrismaClient();
 
@@ -145,10 +152,61 @@ async function main(): Promise<void> {
     }
   }
 
+  // Sprint 3 — paquete + asegurado demo. Necesarios para que el flow OTP del
+  // portal cargue datos reales (`/v1/insureds/me`, `/v1/certificates/mine`)
+  // y para que el demo de la vista 360 admin tenga al menos una fila.
+  // Idempotente: busca por (tenantId, name) en packages y por cognito_sub en
+  // insureds (UNIQUE partial index agregado en Sprint 3).
+  const insuredUser = await prisma.user.findFirst({
+    where: { tenantId: tenant.id, email: 'insured.demo@mac.local' },
+  });
+  const insuredCognitoSub = insuredUser?.cognitoSub ?? null;
+
+  let demoPackage = await prisma.package.findFirst({
+    where: { tenantId: tenant.id, name: 'Premium' },
+  });
+  if (!demoPackage) {
+    demoPackage = await prisma.package.create({
+      data: {
+        tenantId: tenant.id,
+        name: 'Premium',
+        description: 'Plan demo Premium — coberturas amplias',
+        status: PackageStatus.active,
+      },
+    });
+  }
+
+  if (insuredCognitoSub) {
+    const existing = await prisma.insured.findFirst({
+      where: { cognitoSub: insuredCognitoSub },
+    });
+    if (!existing) {
+      await prisma.insured.create({
+        data: {
+          tenantId: tenant.id,
+          curp: 'HEGM860519MJCRRN08',
+          rfc: 'HEGM860519M01',
+          fullName: 'María Hernández García',
+          dob: new Date('1986-05-19'),
+          email: 'insured.demo@mac.local',
+          phone: '5512345678',
+          packageId: demoPackage.id,
+          validFrom: new Date('2026-01-01'),
+          validTo: new Date('2027-03-31'),
+          status: InsuredStatus.active,
+          cognitoSub: insuredCognitoSub,
+        },
+      });
+    }
+  }
+
   const total = await prisma.user.count({ where: { tenantId: tenant.id } });
   const superCount = await prisma.user.count({ where: { tenantId: null } });
+  const insuredCount = await prisma.insured.count({ where: { tenantId: tenant.id } });
   // eslint-disable-next-line no-console
-  console.log(`Seed OK. Tenant ${tenant.slug} (${tenant.id}) — ${total} users, ${superCount} superadmin(s)`);
+  console.log(
+    `Seed OK. Tenant ${tenant.slug} (${tenant.id}) — ${total} users, ${superCount} superadmin(s), ${insuredCount} insured(s)`,
+  );
 }
 
 main()
