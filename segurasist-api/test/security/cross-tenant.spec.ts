@@ -416,6 +416,19 @@ const HTTP_MATRIX: ReadonlyArray<{
   // chat (2)
   { method: 'GET', pathTemplate: '/v1/chat/history?tenantId=:id', expectedStatus: 403, description: 'GET /v1/chat/history (tenant B forzado)' },
   { method: 'GET', pathTemplate: '/v1/chat/kb?tenantId=:id', expectedStatus: 403, description: 'GET /v1/chat/kb (tenant B forzado)' },
+  // S4-06 chatbot (3) — admin de tenant A intentando leer/mutar KB de tenant B.
+  // El admin_mac no tiene el insured role, así que POST /v1/chatbot/message
+  // viene con 403/404 (RBAC + RLS combo). El listado admin es 404 (la entry
+  // de B no existe para el contexto RLS de A, no leak).
+  { method: 'GET', pathTemplate: '/v1/admin/chatbot/kb', expectedStatus: 404, description: 'S4-06 GET /v1/admin/chatbot/kb (no leak entries de B)' },
+  { method: 'GET', pathTemplate: '/v1/admin/chatbot/kb/:id', expectedStatus: 404, description: 'S4-06 GET /v1/admin/chatbot/kb/:id (id de B)' },
+  {
+    method: 'PATCH',
+    pathTemplate: '/v1/admin/chatbot/kb/:id',
+    expectedStatus: 404,
+    body: () => ({ priority: 99 }),
+    description: 'S4-06 PATCH /v1/admin/chatbot/kb/:id (id de B)',
+  },
   // reports (1)
   { method: 'GET', pathTemplate: '/v1/reports/dashboard?tenantId=:id', expectedStatus: 403, description: 'GET /v1/reports/dashboard?tenantId=B (admin_mac forzando override → 403)' },
   // tenant-override S3-08 (4)

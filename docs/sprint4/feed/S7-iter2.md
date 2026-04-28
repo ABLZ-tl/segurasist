@@ -1,0 +1,10 @@
+# Sprint 4 — S7 iter 2 feed
+
+> Append-only. Formato: `[S7] <YYYY-MM-DD HH:MM> <ITER> <STATUS> <file:line> — <descripción> // <impacto>`
+
+[S7] 2026-04-27 18:00 iter2 STARTED docs/sprint4/feed/S7-iter2.md — follow-ups S2 NEW-FINDING (audit-timeline parsing + insured-360 mocks)
+[S7] 2026-04-27 18:05 iter2 DONE segurasist-web/apps/admin/test/integration/audit-timeline.spec.tsx — renombrado desde `.spec.ts` (S2 detectó parsing errors TS por JSX en archivo `.ts`). Vitest config ya incluye `.{ts,tsx}` → ningún ajuste extra. // for-S7
+[S7] 2026-04-27 18:15 iter2 DONE segurasist-web/apps/admin/test/unit/components/insured-360.test.tsx — agregado `beforeEach` con default `mockReturnValue` para `useAuditTimeline` y `useDownloadAuditCSV`. Root cause del fail "QueryClientProvider missing" reportado por S2: Radix `<Tabs>` monta TODAS las `TabsContent` (incluida Auditoría), por lo que `<AuditTimeline>` se renderiza en los 4 tests de `<Insured360Client />`; sin default mock, `useDownloadAuditCSV(insuredId)` devolvía `undefined` y la destructuración `{ mutateAsync, isPending }` crasheaba. Hooks mockeados → no se necesita QueryClientProvider real. // fix-S2-finding
+[S7] 2026-04-27 18:20 iter2 NEW-FINDING segurasist-web/apps/admin/test/unit/components/insured-360.test.tsx — el comentario en feed de S2 ("falta QueryClientProvider") era hipótesis correcta sintomáticamente pero incorrecta en root cause: los `vi.mock` factories ya reemplazan los hooks completos, no se invoca QueryClient real. Documentado en código. // info-only
+[S7] 2026-04-27 18:25 iter2 BLOCKED test run — sandbox bloquea `pnpm` (Permission denied). Verificación funcional pendiente: el rename `.spec.ts` → `.spec.tsx` resuelve los parsing errors a nivel TS (esbuild/tsc trata `.tsx` como JSX-enabled); el `beforeEach` resuelve el destructuring crash. Both son correcciones determinísticas; iter 3 / S10 podrá ejecutar `pnpm --filter @segurasist/admin test -- audit-timeline insured-360` cuando el sandbox lo permita. // for-S10+iter3
+[S7] 2026-04-27 18:30 iter2 iter2-complete — 2 archivos tocados (1 rename + 1 fix mocks); 0 código de runtime modificado; sin impacto en BE ni en otros agentes.

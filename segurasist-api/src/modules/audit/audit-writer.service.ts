@@ -52,12 +52,22 @@ export interface AuditChainVerificationExtended extends AuditChainVerification {
  */
 /**
  * H-01 — `AuditEventAction` agrupa los valores válidos del enum DB
- * `AuditAction`. Mantener sincronizado con `prisma/schema.prisma` y la
- * migración `20260428_audit_action_enum_extend`. Nuevos valores
- * (otp_requested, otp_verified, read_viewed, read_downloaded,
- * export_downloaded) reemplazan el "overload" semántico previo donde
- * services codificaban el sub-action en `resourceType='auth.otp.requested'`
- * o `payloadDiff.subAction`. Migración de callers en iter 2 (F6).
+ * `AuditAction`. Mantener sincronizado con `prisma/schema.prisma` y las
+ * migraciones:
+ *   - `20260428_audit_action_enum_extend` (Sprint 3 H-01): otp_requested,
+ *     otp_verified, read_viewed, read_downloaded, export_downloaded.
+ *   - `20260429_audit_action_sprint4_extend` (Sprint 4 S10): chatbot_message_sent,
+ *     chatbot_escalated, report_generated, report_downloaded,
+ *     monthly_report_sent.
+ *
+ * Estos valores reemplazan el "overload" semántico previo donde los services
+ * codificaban el sub-action en `resourceType='auth.otp.requested'` o
+ * `payloadDiff.subAction`. Migración de callers:
+ *   - F6 iter 2: OTP / read+download.
+ *   - S5 iter 2: chatbot_message_sent (KbService.processMessage).
+ *   - S6 iter 2 (pendiente): chatbot_escalated (escalation.service).
+ *   - S1 iter 2 (pendiente): report_generated, report_downloaded.
+ *   - S3 iter 2 (pendiente): monthly_report_sent (monthly-reports-handler).
  */
 export type AuditEventAction =
   | 'create'
@@ -72,7 +82,12 @@ export type AuditEventAction =
   | 'otp_verified'
   | 'read_viewed'
   | 'read_downloaded'
-  | 'export_downloaded';
+  | 'export_downloaded'
+  | 'chatbot_message_sent'
+  | 'chatbot_escalated'
+  | 'report_generated'
+  | 'report_downloaded'
+  | 'monthly_report_sent';
 
 export interface AuditEvent {
   tenantId: string;
@@ -232,7 +247,17 @@ export class AuditWriterService implements OnModuleInit, OnModuleDestroy {
           data: {
             tenantId: event.tenantId,
             actorId: event.actorId ?? null,
-            action: event.action,
+            // Bridge cast vía `unknown`: el cliente Prisma generado se
+            // regenera contra `schema.prisma` después de aplicar la migración
+            // `20260429_audit_action_sprint4_extend`. Hasta que `prisma generate`
+            // corra en CI/dev, el tipo Prisma local NO incluye los nuevos
+            // valores (chatbot_message_sent, chatbot_escalated, …) — pero el
+            // enum DB sí. El cast es seguro: `AuditEventAction` (definido en
+            // este módulo) es el source of truth y se mantiene sincronizado
+            // con `schema.prisma`. Tras el primer `prisma generate` en CI el
+            // cast se vuelve identitario sin cambio en runtime; podemos
+            // colapsarlo a `event.action` en un follow-up post-deploy.
+            action: event.action as unknown as Prisma.AuditLogCreateInput['action'],
             resourceType: event.resourceType,
             resourceId: event.resourceId ?? null,
             ip: event.ip ?? null,

@@ -150,6 +150,20 @@ enum ChatKbStatus {
   @@map("chat_kb_status")
 }
 
+/// S4-06 — Estado de una conversación con el chatbot.
+///   active    → mensajes nuevos siguen apareciendo en este conversation row.
+///   escalated → el matcher no encontró respuesta (o keyword 'agente'); el
+///               cliente recibió mensaje de derivación. Lo cierra el operator.
+///   closed    → conversación archivada (timeout cron 24h sin actividad o
+///               cierre explícito).
+enum ChatConversationStatus {
+  active
+  escalated
+  closed
+
+  @@map("chat_conversation_status")
+}
+
 /// H-01 / P3 — enum extendido para acabar con el "overload" de `login`/`read`
 /// como semánticas múltiples (OTP request, OTP verify, certificate view,
 /// certificate download, export download). Antes había callers
@@ -166,12 +180,21 @@ enum ChatKbStatus {
 ///   - export_downloaded            → user descargó un export PII previamente
 ///                                    generado (NO es la generación, eso es `export`)
 ///
-/// Migración (`20260428_audit_action_enum_extend`) usa
-/// `ALTER TYPE ... ADD VALUE IF NOT EXISTS` — Postgres soporta agregar
-/// valores enum desde la 12+ sin downtime. Filas existentes con `login` que
-/// representaban OTP no se re-escriben automáticamente: los tests de
-/// regresión solo verifican que las nuevas escrituras usan los valores
-/// correctos. Migración a los nuevos valores en services es iter 2 (F6).
+/// Migraciones aplicables:
+///   - `20260428_audit_action_enum_extend` (Sprint 3 H-01): otp_requested,
+///     otp_verified, read_viewed, read_downloaded, export_downloaded.
+///   - `20260429_audit_action_sprint4_extend` (Sprint 4 S10 NEW-FINDING-S10-03):
+///     chatbot_message_sent (S5), chatbot_escalated (S6), report_generated (S1),
+///     report_downloaded (S1), monthly_report_sent (S3 cron).
+///
+/// Las migraciones usan `ALTER TYPE ... ADD VALUE IF NOT EXISTS` — Postgres
+/// soporta agregar valores enum desde la 12+ sin downtime. Filas existentes
+/// con el workaround previo (`action='create'`+`resourceType='chatbot.message'`,
+/// `action='update'`+`payloadDiff.subAction='escalated'`) NO se re-escriben
+/// automáticamente: los services migran a los nuevos valores en sus iter 2
+/// respectivos. S5 ya migró en este iter (KbService.processMessage); S1, S3
+/// y S6 quedan en backlog del feed (los enum values ya existen, solo cambia
+/// el caller).
 enum AuditAction {
   create
   update
@@ -186,6 +209,12 @@ enum AuditAction {
   read_viewed
   read_downloaded
   export_downloaded
+  // Sprint 4 — S10 NEW-FINDING-S10-03 + S5 iter 2 follow-up.
+  chatbot_message_sent
+  chatbot_escalated
+  report_generated
+  report_downloaded
+  monthly_report_sent
 
   @@map("audit_action")
 }
@@ -202,6 +231,21 @@ enum ExportStatus {
   failed
 
   @@map("export_status")
+}
+
+/// S4-04 — Estado del cron mensual por tenant.
+///   pending → processing → completed
+///   pending → processing → failed
+/// `completed` significa: PDF generado + email enviado + audit log. La
+/// transición a `failed` deja el run para inspección on-call (NO se reintenta
+/// automáticamente al re-recibir el cron — la UNIQUE bloquea).
+enum MonthlyReportStatus {
+  pending
+  processing
+  completed
+  failed
+
+  @@map("monthly_report_status")
 }
 
 // ============== MODELS ==============
@@ -228,9 +272,11 @@ model Tenant {
   batchErrors   BatchError[]
   emailEvents   EmailEvent[]
   chatMessages  ChatMessage[]
+  chatConversations ChatConversation[]
   chatKb        ChatKb[]
   auditLogs     AuditLog[]
   exports       Export[]
+  monthlyReportRuns MonthlyReportRun[]
 
   @@index([status])
   @@map("tenants")
@@ -518,30 +564,84 @@ model EmailEvent {
   @@map("email_events")
 }
 
-model ChatMessage {
-  id         String        @id @default(uuid()) @db.Uuid
-  tenantId   String        @map("tenant_id") @db.Uuid
-  insuredId  String?       @map("insured_id") @db.Uuid
-  direction  ChatDirection
-  content    String        @db.Text
-  intent     String?       @db.VarChar(80)
-  confidence Float?
-  escalated  Boolean       @default(false)
-  createdAt  DateTime      @default(now()) @map("created_at")
+/// S4-06 — Conversación 1:N mensajes entre un insured y el chatbot.
+/// Una conversación arranca al primer mensaje del insured (insuredId obligatorio
+/// en ese path). El status cambia a `escalated` cuando el matcher no encuentra
+/// respuesta y el `EscalationService` deriva al operator. `closed` la setea un
+/// cron / endpoint de cierre futuro (Sprint 5+).
+model ChatConversation {
+  id        String                 @id @default(uuid()) @db.Uuid
+  tenantId  String                 @map("tenant_id") @db.Uuid
+  insuredId String                 @map("insured_id") @db.Uuid
+  status    ChatConversationStatus @default(active)
+  createdAt DateTime               @default(now()) @map("created_at")
+  updatedAt DateTime               @updatedAt @map("updated_at")
 
-  tenant Tenant @relation(fields: [tenantId], references: [id])
+  tenant   Tenant        @relation(fields: [tenantId], references: [id])
+  messages ChatMessage[]
+
+  @@index([tenantId, insuredId, status])
+  @@index([tenantId, updatedAt(sort: Desc)])
+  @@map("chat_conversations")
+}
+
+/// S4-06 — Mensaje de chat. Se persisten ambos lados (`role='user'` y
+/// `role='bot'`). Cuando el bot responde con un match, `matchedEntryId` apunta
+/// a la entry de KB que disparó la respuesta — sirve para feedback (sprint 5+
+/// agregaremos `helpful boolean?` al modelo).
+///
+/// `direction` se conserva por compat con el stub Sprint 1; el path real
+/// Sprint 4 usa `role` (user|bot|system). Mapeo:
+///   role='user'   → direction='inbound'
+///   role='bot'    → direction='outbound'
+///   role='system' → direction='outbound' (mensajes ack/derivación)
+model ChatMessage {
+  id             String        @id @default(uuid()) @db.Uuid
+  tenantId       String        @map("tenant_id") @db.Uuid
+  insuredId      String?       @map("insured_id") @db.Uuid
+  conversationId String?       @map("conversation_id") @db.Uuid
+  /// Persistido para compat Sprint 1.
+  direction      ChatDirection
+  /// Sprint 4: 'user' | 'bot' | 'system'. NULL en filas legacy Sprint 1.
+  role           String?       @db.VarChar(16)
+  content        String        @db.Text
+  intent         String?       @db.VarChar(80)
+  confidence     Float?
+  escalated      Boolean       @default(false)
+  /// FK soft a ChatKb.id (no relation Prisma para que un soft-delete del
+  /// entry no rompa el histórico). NULL si no hubo match (fallback / system).
+  matchedEntryId String?       @map("matched_entry_id") @db.Uuid
+  createdAt      DateTime      @default(now()) @map("created_at")
+
+  tenant       Tenant            @relation(fields: [tenantId], references: [id])
+  conversation ChatConversation? @relation(fields: [conversationId], references: [id])
 
   @@index([tenantId, insuredId])
+  @@index([tenantId, conversationId, createdAt])
   @@index([tenantId, createdAt(sort: Desc)])
   @@map("chat_messages")
 }
 
+/// S4-06 — Knowledge base entry estructurada por categoría.
+/// `keywords` y `synonyms` alimentan el matching engine (kb-matcher.service.ts).
+/// `priority` desempata cuando 2 entries scorearon igual (mayor primero).
+/// `enabled` permite ocultar una entry sin borrarla (admin lo togglea).
 model ChatKb {
   id        String       @id @default(uuid()) @db.Uuid
   tenantId  String       @map("tenant_id") @db.Uuid
   category  String       @db.VarChar(80)
   question  String       @db.Text
   answer    String       @db.Text
+  /// Tokens canónicos lowercase + sin acentos. El matcher los compara contra
+  /// los tokens del mensaje. Ej.: ["poliza","vencimiento","fecha"].
+  keywords  String[]     @default([])
+  /// Diccionario {tokenCanónico: [sinónimos]}. Ej.:
+  ///   {"poliza":["seguro","cobertura"],"vencimiento":["vence","caduca"]}
+  synonyms  Json         @default("{}")
+  /// Mayor = preferida ante empate. 0 default; admin sube las prioritarias.
+  priority  Int          @default(0)
+  /// Si false, el matcher la ignora pero el admin sigue viéndola.
+  enabled   Boolean      @default(true)
   version   Int          @default(1)
   status    ChatKbStatus @default(draft)
   createdAt DateTime     @default(now()) @map("created_at")
@@ -552,6 +652,7 @@ model ChatKb {
 
   @@index([tenantId, category])
   @@index([tenantId, status])
+  @@index([tenantId, enabled])
   @@map("chat_kb")
 }
 
@@ -655,4 +756,65 @@ model Export {
   @@index([tenantId, requestedBy, requestedAt(sort: Desc)], map: "exports_requester_idx")
   @@index([tenantId, requestedAt(sort: Desc)], map: "exports_tenant_requested_at_idx")
   @@map("exports")
+}
+
+/// S4-04 — Idempotencia DB-side del cron mensual.
+///
+/// El handler `MonthlyReportsHandler` recibe un mensaje SQS con
+/// `{kind: 'cron.monthly_reports', triggeredAt}` y, para cada tenant
+/// activo, intenta `prisma.monthlyReportRun.create({...})`. Si la fila
+/// ya existe (UNIQUE violation P2002), el handler hace `skip` para ese
+/// tenant — esto cubre re-entregas SQS (at-least-once) y re-triggers
+/// manuales del cron sin enviar 2 emails.
+///
+/// `period_year` / `period_month` representan el período REPORTADO (mes
+/// anterior al trigger). Ejemplo: trigger 2026-05-01 14:00 UTC → run
+/// con `period_year=2026, period_month=4` (reporte de abril).
+///
+/// `s3_key` se popula cuando el PDF se generó y subió. `email_message_id`
+/// guarda el messageId devuelto por SES (o Mailpit en dev) — sirve para
+/// correlacionar con `email_events` si en Sprint 5 movemos email tracking
+/// al worker dedicado.
+///
+/// Lifecycle:
+///   1. `create({status='pending'})` (idempotency lock).
+///   2. Handler genera PDF + sube S3, marca `status='processing'`.
+///   3. Envía email via SES, marca `status='completed'` con
+///      `s3_key`, `email_message_id`, `recipient_count`, `completed_at`.
+///   4. Si cualquier paso falla → `status='failed'` con `error_message`,
+///      `completed_at` set. La UNIQUE evita reintento automático.
+///
+/// RLS: tenant-scoped. La política sigue el patrón estándar
+/// (`tenant_id::text = current_setting('app.current_tenant', true)`).
+/// El handler corre con BYPASSRLS (worker application-scoped, sin `req`),
+/// igual que ReportsWorker — documentado en ADR-0001.
+model MonthlyReportRun {
+  id              String              @id @default(uuid()) @db.Uuid
+  tenantId        String              @map("tenant_id") @db.Uuid
+  /// Año del período REPORTADO (mes anterior al trigger).
+  periodYear      Int                 @map("period_year")
+  /// Mes del período (1..12) — CHECK constraint en migración.
+  periodMonth     Int                 @map("period_month")
+  status          MonthlyReportStatus @default(pending)
+  /// S3 key del PDF generado (`monthly-reports/{tenantId}/{year}-{mm}.pdf`).
+  s3Key           String?             @map("s3_key") @db.Text
+  /// Cantidad de destinatarios al momento del envío (snapshot del env var).
+  recipientCount  Int?                @map("recipient_count")
+  /// MessageId devuelto por SES/Mailpit. NULL si el envío no se hizo.
+  emailMessageId  String?             @map("email_message_id") @db.Text
+  /// Mensaje de error legible si `status='failed'` (truncado a 500 chars).
+  errorMessage    String?             @map("error_message") @db.Text
+  /// Trigger source — `eventbridge` (cron real) o `manual` (re-trigger ops).
+  triggeredBy     String              @default("eventbridge") @map("triggered_by") @db.VarChar(32)
+  triggeredAt     DateTime            @default(now()) @map("triggered_at") @db.Timestamptz(3)
+  completedAt     DateTime?           @map("completed_at") @db.Timestamptz(3)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  /// IDEMPOTENCIA — UNIQUE natural key. Cualquier 2do `create` con la misma
+  /// terna lanza P2002, que el handler interpreta como "ya procesado, skip".
+  @@unique([tenantId, periodYear, periodMonth], name: "monthly_report_run_period_unique")
+  @@index([tenantId, triggeredAt(sort: Desc)], map: "monthly_report_runs_tenant_triggered_idx")
+  @@index([status, triggeredAt(sort: Desc)], map: "monthly_report_runs_status_idx")
+  @@map("monthly_report_runs")
 }

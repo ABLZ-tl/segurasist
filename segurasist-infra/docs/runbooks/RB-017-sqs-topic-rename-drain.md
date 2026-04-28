@@ -1,4 +1,7 @@
-# RB-014 — SQS topic rename drain (Sprint 5 apply)
+# RB-017 — SQS topic rename drain (Sprint 5 apply)
+
+> _Renumerado de RB-014 → RB-017 en validation gate Sprint 4 closure — colisión con RB-014-monthly-reports-replay.md (S3+S10 iter 2)._
+
 
 - **Severity**: P2 (planned change — escalates to P1 if drain falla en prod)
 - **On-call SLA**: ejecutar en ventana de mantenimiento programada

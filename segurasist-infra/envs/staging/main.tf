@@ -334,6 +334,10 @@ locals {
     "pdf"               = { vt = 120, retention = 345600 }
     "emails"            = { vt = 30,  retention = 345600 }
     "reports"           = { vt = 300, retention = 345600 }
+    # S4-04 — cola del cron mensual. VT 600s cubre N=100 tenants × ~5s
+    # generación PDF + envío SES. Idempotencia DB-side
+    # (monthly_report_runs UNIQUE).
+    "monthly-reports"   = { vt = 600, retention = 345600 }
   }
 }
 
@@ -360,6 +364,48 @@ module "eventbus" {
   archive_retention_days = 90
 
   tags = merge(local.common_tags, { Component = "events" })
+}
+
+############################################
+# S4-04 — EventBridge cron rule (monthly reports). Mismo schedule que dev
+# (día 1 14:00 UTC). Staging usa la misma cadencia para que QA observe el
+# comportamiento real antes del primer trigger en prod.
+############################################
+
+module "cron_monthly_reports" {
+  source = "../../modules/eventbridge-rule"
+
+  name            = "${local.name_prefix}-cron-monthly-reports"
+  description     = "Dispara generación de reportes mensuales (S4-04). Día 1 de cada mes 14:00 UTC."
+  cron_expression = "cron(0 14 1 * ? *)"
+  enabled         = true
+
+  target_sqs_arn = module.sqs["monthly-reports"].queue_arn
+
+  tags = merge(local.common_tags, { Component = "cron-monthly-reports", Owner = "S3" })
+}
+
+data "aws_iam_policy_document" "monthly_reports_queue_policy" {
+  statement {
+    sid    = "AllowEventBridgePublish"
+    effect = "Allow"
+    actions = ["sqs:SendMessage"]
+    principals {
+      type        = "Service"
+      identifiers = ["events.amazonaws.com"]
+    }
+    resources = [module.sqs["monthly-reports"].queue_arn]
+    condition {
+      test     = "ArnEquals"
+      variable = "aws:SourceArn"
+      values   = [module.cron_monthly_reports.rule_arn]
+    }
+  }
+}
+
+resource "aws_sqs_queue_policy" "monthly_reports" {
+  queue_url = module.sqs["monthly-reports"].queue_url
+  policy    = data.aws_iam_policy_document.monthly_reports_queue_policy.json
 }
 
 ############################################

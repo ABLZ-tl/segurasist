@@ -18,12 +18,14 @@ import { AuthModule } from './modules/auth/auth.module';
 import { BatchesModule } from './modules/batches/batches.module';
 import { CertificatesModule } from './modules/certificates/certificates.module';
 import { ChatModule } from './modules/chat/chat.module';
+import { ChatbotModule } from './modules/chatbot/chatbot.module';
 import { ClaimsModule } from './modules/claims/claims.module';
 import { CoveragesModule } from './modules/coverages/coverages.module';
 import { EmailModule } from './modules/email/email.module';
 import { InsuredsModule } from './modules/insureds/insureds.module';
 import { PackagesModule } from './modules/packages/packages.module';
 import { ReportsModule } from './modules/reports/reports.module';
+import { ReportsCronModule } from './modules/reports/cron/reports-cron.module';
 import { TenantsModule } from './modules/tenants/tenants.module';
 import { UsersModule } from './modules/users/users.module';
 import { WebhooksModule } from './modules/webhooks/webhooks.module';
@@ -103,7 +105,12 @@ import { WorkersModule } from './workers/workers.module';
     CertificatesModule,
     ClaimsModule,
     ReportsModule,
+    // S1 iter 2 — wireup del handler SQS del cron mensual S4-04 (owner S3) +
+    // provider real del generator de PDF (owner S1). El módulo NO arranca el
+    // poll loop en NODE_ENV=test ni con WORKERS_ENABLED!=true.
+    ReportsCronModule,
     ChatModule,
+    ChatbotModule,
     AuditModule,
     WebhooksModule,
     // S2-01 — workers SQS (layout-validation + insureds-creation). Pollers

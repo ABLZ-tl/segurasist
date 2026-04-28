@@ -8,7 +8,7 @@
  *  - Empty states de cada tab.
  *  - Acción de expandir payloadDiff en auditoría.
  */
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { Insured360 } from '@segurasist/api-client';
@@ -18,7 +18,23 @@ vi.mock('@segurasist/api-client/hooks/insureds', () => ({
   insuredsKeys: { view360: (id: string) => ['insureds', '360', id] },
 }));
 
+// S4-09 — el tab Auditoría ahora delega al `<AuditTimeline>` que consume
+// `useAuditTimeline` (infiniteQuery). Mockeamos para que estos specs sigan
+// verdes mientras se refactoriza el sub-set específico del timeline en
+// `test/integration/audit-timeline.spec.tsx`.
+vi.mock('@segurasist/api-client/hooks/audit-timeline', () => ({
+  useAuditTimeline: vi.fn(),
+  useDownloadAuditCSV: vi.fn(),
+  auditTimelineKeys: {
+    list: (id: string, f?: string) => ['audit-timeline', 'list', id, f ?? null],
+  },
+}));
+
 import { useInsured360 } from '@segurasist/api-client/hooks/insureds';
+import {
+  useAuditTimeline,
+  useDownloadAuditCSV,
+} from '@segurasist/api-client/hooks/audit-timeline';
 import { Insured360Client } from '../../../app/(app)/insureds/[id]/insured-360-client';
 import { InsuredDatosTab } from '../../../app/(app)/insureds/[id]/datos';
 import { InsuredCoberturasTab } from '../../../app/(app)/insureds/[id]/coberturas';
@@ -27,6 +43,31 @@ import { InsuredCertificadosTab } from '../../../app/(app)/insureds/[id]/certifi
 import { InsuredAuditoriaTab } from '../../../app/(app)/insureds/[id]/auditoria';
 
 const mockedUseInsured360 = vi.mocked(useInsured360);
+const mockedUseAuditTimelineGlobal = vi.mocked(useAuditTimeline);
+const mockedUseDownloadAuditCSVGlobal = vi.mocked(useDownloadAuditCSV);
+
+// S7 iter 2 — default mock returns para `useAuditTimeline` y
+// `useDownloadAuditCSV`. Sin esto, los tests de `<Insured360Client />` que
+// renderizan TODAS las TabsContent (Radix monta todas, sólo oculta visibles)
+// fallan al destructurar `useDownloadAuditCSV(insuredId)` → undefined.
+// S2 reportó esto como "falta de QueryClientProvider"; el root cause real
+// es que los mocks devolvían undefined al ser invocados sin setup explícito.
+beforeEach(() => {
+  mockedUseAuditTimelineGlobal.mockReturnValue({
+    data: { pages: [{ items: [], nextCursor: null }], pageParams: [undefined] },
+    isLoading: false,
+    isError: false,
+    error: null,
+    isFetching: false,
+    isFetchingNextPage: false,
+    hasNextPage: false,
+    fetchNextPage: vi.fn(),
+  } as never);
+  mockedUseDownloadAuditCSVGlobal.mockReturnValue({
+    mutateAsync: vi.fn().mockResolvedValue(undefined),
+    isPending: false,
+  } as never);
+});
 
 const FIXTURE: Insured360 = {
   insured: {
@@ -204,35 +245,76 @@ describe('<InsuredCertificadosTab />', () => {
   });
 });
 
-describe('<InsuredAuditoriaTab />', () => {
-  it('renderiza timeline con avatar + acción humanizada + IP enmascarada', () => {
+describe('<InsuredAuditoriaTab /> (S4-09 timeline)', () => {
+  const mockedUseAuditTimeline = vi.mocked(useAuditTimeline);
+  const mockedUseDownloadAuditCSV = vi.mocked(useDownloadAuditCSV);
+
+  function setupTimeline(items: Array<Record<string, unknown>>): void {
+    mockedUseAuditTimeline.mockReturnValue({
+      data: { pages: [{ items, nextCursor: null }], pageParams: [undefined] },
+      isLoading: false,
+      isError: false,
+      error: null,
+      isFetching: false,
+      isFetchingNextPage: false,
+      hasNextPage: false,
+      fetchNextPage: vi.fn(),
+    } as never);
+    mockedUseDownloadAuditCSV.mockReturnValue({
+      mutateAsync: vi.fn().mockResolvedValue(undefined),
+      isPending: false,
+    } as never);
+  }
+
+  it('renderiza el componente AuditTimeline (lista feed + filtro + export button)', () => {
+    setupTimeline([
+      {
+        id: 'au1',
+        occurredAt: '2026-04-25T12:00:00.000Z',
+        action: 'read_viewed',
+        resourceType: 'insureds',
+        resourceId: FIXTURE.insured.id,
+        actorId: 'u1',
+        actorEmail: 'op@mac.local',
+        ipMasked: '189.10.20.*',
+        userAgent: 'jest',
+        payloadDiff: { subAction: 'viewed_360' },
+      },
+    ]);
     render(<InsuredAuditoriaTab audit={FIXTURE.audit} insuredId={FIXTURE.insured.id} />);
-    expect(screen.getByTestId('audit-timeline')).toBeInTheDocument();
+    expect(screen.getByTestId('audit-timeline-root')).toBeInTheDocument();
+    expect(screen.getByTestId('audit-timeline-export-btn')).toBeInTheDocument();
     expect(screen.getByText(/op@mac\.local/)).toBeInTheDocument();
-    expect(screen.getByText(/Vió la ficha 360/)).toBeInTheDocument();
-    // IPv4 enmascarada: 189.10.20.* (last octet redacted).
     expect(screen.getByText(/189\.10\.20\.\*/)).toBeInTheDocument();
   });
 
-  it('expande/oculta el JSON diff al hacer click en "Ver diff"', async () => {
-    const user = userEvent.setup();
-    render(<InsuredAuditoriaTab audit={FIXTURE.audit} insuredId={FIXTURE.insured.id} />);
-    const btn = screen.getByRole('button', { name: /ver diff/i });
-    await user.click(btn);
-    expect(screen.getByText(/viewed_360/)).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: /ocultar diff/i }));
-    expect(screen.queryByText(/"subAction"/)).toBeNull();
-  });
-
-  it('empty state "Sin actividad registrada" cuando audit=[]', () => {
+  it('empty state cuando el timeline no tiene items', () => {
+    setupTimeline([]);
     render(<InsuredAuditoriaTab audit={[]} insuredId={FIXTURE.insured.id} />);
     expect(screen.getByText(/sin actividad registrada/i)).toBeInTheDocument();
   });
 
-  it('muestra link de export CSV con el resourceId correcto', () => {
+  it('expande/oculta el payloadDiff al hacer click en el toggle', async () => {
+    setupTimeline([
+      {
+        id: 'au1',
+        occurredAt: '2026-04-25T12:00:00.000Z',
+        action: 'read_viewed',
+        resourceType: 'insureds',
+        resourceId: FIXTURE.insured.id,
+        actorId: 'u1',
+        actorEmail: 'op@mac.local',
+        ipMasked: '189.10.20.*',
+        userAgent: 'jest',
+        payloadDiff: { subAction: 'viewed_360' },
+      },
+    ]);
+    const user = userEvent.setup();
     render(<InsuredAuditoriaTab audit={FIXTURE.audit} insuredId={FIXTURE.insured.id} />);
-    const link = screen.getByTestId('audit-export-link');
-    expect(link.getAttribute('href')).toContain(`resourceId=${FIXTURE.insured.id}`);
-    expect(link.getAttribute('href')).toContain('format=csv');
+    const toggle = screen.getByTestId('audit-timeline-item-toggle');
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    await user.click(toggle);
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByTestId('audit-timeline-item-diff')).toBeInTheDocument();
   });
 });

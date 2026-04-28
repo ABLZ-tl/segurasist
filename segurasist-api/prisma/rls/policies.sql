@@ -64,15 +64,23 @@ DECLARE
     'email_events',
     'chat_messages',
     'chat_kb',
+    'chat_conversations',  -- S4-06: tenant-iso por (tenantId, insuredId).
+                           -- Migración 20260427_chatbot_kb crea la tabla con
+                           -- policies; este array es el tripwire del drift static.
     'system_alerts',  -- F3 iter1 NEW-FINDING: tenant_id NULLABLE (alertas
                       -- platform-wide). Política trata NULL = mismatch
                       -- (current_setting → NULL → false), igual que `users`
                       -- superadmin: cliente normal `segurasist_app` jamás ve
                       -- alertas globales — sólo segurasist_admin via BYPASSRLS.
     'audit_log',
-    'exports'         -- C-15: faltaba aquí. Migration 20260427 sí crea la tabla
+    'exports',        -- C-15: faltaba aquí. Migration 20260427 sí crea la tabla
                       -- con políticas locales, pero `apply-rls.sh` re-aplicado
                       -- contra DB nueva omitía RLS en `exports` ⇒ drift.
+    'monthly_report_runs' -- S4-04: idempotencia del cron mensual.
+                          -- Migración 20260428_monthly_report_runs ya crea
+                          -- la tabla con policies; agregamos al array para
+                          -- que apply-rls.sh re-aplicado contra DB nueva
+                          -- (test/CI) NO drift.
   ];
 BEGIN
   FOREACH tbl IN ARRAY tables LOOP

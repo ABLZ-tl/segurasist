@@ -1,0 +1,220 @@
+name: Performance Tests
+
+# Sprint 4 — S4-10.
+# Ejecuta los escenarios JMeter (portal-load-1000 + admin-load-100) contra
+# staging y aplica gates p95/error rate. Deshabilitado en push (cuesta tiempo
+# y carga la infra). Triggers:
+#   - workflow_dispatch  → run on-demand desde Actions UI / gh workflow run
+#   - schedule           → todos los lunes 06:00 UTC (00:00 CDMX) para detectar
+#                          regresiones semanales
+#
+# Gates:
+#   - p95 latencia API ≤ 500 ms
+#   - error rate ≤ 1%
+#
+# Si falla, sube los .jtl + .json como artifacts (retention 30 d) y rompe el
+# build. NO bloquea PRs (no es required check).
+
+on:
+  workflow_dispatch:
+    inputs:
+      base_url:
+        description: 'Target API base URL (incluye scheme)'
+        required: true
+        default: 'https://api.staging.segurasist.com'
+      portal_vus:
+        description: 'Portal VUs'
+        required: false
+        default: '1000'
+      admin_vus:
+        description: 'Admin VUs'
+        required: false
+        default: '100'
+      duration_seconds:
+        description: 'Sustain duration (s)'
+        required: false
+        default: '600'
+      tool:
+        description: 'Tool: jmeter | k6 | both'
+        required: false
+        default: 'jmeter'
+        type: choice
+        options:
+          - jmeter
+          - k6
+          - both
+  schedule:
+    # Lunes 06:00 UTC.
+    - cron: '0 6 * * 1'
+
+permissions:
+  contents: read
+
+env:
+  BASE_URL: ${{ github.event.inputs.base_url || 'https://api.staging.segurasist.com' }}
+  PORTAL_VUS: ${{ github.event.inputs.portal_vus || '1000' }}
+  ADMIN_VUS: ${{ github.event.inputs.admin_vus || '100' }}
+  DURATION_SECONDS: ${{ github.event.inputs.duration_seconds || '600' }}
+  TOOL: ${{ github.event.inputs.tool || 'jmeter' }}
+
+jobs:
+  # --------------------------------------------------------------------
+  # JMeter — escenario regulatory / source of truth.
+  # --------------------------------------------------------------------
+  jmeter:
+    if: ${{ github.event.inputs.tool != 'k6' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node (para generar fixtures)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20.11.x'
+
+      - name: Install jq + bc
+        run: sudo apt-get update && sudo apt-get install -y jq bc
+
+      - name: Install Apache JMeter 5.6.3
+        run: |
+          set -e
+          curl -fsSL "https://archive.apache.org/dist/jmeter/binaries/apache-jmeter-5.6.3.tgz" \
+            -o /tmp/jmeter.tgz
+          mkdir -p "$HOME/jmeter"
+          tar -xzf /tmp/jmeter.tgz -C "$HOME/jmeter" --strip-components=1
+          echo "$HOME/jmeter/bin" >> "$GITHUB_PATH"
+
+      - name: Generate fixtures (full 1000 CURPs)
+        working-directory: tests/performance/jmeter/data
+        run: node generate-csv.mjs
+
+      - name: Make parser executable
+        run: chmod +x tests/performance/parse-jtl.sh
+
+      - name: Run portal scenario (1000 vu)
+        working-directory: tests/performance/jmeter
+        run: |
+          mkdir -p results
+          jmeter -n \
+            -t portal-load-1000.jmx \
+            -JBASE_URL="${BASE_URL}" \
+            -JVUS="${PORTAL_VUS}" \
+            -JDURATION_SECONDS="${DURATION_SECONDS}" \
+            -JJTL_OUT=results/portal-1000.jtl \
+            -l results/portal-1000.jtl \
+            -e -o results/portal-html
+
+      - name: Run admin scenario (100 vu)
+        working-directory: tests/performance/jmeter
+        run: |
+          jmeter -n \
+            -t admin-load-100.jmx \
+            -JBASE_URL="${BASE_URL}" \
+            -JVUS="${ADMIN_VUS}" \
+            -JDURATION_SECONDS="${DURATION_SECONDS}" \
+            -JJTL_OUT=results/admin-100.jtl \
+            -l results/admin-100.jtl \
+            -e -o results/admin-html
+
+      - name: Parse + check thresholds
+        id: gate
+        working-directory: tests/performance
+        run: |
+          set -e
+          fail=0
+
+          for jtl in jmeter/results/portal-1000.jtl jmeter/results/admin-100.jtl; do
+            echo "=== $jtl ==="
+            metrics=$(./parse-jtl.sh "$jtl")
+            echo "$metrics" | jq .
+
+            p95=$(echo "$metrics" | jq -r '.p95')
+            err=$(echo "$metrics" | jq -r '.errorRatePct')
+
+            if (( $(echo "$p95 > 500" | bc -l) )); then
+              echo "::error file=$jtl::p95=${p95}ms exceeds 500ms threshold"
+              fail=1
+            fi
+            if (( $(echo "$err > 1" | bc -l) )); then
+              echo "::error file=$jtl::error rate=${err}% exceeds 1% threshold"
+              fail=1
+            fi
+          done
+
+          # Per-endpoint breakdown (no falla, sólo reporta).
+          for label in \
+            "GET /v1/insureds/me" \
+            "GET /v1/insureds/me/coverages" \
+            "GET /v1/certificates/mine" \
+            "POST /v1/chatbot/message" \
+            "POST /v1/claims"; do
+            echo "--- portal: $label"
+            ./parse-jtl.sh jmeter/results/portal-1000.jtl "$label" | jq .
+          done
+
+          exit "$fail"
+
+      - name: Upload JTL + HTML reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jmeter-results-${{ github.run_id }}
+          path: |
+            tests/performance/jmeter/results/
+          retention-days: 30
+
+  # --------------------------------------------------------------------
+  # k6 — alternativa moderna; corre en paralelo si el input lo pide.
+  # --------------------------------------------------------------------
+  k6:
+    if: ${{ github.event.inputs.tool == 'k6' || github.event.inputs.tool == 'both' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install k6
+        run: |
+          set -e
+          sudo gpg -k
+          sudo gpg --no-default-keyring \
+            --keyring /usr/share/keyrings/k6-archive-keyring.gpg \
+            --keyserver hkp://keyserver.ubuntu.com:80 \
+            --recv-keys C5AD17C747E3415A3642D57D77C6C491D6AC1D69
+          echo "deb [signed-by=/usr/share/keyrings/k6-archive-keyring.gpg] https://dl.k6.io/deb stable main" \
+            | sudo tee /etc/apt/sources.list.d/k6.list
+          sudo apt-get update
+          sudo apt-get install -y k6 jq
+
+      - name: Run portal k6
+        working-directory: tests/performance/k6
+        run: |
+          mkdir -p results
+          BASE_URL="${BASE_URL}" \
+          k6 run \
+            -e VUS="${PORTAL_VUS}" \
+            -e RAMPUP=300 \
+            -e DURATION="${DURATION_SECONDS}" \
+            --summary-export results/portal-summary-export.json \
+            portal.k6.js
+
+      - name: Run admin k6
+        working-directory: tests/performance/k6
+        run: |
+          BASE_URL="${BASE_URL}" \
+          k6 run \
+            -e VUS="${ADMIN_VUS}" \
+            -e RAMPUP=120 \
+            -e DURATION="${DURATION_SECONDS}" \
+            --summary-export results/admin-summary-export.json \
+            admin.k6.js
+
+      - name: Upload k6 results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: k6-results-${{ github.run_id }}
+          path: |
+            tests/performance/k6/results/
+          retention-days: 30

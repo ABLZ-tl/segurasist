@@ -23,6 +23,7 @@ import { PrismaService } from '@common/prisma/prisma.service';
 import { RedisService } from '@infra/cache/redis.service';
 import { Injectable, Logger } from '@nestjs/common';
 import { Prisma, type PrismaClient } from '@prisma/client';
+import type { ConciliacionData } from './dto/conciliacion-report.dto';
 import type {
   DashboardKpi,
   DashboardResponse,
@@ -30,6 +31,8 @@ import type {
   RecentCertificate,
   VolumetryWeek,
 } from './dto/dashboard.dto';
+import type { UtilizacionData, UtilizacionRow } from './dto/utilizacion-report.dto';
+import type { VolumetriaData } from './dto/volumetria-report.dto';
 
 const CACHE_TTL_SECONDS = 60;
 const VOLUMETRY_WEEKS = 12;
@@ -82,18 +85,338 @@ export class ReportsService {
     return scope.tenantId ?? 'unknown';
   }
 
-  // ---- legacy stub endpoints (pending) ------------------------------------
+  // ---- legacy stub endpoints (S2-05 → S4-01..03 implemented below) -------
+  /** Mantenidos sólo como compatibilidad de los stubs Sprint 0; los caller
+   *  reales son `getConciliacionReport`, `getVolumetria90`, `getUtilizacion`. */
   conciliation(): never {
-    throw new Error('ReportsService.conciliation pending');
+    throw new Error('ReportsService.conciliation legacy stub — usar getConciliacionReport');
   }
   volumetry(): never {
-    throw new Error('ReportsService.volumetry pending — usar getVolumetrySeries');
+    throw new Error('ReportsService.volumetry legacy stub — usar getVolumetrySeries / getVolumetria90');
   }
   usage(): never {
-    throw new Error('ReportsService.usage pending');
+    throw new Error('ReportsService.usage legacy stub — usar getUtilizacion');
   }
   schedule(): never {
     throw new Error('ReportsService.schedule pending');
+  }
+
+  // ---- S4-01 conciliación mensual ----------------------------------------
+  /**
+   * Reporte de conciliación entre dos fechas. Cifras DEBEN cuadrar con BD:
+   *   activosInicio  = COUNT(insureds activos cuyo createdAt < from
+   *                    AND (deletedAt IS NULL OR deletedAt >= from)
+   *                    AND (status != 'cancelled' o updatedAt >= from))
+   *   activosCierre  = COUNT(insureds activos al final del día `to`)
+   *   altas          = COUNT(insureds.createdAt en [from, to])
+   *   bajas          = COUNT(insureds.status='cancelled' AND updatedAt en [from, to])
+   *   certs          = COUNT(certificates.issuedAt en [from, to] AND deletedAt IS NULL)
+   *   claims         = COUNT(claims.reportedAt en [from, to])
+   *   claimsAmount*  = SUM amount_estimated/approved en el mismo set
+   *   coverageUsage  = COUNT + SUM amount de coverage_usage.usedAt en [from, to]
+   *
+   * Cache: 5 min (TTL razonable; el reporte es histórico cuando from/to está
+   * en pasado). Para período "open" (`to` futuro o hoy), el cache podría
+   * estar stale hasta 5 min — aceptable para reporting mensual.
+   */
+  async getConciliacionReport(
+    from: string,
+    to: string,
+    scope: ReportsScope,
+  ): Promise<ConciliacionData> {
+    const cacheKey = `report:conciliacion:${this.cacheTenantKey(scope)}:${from}:${to}`;
+    return this.cached(
+      cacheKey,
+      async () => {
+        const client = this.clientFor(scope);
+        const fromDate = new Date(`${from}T00:00:00.000Z`);
+        // Inclusive end-of-day para `to`.
+        const toDate = new Date(`${to}T23:59:59.999Z`);
+        const tenantWhere = scope.platformAdmin && scope.tenantId ? { tenantId: scope.tenantId } : {};
+
+        const [
+          activosInicio,
+          activosCierre,
+          altas,
+          bajas,
+          certificadosEmitidos,
+          claimsAgg,
+          coverageUsageAgg,
+        ] = await Promise.all([
+          // Activos al inicio: createdAt < from AND (no deleted before from) AND (not cancelled before from).
+          client.insured.count({
+            where: {
+              ...tenantWhere,
+              createdAt: { lt: fromDate },
+              OR: [{ deletedAt: null }, { deletedAt: { gte: fromDate } }],
+              NOT: {
+                AND: [{ status: 'cancelled' }, { updatedAt: { lt: fromDate } }],
+              },
+            },
+          }),
+          // Activos al cierre: status='active' AND createdAt <= to AND deletedAt IS NULL.
+          client.insured.count({
+            where: {
+              ...tenantWhere,
+              status: 'active',
+              deletedAt: null,
+              createdAt: { lte: toDate },
+            },
+          }),
+          // Altas: createdAt en [from, to].
+          client.insured.count({
+            where: { ...tenantWhere, createdAt: { gte: fromDate, lte: toDate } },
+          }),
+          // Bajas: cancelled con updatedAt en [from, to].
+          client.insured.count({
+            where: {
+              ...tenantWhere,
+              status: 'cancelled',
+              updatedAt: { gte: fromDate, lte: toDate },
+            },
+          }),
+          // Certs emitidos en período.
+          client.certificate.count({
+            where: {
+              ...tenantWhere,
+              deletedAt: null,
+              issuedAt: { gte: fromDate, lte: toDate },
+            },
+          }),
+          // Claims agregados.
+          client.claim.aggregate({
+            _count: { _all: true },
+            _sum: { amountEstimated: true, amountApproved: true },
+            where: {
+              ...tenantWhere,
+              deletedAt: null,
+              reportedAt: { gte: fromDate, lte: toDate },
+            },
+          }),
+          // Coverage usage agregados.
+          client.coverageUsage.aggregate({
+            _count: { _all: true },
+            _sum: { amount: true },
+            where: { ...tenantWhere, usedAt: { gte: fromDate, lte: toDate } },
+          }),
+        ]);
+
+        return {
+          from,
+          to,
+          tenantId: scope.platformAdmin && !scope.tenantId ? null : scope.tenantId ?? null,
+          activosInicio,
+          activosCierre,
+          altas,
+          bajas,
+          certificadosEmitidos,
+          claimsCount: claimsAgg._count._all,
+          claimsAmountEstimated: decimalToNumber(claimsAgg._sum.amountEstimated),
+          claimsAmountApproved: decimalToNumber(claimsAgg._sum.amountApproved),
+          coverageUsageCount: coverageUsageAgg._count._all,
+          coverageUsageAmount: decimalToNumber(coverageUsageAgg._sum.amount),
+          generatedAt: new Date().toISOString(),
+        };
+      },
+      300,
+    );
+  }
+
+  // ---- S4-02 volumetría 90 días ------------------------------------------
+  /**
+   * Trend diario en ventana [hoy - days, hoy] con métricas agregadas:
+   *   altas, bajas, certificados, claims.
+   *
+   * Single SQL crudo usando `date_trunc('day', ...)` — Prisma no soporta
+   * `groupBy` en truncamiento de fecha sin extra wiring. 4 queries en
+   * paralelo (una por métrica) + relleno de buckets vacíos.
+   *
+   * Cache: 60s (matches dashboard volumetry behaviour).
+   */
+  async getVolumetria90(days: number, scope: ReportsScope): Promise<VolumetriaData> {
+    const cacheKey = `report:volumetria:${this.cacheTenantKey(scope)}:${days}d`;
+    return this.cached(cacheKey, async () => {
+      const client = this.clientFor(scope);
+      const now = new Date();
+      const toDate = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 23, 59, 59, 999));
+      const fromDate = new Date(toDate.getTime() - (days - 1) * 24 * 60 * 60 * 1000);
+      fromDate.setUTCHours(0, 0, 0, 0);
+
+      const tenantFilter =
+        scope.platformAdmin && scope.tenantId ? Prisma.sql`AND tenant_id = ${scope.tenantId}::uuid ` : Prisma.sql``;
+      const fromIso = fromDate.toISOString();
+      const toIso = toDate.toISOString();
+
+      const [altas, bajas, certs, claims] = await Promise.all([
+        client.$queryRaw<Array<{ day: Date; n: bigint }>>(
+          Prisma.sql`SELECT date_trunc('day', created_at) AS day, COUNT(*)::bigint AS n
+                     FROM insureds
+                     WHERE created_at >= ${fromIso}::timestamp AND created_at <= ${toIso}::timestamp
+                       AND deleted_at IS NULL ${tenantFilter}
+                     GROUP BY 1 ORDER BY 1`,
+        ),
+        client.$queryRaw<Array<{ day: Date; n: bigint }>>(
+          Prisma.sql`SELECT date_trunc('day', updated_at) AS day, COUNT(*)::bigint AS n
+                     FROM insureds
+                     WHERE updated_at >= ${fromIso}::timestamp AND updated_at <= ${toIso}::timestamp
+                       AND status = 'cancelled' ${tenantFilter}
+                     GROUP BY 1 ORDER BY 1`,
+        ),
+        client.$queryRaw<Array<{ day: Date; n: bigint }>>(
+          Prisma.sql`SELECT date_trunc('day', issued_at) AS day, COUNT(*)::bigint AS n
+                     FROM certificates
+                     WHERE issued_at >= ${fromIso}::timestamp AND issued_at <= ${toIso}::timestamp
+                       AND deleted_at IS NULL ${tenantFilter}
+                     GROUP BY 1 ORDER BY 1`,
+        ),
+        client.$queryRaw<Array<{ day: Date; n: bigint }>>(
+          Prisma.sql`SELECT date_trunc('day', reported_at) AS day, COUNT(*)::bigint AS n
+                     FROM claims
+                     WHERE reported_at >= ${fromIso}::timestamp AND reported_at <= ${toIso}::timestamp
+                       AND deleted_at IS NULL ${tenantFilter}
+                     GROUP BY 1 ORDER BY 1`,
+        ),
+      ]);
+
+      const altasMap = new Map(altas.map((r) => [dayKey(r.day), Number(r.n)]));
+      const bajasMap = new Map(bajas.map((r) => [dayKey(r.day), Number(r.n)]));
+      const certsMap = new Map(certs.map((r) => [dayKey(r.day), Number(r.n)]));
+      const claimsMap = new Map(claims.map((r) => [dayKey(r.day), Number(r.n)]));
+
+      const points: VolumetriaData['points'] = [];
+      for (let i = 0; i < days; i += 1) {
+        const d = new Date(fromDate.getTime() + i * 24 * 60 * 60 * 1000);
+        const k = dayKey(d);
+        points.push({
+          date: k,
+          altas: altasMap.get(k) ?? 0,
+          bajas: bajasMap.get(k) ?? 0,
+          certificados: certsMap.get(k) ?? 0,
+          claims: claimsMap.get(k) ?? 0,
+        });
+      }
+
+      return {
+        days,
+        from: dayKey(fromDate),
+        to: dayKey(toDate),
+        points,
+        generatedAt: new Date().toISOString(),
+      };
+    });
+  }
+
+  // ---- S4-03 utilización por cobertura -----------------------------------
+  /**
+   * Top-N consumidores agregados por (paquete × cobertura) en el período,
+   * + agregado por paquete (sin LIMIT) para gráfico stack del FE.
+   *
+   * Cache: 5 min.
+   */
+  async getUtilizacion(
+    from: string,
+    to: string,
+    topN: number,
+    scope: ReportsScope,
+    /**
+     * S1 iter 2 — Filtro opcional por paquete. Cuando está presente,
+     * restringe el `findMany(coverages)` a `packageId = X`; los rows
+     * cuyos `coverageId` no caen en ese paquete se descartan después
+     * del groupBy. El `byPackage` también queda con un solo bucket.
+     * Es UUID validado en el DTO (no inyectable).
+     */
+    packageId?: string,
+  ): Promise<UtilizacionData> {
+    const cacheKey = `report:utilizacion:${this.cacheTenantKey(scope)}:${from}:${to}:${topN}:${packageId ?? '_all_'}`;
+    return this.cached(
+      cacheKey,
+      async () => {
+        const client = this.clientFor(scope);
+        const fromDate = new Date(`${from}T00:00:00.000Z`);
+        const toDate = new Date(`${to}T23:59:59.999Z`);
+        const tenantWhere = scope.platformAdmin && scope.tenantId ? { tenantId: scope.tenantId } : {};
+
+        // Group by coverageId — Prisma no permite groupBy con joins, así
+        // que hacemos groupBy + lookup paralelo de coverages/packages.
+        const grouped = await client.coverageUsage.groupBy({
+          by: ['coverageId'],
+          _count: { _all: true },
+          _sum: { amount: true },
+          where: { ...tenantWhere, usedAt: { gte: fromDate, lte: toDate } },
+        });
+
+        if (grouped.length === 0) {
+          return {
+            from,
+            to,
+            topN,
+            rows: [],
+            byPackage: [],
+            generatedAt: new Date().toISOString(),
+          };
+        }
+
+        const coverageIds = grouped.map((g) => g.coverageId);
+        // El filtro `packageId` se aplica acá: si vino, sólo trae las
+        // coverages que pertenecen a ese paquete; las groupBy rows cuyos
+        // coverageId no estén en este set caerán en el `.filter(null)`
+        // del map de abajo (semántica equivalente a un INNER JOIN).
+        const coverages = await client.coverage.findMany({
+          where: {
+            id: { in: coverageIds },
+            ...tenantWhere,
+            ...(packageId ? { packageId } : {}),
+          },
+          include: { package: { select: { id: true, name: true } } },
+        });
+        const covById = new Map(coverages.map((c) => [c.id, c]));
+
+        const rows: UtilizacionRow[] = grouped
+          .map((g): UtilizacionRow | null => {
+            const cov = covById.get(g.coverageId);
+            if (!cov) return null;
+            return {
+              packageId: cov.package.id,
+              packageName: cov.package.name,
+              coverageId: cov.id,
+              coverageName: cov.name,
+              coverageType: String(cov.type),
+              usageCount: g._count._all,
+              usageAmount: decimalToNumber(g._sum.amount),
+            };
+          })
+          .filter((r): r is UtilizacionRow => r !== null)
+          .sort((a, b) => b.usageAmount - a.usageAmount || b.usageCount - a.usageCount);
+
+        const top = rows.slice(0, topN);
+
+        const byPackageMap = new Map<string, { name: string; count: number; amount: number }>();
+        for (const r of rows) {
+          const cur = byPackageMap.get(r.packageId) ?? { name: r.packageName, count: 0, amount: 0 };
+          cur.count += r.usageCount;
+          cur.amount += r.usageAmount;
+          byPackageMap.set(r.packageId, cur);
+        }
+        const byPackage = Array.from(byPackageMap.entries())
+          .map(([id, v]) => ({
+            packageId: id,
+            packageName: v.name,
+            totalUsageCount: v.count,
+            totalUsageAmount: v.amount,
+          }))
+          .sort((a, b) => b.totalUsageAmount - a.totalUsageAmount);
+
+        return {
+          from,
+          to,
+          topN,
+          rows: top,
+          byPackage,
+          generatedAt: new Date().toISOString(),
+        };
+      },
+      300,
+    );
   }
   // -------------------------------------------------------------------------
 
@@ -374,8 +697,8 @@ export class ReportsService {
     }));
   }
 
-  /** Cache wrapper Redis con TTL fijo. */
-  private async cached<T>(key: string, compute: () => Promise<T>): Promise<T> {
+  /** Cache wrapper Redis con TTL configurable (default 60s). */
+  private async cached<T>(key: string, compute: () => Promise<T>, ttlSeconds = CACHE_TTL_SECONDS): Promise<T> {
     try {
       const hit = await this.redis.get(key);
       if (hit) {
@@ -386,12 +709,27 @@ export class ReportsService {
     }
     const value = await compute();
     try {
-      await this.redis.set(key, JSON.stringify(value), CACHE_TTL_SECONDS);
+      await this.redis.set(key, JSON.stringify(value), ttlSeconds);
     } catch (err) {
       this.log.warn({ err: (err as Error).message, key }, 'redis.set failed; result not cached');
     }
     return value;
   }
+}
+
+/** Convierte `Prisma.Decimal | null` (o number | null) a number con default 0. */
+function decimalToNumber(v: unknown): number {
+  if (v === null || v === undefined) return 0;
+  if (typeof v === 'number') return v;
+  // Prisma Decimal objects tienen toNumber(); fallback a Number(v).
+  const maybe = v as { toNumber?: () => number };
+  if (typeof maybe.toNumber === 'function') return maybe.toNumber();
+  return Number(v);
+}
+
+/** Devuelve `YYYY-MM-DD` UTC sin parsear locale. */
+function dayKey(d: Date): string {
+  return new Date(d).toISOString().slice(0, 10);
 }
 
 function isScope(arg: TenantCtx | ReportsScope): arg is ReportsScope {

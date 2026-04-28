@@ -1,22 +1,24 @@
 # Developer Guide — SegurAsist (Sprint 4+)
 
-> Guía consolidada post-auditoría exhaustiva (Sprint 3 closure → 15 Critical + ~25 High remediados).
-> **Owner**: F10 (consolidador). **Audiencia**: agentes de desarrollo Sprint 4 en adelante.
-> **Objetivo**: que las próximas fases incidan en menos errores aprovechando el aprendizaje del audit.
+> Guía consolidada post-auditoría exhaustiva (Sprint 3 closure → 15 Critical + ~25 High remediados) + Sprint 4 features (10 historias, 59 pts).
+> **Owner**: S10 (consolidador iter 2 Sprint 4) — extiende el work F10 (Sprint 3 fixes consolidador).
+> **Audiencia**: agentes de desarrollo Sprint 5 en adelante.
+> **Objetivo**: que las próximas fases incidan en menos errores aprovechando el aprendizaje del audit + del dispatch Sprint 4.
 
 ---
 
 ## TL;DR ejecutivo
 
-| Métrica | Pre-Sprint-4 | Post-iter1+iter2 |
+| Métrica | Pre-Sprint-4 | Post-Sprint-4 (iter 2 sealed) |
 |---|---|---|
-| 🔴 Critical bloqueantes | 15 | **0 cerrados** (todos los 15) |
-| 🟠 High bloqueantes | 57+ | **~25 cerrados en este dispatch** (resto en backlog Sprint 5) |
-| Compliance V2 (33 controles) | **89.4%** | **~95%** estimado (auditoría sigue los cierres) |
-| Tests automatizados verdes | 1,094 | 1,094 + ~89 nuevos (F9) + 41 (F7) + 17 (F10) ≈ **1,240** |
-| Façade coverage configs | 2 (admin + e2e setup) | **0** (eliminadas) |
-| ADRs documentados | 0 | **2** (ADR-0001 bypass-rls, ADR-0002 audit-context) |
-| Runbooks accionables | 4 TBDs | **15 completos** (RB-001..014) |
+| 🔴 Critical bloqueantes | 15 | **0** (cerrados en Sprint 4 fixes dispatch) |
+| 🟠 High bloqueantes | 57+ | **~26 cerrados** (1 nuevo en S9 iter 1: H-09 OTP unit suite); resto backlog Sprint 5 |
+| Compliance V2 (33 controles) | 89.4% | **~96%** estimado post-Sprint-4 (RB-014 monthly-reports + 5 ADRs Sprint 5 prep + 159 tests Sprint 4) |
+| Tests automatizados verdes | 1,094 | 1,094 + 159 Sprint 4 = **~1,253** |
+| Sprint 4 historias entregadas | — | **10/10 (59 pts)**: S4-01..S4-10 con DoR ✅ y DoD ✅/❔ post-deploy |
+| Façade coverage configs | 0 (eliminadas Sprint 3 closure) | **0** (mantenido) |
+| ADRs documentados | 2 (ADR-0001 bypass-rls, ADR-0002 audit-context) | **7** (+ ADR-0003 SQS dedupe + ADR-0004 audit-ctx-injection + ADR-0005 packages-security-boundary + ADR-0006 alarms-cardinality + ADR-0007 coverage-thresholds) |
+| Runbooks accionables | 14 (RB-001..014 SQS rename) | **15** (+ RB-014 monthly-reports-replay; RB-017 escalation + RB-018 perf-gate → backlog Sprint 5) |
 
 **ATENCIÓN Sprint 4+ developers**: las secciones **1 (anti-patterns) y 2 (cheat-sheet)** son **lectura obligatoria antes de cualquier PR**. El audit detectó 7 patrones sistémicos repetidos por ≥3 agentes; este guide los prevé.
 
@@ -264,6 +266,114 @@
 
 ---
 
+#### 1.12 EventBridge cron + AWS UTC-only TZ
+
+**Evidencia (Sprint 4 — S3 NEW-FINDING TZ)**:
+- `aws_cloudwatch_event_rule.schedule_expression` solo soporta UTC. Producto pidió "9 AM CST" (08:00 América/México_City) para envío fin de mes; el cron `cron(0 14 1 * ? *)` corre a 14:00 UTC = 08:00 CST en horario sin DST.
+- México eliminó DST en 2022 → no hay drift estacional. Pero AWS NO valida TZ ni warns en plan/apply; la rule queda silenciosamente off-by-1h si el operador asume "9 AM" sin convertir.
+
+**Fix Sprint 4** (S3):
+- Comentario explícito en `eventbridge-rule/main.tf` documentando UTC + ejemplo CST.
+- README del módulo enumera tabla TZ → cron expression (`08:00 CST = cron(0 14 ...)`).
+- Migración planeada Sprint 5: `aws_scheduler_schedule` (recurso EventBridge Scheduler v2) que soporta `schedule_expression_timezone = "America/Mexico_City"`.
+
+**Regla preventiva**:
+1. **TODA expresión cron en EventBridge documenta UTC + zona pretendida + offset** en el comentario de la línea HCL.
+2. **Wall-clock confirmado con PO** ANTES del PR — preguntar "¿9 AM CST significa 9 AM en mi computadora o 9 AM en CDMX siempre?" evita drift cuando hay viajes/usuarios remotos.
+3. **`aws_scheduler_schedule` para crons "with timezone semantics"** Sprint 5+; mantener `aws_cloudwatch_event_rule` solo para event-pattern (no schedule).
+4. **Si producto requiere "1er día hábil del mes"** (no calendar-day-1), Lambda handler debe verificar `isWeekend(today) || isHoliday(today)` y `event.deferredReason='non-business-day'` → noop dejando que el cron del día siguiente actúe (cron AWS no soporta "1st business day" nativamente).
+
+**Lección Sprint 4+**: TZ como anti-pattern silencioso. AWS deliberadamente no valida ni alerta sobre intent vs execution; el costo es 1 hora desfasada en producción durante meses si no hay alarma fina.
+
+---
+
+#### 1.13 SES SDK v3 sin attachments
+
+**Evidencia (Sprint 4 — S3 NEW-FINDING email-attachments)**:
+- `SendEmailCommand` de `@aws-sdk/client-ses` (SDK v3) NO soporta attachments — solo body HTML + plain text + Tags.
+- Para attachments hay que usar `SendRawEmailCommand` con MIME multipart construido a mano (boundary, base64 encoding del binario).
+- Sprint 4 cron mensual asumió default "send PDF como attachment"; refactor mid-sprint a "link presigned 7d en S3" reusando patrón email-worker certificates.
+
+**Fix Sprint 4** (S3):
+- MVP cron envía email body con link presigned (7d TTL) hacia `s3://bucket/reports/{tenant}/{period}.pdf`.
+- Backlog Sprint 5: si producto requiere attachment, implementar `MailRawSenderService` con `SendRawEmailCommand` + MIME builder + tests round-trip de parse.
+
+**Regla preventiva**:
+1. **`SendEmailCommand` para emails simples (body + Tags); `SendRawEmailCommand` cuando attachments**. Documentar en JSDoc del service.
+2. **Link presigned 7d en S3 como default Sprint 4-5** — evita complejidad MIME + reduce payload SES (rate limit por bytes/min). Ver patrón en `email-worker.service.ts` certificates.
+3. **Tags SES siempre** (`tenant_id`, `email_type`) — `SendEmailCommand` y `SendRawEmailCommand` ambos soportan; CloudWatch dimensions activan filtros por tenant en bounce/complaint.
+
+**Lección Sprint 4+**: leer signature SDK v3 ANTES de prometer feature al PO. SDK docs cambian entre v2/v3; v2 sí soportaba attachments en `SendEmailCommand`.
+
+---
+
+#### 1.14 EMF emitter `Environment` dimension mismatch con alarms
+
+**Evidencia (Sprint 4 — S9 NEW-FINDING audit-metrics-emf)**:
+- `audit-metrics-emf.ts` emite con dimension `Environment = process.env.NODE_ENV ?? 'unknown'` → valores `development` / `test` / `staging` / `production` / `unknown`.
+- Alarmas en `alarms.tf` filtran `Environment = var.environment` con valores `dev` / `staging` / `prod`.
+- **Resultado**: alarmas SegurAsist/Audit (`AuditWriterHealth`, `MirrorLagSeconds`, `AuditChainValid`) en estado `INSUFFICIENT_DATA` permanente en dev y prod aunque el emisor esté funcionando. Staging matchea por casualidad (NODE_ENV=staging y var.environment=staging).
+- Daño: monitoreo audit silenciado durante meses; escalación P1 ante tampering NO se activa.
+
+**Fix Sprint 4** (deferral Sprint 5 — S9 documentó en ADR-0006 §Decision punto 6):
+- **Opción A (preferida, 1 LOC)**: emitter usa `process.env.APP_ENV ?? process.env.NODE_ENV ?? 'unknown'`. App Runner Terraform setea `APP_ENV=dev|staging|prod` en `environment_variables`.
+- **Opción B**: alarmas filtran con condicional terraform (feo, zero-code en src).
+
+**Regla preventiva**:
+1. **Tests integration EMF↔alarms en CI** — `metrics-alarms-alignment.spec.ts` levanta CloudWatch local (LocalStack) + emite métrica con dimension del emitter + verifica que alarma con dimension del IaC matches.
+2. **Una variable única `APP_ENV` para tag/dim cross-componente** — no `NODE_ENV` (semántica node "production minified") ni `var.environment` (Terraform-only).
+3. **PR review checklist**: si tocas un EMF emitter, ¿la dimension matchea exactamente la alarma? Mostrar `aws cloudwatch describe-alarms --alarm-names X` output al revisor.
+4. **Alarm metric data review** post-merge a staging: ver primera medición + confirmar transition `INSUFFICIENT_DATA → OK/ALARM`. Si stuck en INSUFFICIENT_DATA → mismatch latente.
+
+**Lección Sprint 4+**: la mejor alarma es la que se prueba con datos reales. Custom metrics requieren end-to-end test contra CloudWatch real (LocalStack en CI; AWS real en deployment smoke).
+
+---
+
+#### 1.15 Coordinación cross-bundle: schemas evolutivos sin contract-first
+
+**Evidencia (Sprint 4 — S2 NEW-FINDING shapes-realineadas + S4 NEW-FINDING chatbot-shape)**:
+- S2 (FE reports) inició iter 1 antes de que S1 (BE reports) publicara DTOs definitivos. Resultado: realineación midstream:
+  - `ConciliacionReportResponse` resultó objeto agregado, no `rows[]` — UI rediseñada como stats grid.
+  - `UtilizacionRow` campos `usageCount/usageAmount` (no `used/limit/utilizationPct`).
+  - Filter `tenantId` (platformAdmin) en lugar de `entityId`.
+- S4 (FE chatbot) tipó `ChatMessageReply` con `[extra: unknown]` index signature como bridge contra refinamientos S5/S6 iter 2 — escapó al desacople pero a costa de typing fuerte FE.
+
+**Fix Sprint 4** (mid-sprint):
+- S1 publica feed entries `iter1 DONE shape <DTO>` ANTES de los integration tests con shape estabilizado.
+- S2 espera el feed BE-DONE para shapes complejas (objetos con campos opcionales, agregados); para filtros simples (qs strings) no espera.
+
+**Regla preventiva**:
+1. **BE owners publican feed `iter1 SHAPE-FROZEN <DTO> <path>`** apenas el DTO Zod compila — esto es el contract-first ligero del monorepo.
+2. **FE owners de bundles cross-FE/BE wait-list** los `SHAPE-FROZEN` antes de empezar UI compleja; pueden trabajar diseño/skeletons en paralelo.
+3. **Shape evolution intencional** (`[extra: unknown]` + opcionales): documentado con `// TODO BE-iter2: refinar` + issue tracker; no es default.
+4. **Tests api-client deben usar fixtures derivadas del Zod schema** (`generateMock(ZodSchema)` con `@anatine/zod-mock` o equivalente) — NO objetos hand-crafted divergentes.
+
+**Lección Sprint 4+**: en sprints multi-agente, contract-first = feed-driven shape-freeze. No hay tooling formal (OpenAPI codegen pre-PR es Sprint 5+ backlog); el feed es el contrato.
+
+---
+
+#### 1.16 Modelos pre-existentes con columnas TODO: extender > duplicar
+
+**Evidencia (Sprint 4 — S5 NEW-FINDING schema.prisma)**:
+- `ChatMessage` y `ChatKb` existían en schema desde Sprint 1 como stubs (campos básicos sin keywords/synonyms/priority/enabled/conversationId).
+- Tentación: crear `KnowledgeBaseEntry` y `ChatConversation` paralelos. RECHAZADO — duplicación de tablas con la misma semántica + dolor de migración futura.
+- Solución: extender los modelos existentes con `ADD COLUMN IF NOT EXISTS` + cohabitar datos Sprint 1 con campos Sprint 4 (NULL aceptado para Sprint 1 rows).
+
+**Fix Sprint 4** (S5):
+- Migración `20260427_chatbot_kb` con `ADD COLUMN IF NOT EXISTS` para 4+ columnas en `ChatKb` y 3 columnas en `ChatMessage`.
+- `prisma/schema.prisma` extendido con campos opcionales (`keywords String[] @default([])`, etc.).
+- Stubs Sprint 1 funcionan sin cambios; queries Sprint 4 manejan NULL/empty.
+
+**Regla preventiva**:
+1. **Antes de crear `model Foo` nuevo, grep `ChatKb`/`Message`/equivalente en schema** — extender es siempre preferible a duplicar.
+2. **`ADD COLUMN IF NOT EXISTS`** + `DEFAULT` o `NULL` permitido → migración idempotente y backward-compat con datos viejos.
+3. **JSdoc en el modelo** documenta cuándo se introdujo cada campo (`/** @since Sprint 4 — keywords/synonyms matching */`).
+4. **`ls` del path NEW antes de escribir**: en sprints multi-agente, otro agente puede haber tocado el archivo; lectura previa evita conflictos sutiles (caso S5/S6 escalation.service).
+
+**Lección Sprint 4+**: schema.prisma es estructuralmente shared (sección lock implícito por modelo); cada agente toca solo su modelo. Pero al CREAR un modelo nuevo que solapa con un stub existente, la responsabilidad es revisar Y extender.
+
+---
+
 ## 2. Patrones a seguir (CHEAT-SHEET)
 
 > Snippets copy-paste-ready. Imports concretos. Cada bloque ≤6 líneas efectivas.
@@ -387,6 +497,285 @@ Bullets accionables:
 - **Enum extend > subAction en payloadDiff**: type-safe + queries SQL eficientes (`WHERE action = 'X'` indexable).
 - **`scrubSensitive(payload)`** antes de persistir. NUNCA inline `delete payload.password`.
 - **Test integration** `audit-action-<name>.spec.ts` con tampering scenario (mutar `payloadDiff` post-write y verificar que `verify-chain` lo detecta).
+
+---
+
+#### 2.6 Adding a new chart/report (Sprint 4 — S1 + S2)
+
+> _Aplica a S4-01..03 (conciliación / volumetría / utilización) y futuros reportes (S5+)._
+
+```ts
+// 1. DTO Zod compartido + @ApiProperty para Swagger.
+// segurasist-api/src/modules/reports/dto/conciliacion-report.dto.ts
+import { createZodDto } from 'nestjs-zod';
+import { z } from 'zod';
+export const ConciliacionQuerySchema = z.object({
+  period: z.string().regex(/^\d{4}-\d{2}$/), // YYYY-MM cerrado
+  tenantId: z.string().uuid().optional(),    // sólo platformAdmin
+  format: z.enum(['json', 'pdf', 'xlsx']).default('json'),
+});
+export class ConciliacionQueryDto extends createZodDto(ConciliacionQuerySchema) {}
+```
+
+```ts
+// 2. Service: query optimizada (CTE/subquery) — UNA SQL, no N+1.
+// reports.service.ts
+async conciliacion(scope: ReportsScope, q: ConciliacionQueryDto) {
+  const sql = Prisma.sql`
+    WITH altas AS (
+      SELECT COUNT(*)::int AS n FROM insureds
+       WHERE tenant_id = ${scope.tenantId}::uuid
+         AND created_at >= date_trunc('month', ${q.period}::date)
+         AND created_at <  date_trunc('month', ${q.period}::date) + interval '1 month'
+    ), bajas AS ( ... ), activos AS ( ... )
+    SELECT (SELECT n FROM altas) AS altas,
+           (SELECT n FROM bajas) AS bajas,
+           (SELECT n FROM activos) AS activos_cierre`;
+  const [row] = await this.prisma.$queryRaw<Array<...>>(sql);
+  return row;
+}
+```
+
+```ts
+// 3. Controller: PDF reusa workers/pdf-worker pattern; XLSX via exceljs.
+@Get('conciliation/download')
+@Roles('admin_segurasist', 'admin_mac', 'supervisor')
+async download(@Query() q: ConciliacionQueryDto, @Req() req: FastifyRequest) {
+  const data = await this.svc.conciliacion(this.buildScope(req, q.tenantId), q);
+  if (q.format === 'pdf') {
+    const buf = await this.pdfRenderer.render('conciliacion', data); // 2-pass NO, single-pass OK (sin QR cíclico)
+    return { contentType: 'application/pdf', body: buf };
+  }
+  if (q.format === 'xlsx') {
+    const buf = await this.xlsxRenderer.render('conciliacion', data); // exceljs Workbook
+    return { contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', body: buf };
+  }
+  return data; // json default
+}
+```
+
+```ts
+// 4. Frontend: hook tanstack-query + chart en packages/ui.
+// segurasist-web/packages/api-client/src/hooks/reports.ts
+export function useConciliacion(period: string) {
+  return useQuery({
+    queryKey: ['reports', 'conciliacion', period],
+    queryFn: () => apiClient.get(`/v1/reports/conciliation?period=${period}`),
+    staleTime: 5 * 60_000, // 5 min — period cerrado, no cambia
+  });
+}
+```
+
+```tsx
+// 5. Chart: import desde packages/ui (NO duplicar en apps).
+// segurasist-web/packages/ui/src/components/charts/LineTrendChart.tsx
+import { LineChart, Line, XAxis, YAxis, Tooltip } from 'recharts';
+export function LineTrendChart({ data }: { data: { date: string; count: number }[] }) {
+  return (<LineChart data={data} width={600} height={300}>
+    <XAxis dataKey="date" /><YAxis /><Tooltip /><Line dataKey="count" />
+  </LineChart>);
+}
+```
+
+Bullets accionables:
+- **PDF**: reusa `reports-pdf-renderer.service.ts` (S1). Sin QR cíclico → single-pass está bien (vs. F1 §1.4 cert PDF requiere 2-pass).
+- **XLSX**: `exceljs` (no `xlsx` lib — vulnerabilidades CVE-2023-30533). `Workbook → Worksheet → addRow`. Test con `read(buf)` round-trip.
+- **Query optimizada**: CTE compuesta o subquery escalar agrupa altas/bajas/activos en una sola roundtrip; evitar N+1 (regresión típica si se hace `for tenant in tenants: count()`).
+- **Cache strategy**: períodos cerrados (mes pasado) son idempotentes — `staleTime: 5min` en TanStack. Períodos abiertos (mes en curso) → `staleTime: 0` o `refetchInterval`.
+- **Cross-tenant cuidado**: `admin_segurasist` con `tenantId` query param ⇒ `assertPlatformAdmin(req.user)` + `PrismaBypassRlsService`. Si NO platformAdmin, ignorar `tenantId` (no return 400 — silencioso defense-in-depth).
+- **Coverage**: añadir test `reports.service.spec.ts` con fixture mes cerrado + assert cifras exactas (no `expect.any(Number)`).
+- **Performance gate**: render `<3 s` (TC-602 MVP_07). Si query toma más, agregar índice compuesto `(tenant_id, created_at)` partial.
+
+#### 2.7 Adding a new chatbot KB entry (Sprint 4 — S5 + S6)
+
+> _Aplica a S4-06 KB matching y S4-07 personalización._
+
+```prisma
+// prisma/schema.prisma
+model KnowledgeBaseEntry {
+  id              String   @id @default(uuid())
+  tenantId        String   @map("tenant_id")
+  category        String   // 'vigencia' | 'coberturas' | 'siniestros' | 'pagos' | 'contacto'
+  question        String
+  keywords        String[] // ['vigencia', 'hasta cuando', 'expira']
+  synonyms        String[] // ['plazo', 'duración', 'validez']
+  answerTemplate  String   @map("answer_template") // soporta placeholders {{insured.firstName}} {{policy.validTo}}
+  active          Boolean  @default(true)
+  priority        Int      @default(0) // tie-breaker matching
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+  tenant          Tenant   @relation(fields: [tenantId], references: [id])
+  @@index([tenantId, category, active])
+  @@map("kb_entries")
+}
+```
+
+```sql
+-- migrations/<DATE>_chatbot_kb/migration.sql
+ALTER TABLE kb_entries ENABLE ROW LEVEL SECURITY;
+CREATE POLICY p_kb_select ON kb_entries FOR SELECT
+  USING (tenant_id::text = current_setting('app.current_tenant', true));
+CREATE POLICY p_kb_modify ON kb_entries FOR ALL
+  USING (tenant_id::text = current_setting('app.current_tenant', true))
+  WITH CHECK (tenant_id::text = current_setting('app.current_tenant', true));
+```
+
+```sql
+-- prisma/rls/policies.sql array (OBLIGATORIO mismo PR)
+tables TEXT[] := ARRAY[..., 'kb_entries'];
+```
+
+```ts
+// 2. Matching engine (S5): keywords + synonyms + tokenize + score.
+// chatbot/kb.service.ts
+async match(tenantId: string, text: string): Promise<KbMatch | null> {
+  const tokens = tokenizeES(text); // lowercase + diacritics-strip + split
+  const candidates = await this.prisma.knowledgeBaseEntry.findMany({
+    where: { tenantId, active: true },
+  });
+  // RLS no aplica acá si usamos Prisma con tenant context; bypass = explicit tenantId.
+  const scored = candidates.map((kb) => ({
+    kb,
+    score: scoreMatch(tokens, [...kb.keywords, ...kb.synonyms]),
+  }));
+  scored.sort((a, b) => b.score - a.score || b.kb.priority - a.kb.priority);
+  return scored[0]?.score >= MATCH_THRESHOLD ? scored[0] : null;
+}
+```
+
+```ts
+// 3. Personalization (S6): placeholders documentados.
+// chatbot/personalization.service.ts
+const PLACEHOLDERS_DOC = {
+  '{{insured.firstName}}': 'Nombre del asegurado autenticado (de JWT given_name claim).',
+  '{{insured.fullName}}': 'Nombre completo (given_name + family_name).',
+  '{{policy.validTo}}': 'Fecha vigencia formateada es-MX (DD de MMMM de YYYY).',
+  '{{policy.packageName}}': 'Nombre del paquete activo del asegurado.',
+  '{{coverage.<key>.consumed}}': 'Cantidad consumida de la cobertura por key.',
+  '{{coverage.<key>.total}}': 'Total disponible de la cobertura.',
+  '{{tenant.contactPhone}}': 'Teléfono soporte del tenant (call-to-action).',
+};
+async render(template: string, ctx: InsuredContext): Promise<string> {
+  // Reemplazo seguro: nunca eval. Whitelist de placeholders. Locale es-MX.
+  return template.replace(/{{(insured|policy|coverage|tenant)\.[^}]+}}/g, (match) => {
+    return resolvePlaceholder(match, ctx) ?? match;
+  });
+}
+```
+
+```ts
+// 4. Cross-tenant test obligatorio (anti-pattern §1.6).
+// test/integration/chatbot-kb.spec.ts
+it('insured tenant A no recibe KB entry tenant B', async () => {
+  await prismaBypass.knowledgeBaseEntry.createMany({
+    data: [
+      { tenantId: TENANT_A, category: 'vigencia', question: 'A', keywords: ['plan'], answerTemplate: 'A-only', active: true },
+      { tenantId: TENANT_B, category: 'vigencia', question: 'B', keywords: ['plan'], answerTemplate: 'B-only', active: true },
+    ],
+  });
+  const res = await chatbot.match(TENANT_A, 'plan');
+  expect(res?.kb.tenantId).toBe(TENANT_A);
+  expect(res?.kb.answerTemplate).not.toContain('B-only');
+});
+```
+
+Bullets accionables:
+- **Modelo KB único + multi-tenant**: NO un schema por tenant. `tenant_id` discriminator + RLS hace el split automático.
+- **Tokenización es-MX**: lowercase, strip diacritics (`á→a`), split en boundaries (`\W`). Implementar como utility shared `chatbot/tokenize.ts` para reusar en match + admin search.
+- **Whitelist de placeholders**: regex con grupos namedeados; NUNCA `eval` o template-engine genérico (XSS risk si admin-CRUD escapa caracteres mal). Para faltantes, dejar el placeholder literal (no exponer error técnico al insured).
+- **Threshold matching**: empezar con 0.5 (score normalizado 0..1); calibrar con dataset real Sprint 5. Por debajo del threshold ⇒ fallback con sugerencias O escalar (TC-503).
+- **Audit log**: cada `chatbot.message` registrarlo con `auditCtx.fromRequest(req)` + acción `chatbot_message_sent`. Personalización exitosa NO loggea PII (solo `intent`, `kbEntryId`, `responseLengthChars`); el `payloadDiff` debe ir scrubbed.
+- **Privacy**: el `text` del usuario es PII ligero (puede contener nombre, fecha nacimiento). Persistirlo en `chat_messages` con retention 30d (`MVP_02 §F5`); `scrubSensitive` aplicado antes de loggear.
+- **Cross-tenant test obligatorio**: 2 tenants con KB con misma keyword, asegurado A solo ve la suya. Suite bloqueante en CI.
+- **Admin CRUD**: `@Roles('admin_segurasist', 'admin_mac')` + UI shadcn admin/kb-management. Cambios deben reflejarse en portal en ≤5 min (TC-506) — invalidar cache TanStack o no cachear con `staleTime: 0` para KB matching.
+
+#### 2.8 Adding an EventBridge cron (Sprint 4 — S3)
+
+> _Aplica a S4-04 (envío automático fin de mes) y futuros crons (limpieza retention, refresh dashboards)._
+
+```hcl
+# segurasist-infra/modules/eventbridge-rule/main.tf
+variable "name"                  { type = string }
+variable "schedule_expression"   { type = string } # ej. "cron(0 9 1 * ? *)" — día 1 9 AM UTC
+variable "target_arn"            { type = string }
+variable "input_payload"         { type = map(string), default = {} }
+variable "alarm_sns_topic_arn"   { type = string }
+
+resource "aws_cloudwatch_event_rule" "rule" {
+  name                = var.name
+  schedule_expression = var.schedule_expression
+}
+resource "aws_cloudwatch_event_target" "target" {
+  rule  = aws_cloudwatch_event_rule.rule.name
+  arn   = var.target_arn
+  input = jsonencode(var.input_payload)
+}
+resource "aws_cloudwatch_metric_alarm" "failed_invocations" {
+  alarm_name          = "${var.name}-failed-invocations"
+  metric_name         = "FailedInvocations"
+  namespace           = "AWS/Events"
+  statistic           = "Sum"
+  threshold           = 1
+  evaluation_periods  = 1
+  period              = 300
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  dimensions          = { RuleName = aws_cloudwatch_event_rule.rule.name }
+  alarm_actions       = [var.alarm_sns_topic_arn]
+}
+```
+
+```ts
+// 2. Idempotencia DB-side. NO confiar en EventBridge "exactly-once" — puede haber re-invocations.
+// reports-worker.service.ts → handleMonthlyConciliation
+@SqsMessageHandler('monthly-reports')
+async handle(@Message() msg: { period: string; tenantId: string; runId: string }) {
+  // UNIQUE (tenant_id, period) en tabla `report_runs` evita doble-render.
+  await this.prisma.$executeRaw`
+    INSERT INTO report_runs (id, tenant_id, period, status, created_at)
+    VALUES (${msg.runId}::uuid, ${msg.tenantId}::uuid, ${msg.period}, 'processing', now())
+    ON CONFLICT (tenant_id, period) DO NOTHING
+    RETURNING id`;
+  // Si el INSERT no insertó (período ya procesado), early-return.
+  // Si insertó, generar PDF + XLSX + email a destinatarios + UPDATE status='done'.
+}
+```
+
+```ts
+// 3. Lambda handler stub (si se decide Lambda en lugar de SQS-message-from-EventBridge).
+// src/lambdas/monthly-reports/handler.ts
+export const handler: ScheduledHandler = async (event) => {
+  const period = computePeriod(event.time);  // 'YYYY-MM' del mes anterior
+  const tenants = await prisma.tenant.findMany({ where: { active: true }, select: { id: true } });
+  // Fan-out: 1 mensaje SQS por tenant (parallelizable, mantiene idempotencia).
+  for (const t of tenants) {
+    await sqs.sendMessage(env.SQS_QUEUE_MONTHLY_REPORTS, {
+      tenantId: t.id, period, runId: randomUUID(),
+    });
+  }
+};
+```
+
+```hcl
+# 4. Wire-up en envs/{env}/main.tf
+module "monthly_reports_cron" {
+  source              = "../../modules/eventbridge-rule"
+  name                = "${var.env}-monthly-reports"
+  schedule_expression = "cron(0 9 1 * ? *)" # 1ro del mes 9 AM UTC = 3 AM CDMX
+  target_arn          = aws_lambda_function.monthly_reports.arn
+  input_payload       = { source = "scheduled-monthly-reports" }
+  alarm_sns_topic_arn = aws_sns_topic.oncall_p1.arn
+}
+```
+
+Bullets accionables:
+- **Idempotencia DB-side OBLIGATORIA**: EventBridge garantiza "at-least-once", no "exactly-once". Re-invocations ocurren en transient errors → UNIQUE `(tenant_id, period)` + `INSERT … ON CONFLICT DO NOTHING` es el contrato.
+- **Cron expressions UTC, no local**: `cron(0 9 1 * ? *)` = 9 AM UTC = 3 AM CDMX. Confirmar con PO + equipo MAC el wall-clock target. Ajustar offset si UAT lo pide.
+- **Día hábil 1**: cron AWS no soporta nativamente "1er día hábil". Lambda handler debe verificar `isWeekend(today) || isHoliday(today)` y `event.deferredReason='non-business-day'` → noop + dejar al cron del siguiente día actuar. Tabla `mx_holidays` curada por DevOps + admin.
+- **Fan-out SQS-from-Lambda**: mejor que single Lambda invocation para todos los tenants (timeout limit + observability). Cada tenant un mensaje SQS → parallelizable + DLQ por mensaje.
+- **CloudWatch alarm `FailedInvocations`**: dimensión `RuleName` SIEMPRE. Sin alarma, un cron silencioso roto pasa 1 mes sin detección. SLA: pager ≤5 min (RB-019 nuevo Sprint 4).
+- **Test integration**: `eventbridge-cron.spec.ts` valida idempotencia DB-side (insertar 2 veces, verificar 1 sola row). Test "real" del cron en LocalStack EventBridge requiere `LOCALSTACK_E2E=1` gate.
+- **Email destinatarios**: lista por tenant en `tenant.report_recipients` (jsonb). NO env var (no escala multi-tenant). SES `Tags: [{Name: 'tenant_id', Value: tenantId}, {Name: 'email_type', Value: 'monthly-report'}]` para CloudWatch dimensions (F3 H-11).
+- **Versionado**: cuando cambia el formato del reporte, NO sobrescribir runs históricos. Crear `report_runs.version` y permitir re-render con `?version=2025-04` query param.
 
 ---
 
@@ -625,6 +1014,109 @@ pnpm --filter admin test:coverage
 3. **Bypass RLS necesita guard runtime**: `RolesGuard` HTTP no es suficiente. `assertPlatformAdmin(req.user)` en `buildScope`/`toCtx` de cada controller que rutea a service con bypass. Workers exentos con JSDoc + tenantId explícito.
 4. **Cognito-local-bootstrap.sh sincronizado con claims FE**: cuando agregas un claim al JWT que el FE consume (greeting, avatar, theme), sincronizar bootstrap en el mismo PR. El cognito real ya tiene standard attributes; el local debe popularlos explícitamente.
 5. **ADR template canónico**: Context / Decision / Consequences / Alternatives considered (cada alternativa con razón de rechazo) / Follow-ups. El formato fuerza el rigor — alternativa sin razón = decisión débil.
+
+---
+
+### Sprint 4 — lecciones cross-bundle (S1..S10) — iter 1 cross-cutting
+
+> _S10 consolidó iter 1; iter 2 add-on debajo._
+
+1. **Reports + workers comparten `where-builder` con `reports-worker`** (anti-pattern §1.8 evolution): cuando S1 añade nuevos filtros (period range, package, status), DEBE migrar al builder shared `insureds/where-builder.ts`. Si el builder no cubre un caso (period close-of-month vs open-range), extender con casos opcionales — NO inline en el worker.
+2. **PDF/XLSX rendering reutilización**: `reports-pdf-renderer.service.ts` y `reports-xlsx-renderer.service.ts` (S1 owners) son punto único; tests que verifican output binary deben round-trip via `pdf-parse` + `exceljs.read(buf)`. NO `expect(buf.length).toBeGreaterThan(0)` que enmascara renders vacíos.
+3. **Chatbot KB requiere RLS + cross-tenant test obligatorio**: tabla nueva `kb_entries` con `tenant_id` ⇒ §1.6 anti-pattern. Sin cross-tenant test el leak es invisible al desarrollador local (Prisma sin `app.current_tenant` set retorna 0 filas).
+4. **Personalization placeholders ≠ template engine**: la tentación de usar Handlebars/EJS es alta. RECHAZADO: superficie de ataque XSS. Pattern Sprint 4: regex whitelist `/{{(insured|policy|coverage|tenant)\.[^}]+}}/g` + lookup explícito por path.
+5. **EventBridge "at-least-once" → DB-side UNIQUE OBLIGATORIO**: análogo a §1.2 (SQS standard). Cualquier scheduled trigger requiere `(tenant_id, period|key)` UNIQUE para idempotencia. ADR-0003 formaliza.
+6. **Audit timeline en vista 360 reusa `audit_log`**: no inventar `audit_timeline_events` separado.
+7. **4 nuevas `AuditAction` Sprint 4**: migración unificada Sprint 5 (deferral por bridges Sprint 4 — payloadDiff.event/subAction).
+8. **Performance gate Sprint 4 (S8 JMeter)**: 1k portal sessions + 100 admin → p95 ≤500 ms. Post-merge staging.
+9. **Coverage no decrece**: snapshot diff `coverage-summary.json` iter1 vs iter2. Ver `docs/sprint4/COVERAGE_DIFF.md`.
+10. **DEVELOPER_GUIDE como single source**: cualquier patrón "cómo agrego X" en Sprint 4 que NO esté en §2 es una omisión.
+
+---
+
+### Sprint 4 — lecciones por agente (5 c/u — iter 2 sello final)
+
+> _S10 iter 2 consolidó tras leer S1..S9 reports. 50 lecciones (10 agentes × 5)._
+
+#### S1 — Reports BE (S4-01/02/03 backend, 23 pts)
+
+1. **Renderers PDF stateless = single-pass**: a diferencia de los certificados (§1.4: 2-pass por QR cíclico SHA), los reportes no incrustan QR ni firman SHA. Single-pass `puppeteer.renderPdf({html, format:'A4'})` basta. La regla 2-pass aplica solo cuando el contenido depende del SHA del contenedor.
+2. **Reusar `PuppeteerService` singleton vía `CertificatesModule` import**: evita doble launch de Chromium (~300MB RAM idle por instancia). El módulo dueño exporta el provider; el módulo cliente importa y recibe la instancia compartida.
+3. **`@Res({passthrough:true})` para binary streams en Fastify**: permite headers custom (Content-Type, Content-Disposition) sin renunciar al pipeline Nest (filters, interceptors). Anti-pattern: `res.send()` directo desactiva interceptors.
+4. **Cache TTL escalable por tipo de reporte**: histórico (period en pasado) tolera TTL alto (300s); operacional (volumetría open-ended hoy) requiere TTL corto (60s). `cached(key, compute, ttl?)` con default sano + override explícito para hot paths.
+5. **`coverageUsage.groupBy` + `coverage.findMany` lookup paralelo > join**: Prisma no permite groupBy con joins. Pattern alternativo: groupBy por FK → `findMany({where:{id:{in:ids}}})` → in-memory join. Más roundtrips pero permite filtros RLS-aware sin SQL crudo.
+
+#### S2 — Reports FE (S4-01/02/03 frontend)
+
+1. **Chart primitives en `@segurasist/ui/components/charts/`**: `<LineChart />` y `<BarChart />` viven ahí. NO duplicar recharts wrappers en apps; usar el primitive y pasar `series` + `xKey`/`categoryKey`. Apps con shapes específicas (sparkline) pueden seguir teniendo wrappers locales finos.
+2. **Binary downloads (Safari-safe)**: patrón `URL.createObjectURL(blob) + click <a> + setTimeout(revoke, 0)`. Bypassea `api()` JSON wrapper porque el proxy reenvía bytes raw con content-type correcto. Cualquier nuevo download endpoint usa `useDownloadReport`-style hook con mutation aislada por `(type, format)` para que ambos botones tengan estado pending independiente.
+3. **Generic constraint en componentes recharts**: usar `<T>` simple en lugar de `T extends Record<string, unknown>` (TS no infiere index signature en interfaces declaradas; el constraint romperá uso desde el cliente). Cast interno a `Array<Record<string, unknown>>` en el render layer.
+4. **DTOs sin coordinación previa = realineación midstream**: empezamos iter1 antes de que S1 publicara shapes; resultó en `rows[]` → agregado, `used/limit` → `usageAmount/Count`. Lección §1.15: en bundles cross-bundle (BE+FE) FE espera feed BE-`SHAPE-FROZEN` para shapes complejas; filtros simples (qs) la espera es opcional.
+5. **Test integration con `(app)` route group de Next.js**: parens-group resuelve OK con `import('../../app/(app)/...')` en vitest si vitest config alias `@` apunta correctamente. Mockear los hooks api-client a nivel `vi.mock(...)` antes del import de la página evita armar QueryClient real con polling.
+
+#### S3 — DevOps + Backend Cron (S4-04, 5 pts)
+
+1. **EventBridge → SQS pattern**: queue policy va a env-level (no module), declarada con `data.aws_iam_policy_document` + condition `aws:SourceArn = rule_arn` (defense-in-depth contra confused-deputy). Si N rules apuntan a la misma queue, una sola policy con array de SourceArns.
+2. **Cron TZ caveat (§1.12)**: `aws_cloudwatch_event_rule.schedule_expression` solo UTC; documentar el desfase TZ en el comentario del módulo y considerar `aws_scheduler_schedule` para v2.
+3. **Idempotencia DB-side semántica skip vs failed**: P2002 (UNIQUE violation) → `skipped` (NO emite audit log adicional, la corrida original ya lo hizo). Resilencia per-tenant: `processTenant()` retorna `'completed' | 'skipped' | 'failed'` y el handler global agrega contadores; un tenant fallando NO aborta a los otros.
+4. **DI token para generators externos**: cuando un módulo S(X) depende de lógica que otro módulo S(Y) implementa, exponer interface + token DI (`MONTHLY_REPORT_GENERATOR`) y dejar stub `NotImplemented` permite que S(X) cierre su iter sin bloquear; S(Y) inyecta el provider real en iter 2.
+5. **Workers exentos del `assertPlatformAdmin`**: aplicado en `MonthlyReportsHandlerService` con BYPASSRLS + `tenantId` explícito en cada query (igual que `ReportsWorker` y `InsuredsCreationWorker`). Documentar en JSDoc del service y referenciar ADR-0001.
+
+#### S4 — Frontend Senior Chatbot (S4-05 + S4-08, 8 pts)
+
+1. **Widgets globales de portal van bajo `(app)/layout.tsx`, no en página individual**: el layout es Server Component y monta el widget Client Component una sola vez; React Query + zustand sobreviven al `<Link>` navigation porque el layout no se desmonta.
+2. **Pattern para rutas API estáticas que reutilizan `makeProxyHandler`**: pasar context fake `{params:{path:[…]}}`. Trade-off: rutas dedicadas (granularidad de métricas) vs catchall (DRY). Decisión arquitectural en el feed, no en el código.
+3. **Persistencia client-only opcional con zustand**: NO usar middleware `persist` cuando se quiere TTL + capa anti-bloat + schema versionado. Manual `read/writePersisted` es ~30 líneas y deja control total para invalidar caches viejos sin migrar el shape.
+4. **Hooks de mutation que aceptan shape evolutivo (S5/S6)**: tipar response con `[extra: unknown]` index signature + campos opcionales. El cliente no se rompe si backend agrega keys; cuando S5/S6 firmen el DTO, refinar tipos sin tocar widgets. (Bridge §1.15 — usar con `// TODO BE-iter2`).
+5. **Test de widget con mock de fetch global** (no MSW): mismo patrón que `insured-flow.spec.ts`. Helper `setupFetchMock(handler)` por archivo, restore en `afterEach`. Cubre path/verbo/body/headers — más que suficiente para chatbot.
+
+#### S5 — Backend Senior NLP/KB (S4-06, 8 pts)
+
+1. **Modelos pre-existentes con columnas TODO: extender > duplicar (§1.16)**. La migración `ADD COLUMN IF NOT EXISTS` permite cohabitar Sprint 1 stubs con campos Sprint 4+ sin romper datos. Antes de crear `model NEW`, grep el schema.
+2. **EscalationService crossover S5↔S6**: dispatch plan asignó "S5 o S6 — decidir iter1". Coordiné inspeccionando el filesystem antes de escribir; S6 ya tenía la versión robusta. Lección: revisar siempre `ls` del path NEW antes de escribir, otro agente puede haberlo hecho primero.
+3. **Audit action enum vs `payloadDiff.event`**: cuando un nuevo dominio (chatbot) emite events, decidir entre extender enum (queries SQL eficientes) o usar `payloadDiff.event` (cero coordinación). Iter1 elegí lo segundo; documentado como bridge + ADR follow-up. Sprint 5 unifica con migración `<DATE>_audit_action_sprint4`.
+4. **Matcher puro testeable**: el algoritmo `tokenize + scoreEntry + findBestMatch` está sin Prisma → testable sin mocks. Patrón replicable para otros NLP-style services (Sprint 5+ semantic search).
+5. **Personalization fail-soft con try/catch**: cuando un service llama otro service que puede degradar (BD/network), preferir best-effort + log.warn antes que propagar — el chat NUNCA debe responder 500 al insured por una falla downstream.
+
+#### S6 — Backend Personalization + Escalation (S4-07 + S4-08, 8 pts)
+
+1. **Templates con placeholders separan método puro (`applyTemplate`) del método con I/O (`fillPlaceholders`)** — permite testear el template engine sin Prisma mock y mantener coverage alto sin overhead.
+2. **Fechas localizadas con `timeZone` explícito**: `toLocaleDateString('es-MX', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'America/Mexico_City' })` previene drift entre Lambda UTC y CDMX. Aplicable a toda salida HTML/email/chat.
+3. **Idempotencia coarse-grained como bridge**: cuando un modelo dependiente todavía no existe (`ChatConversation`), usar un campo binario existente (`escalated: boolean`) + ventana temporal 60min es preferible a bloquear la historia esperando schema. Documentar el bridge en docstring + feed para refactor en iter siguiente.
+4. **HTML escape en emails**: cualquier campo con contenido user-provided (`reason`, `content`, `fullName`) debe pasar por `escapeHtml()` antes de inyectarse en el template — Mailpit y muchos clientes MAC renderizan HTML por default y las preview panes son un sumidero clásico de XSS.
+5. **Audit `subAction` en `payloadDiff` como bridge no permanente**: para acciones que no encajan en el enum DB existente (`escalated` no está en `AuditAction`), reusar `action='update'` + `payloadDiff.subAction='<verbo>'` mantiene la cadena hash sin requerir migración del enum. Sprint 5: migración unificada.
+
+#### S7 — Audit Timeline 360° (S4-09, 5 pts)
+
+1. **Streaming CSV con async generator + Fastify `reply.raw`** es el pattern correcto: zero buffering, throttle 2/min defensivo, hard cap secundario por si el throttle se desconfigura. Pattern para futuras streaming exports (insureds CSV, audit-log CSV bulk).
+2. **Auditoría de auditoría**: cuando un endpoint expone audit logs (export, verify-chain), DEBE registrarse en el propio `audit_log` con `resourceType='audit.<feature>'`. Sirve para forensics: si alguien filtra el CSV de un tenant, queda evidencia.
+3. **Keyset cursor opaco**: `base64url(JSON({id, occurredAt}))`. El cliente NO inspecciona; reuse del codec `audit-cursor.ts` evita drift entre `/audit/log` y `/audit/timeline`.
+4. **`useInfiniteQuery` con `getNextPageParam`**: patrón estándar para paginación cursor en TanStack Query 5; añadir snippet en §2.4 cuando aplique listas largas (timeline, notifications, etc.).
+5. **JSON path matching en Postgres via Prisma** (`payloadDiff: {path:['insuredId'], equals:X}`) funciona pero requiere GIN index `((payload_diff))` para escalar. Documentado como anti-pattern futuro Sprint 5+ si p95 timeline > 150ms.
+
+#### S8 — DevOps Performance (S4-10, 5 pts)
+
+1. **Performance budgets per-endpoint > global**. El gate global (500 ms) no es suficiente — endpoints específicos necesitan budgets más estrictos (read = 300 ms) o más laxos (chatbot = 800 ms). Estos viven en `baseline.json` y son revisados en cada PR de `tests/performance/**`.
+2. **Load test data debe ser determinístico**. Seed fija (42 portal, 7 admin) para que dos runs sean comparables. Evitar `Math.random()` sin seed — ruido desestabiliza el gate.
+3. **Throughput Controller > Random Controller** (JMeter). Random Controller no garantiza distribución exacta del mix; Throughput Controller (style=1 percent) sí. Replicable a k6 con `executor: 'ramping-arrival-rate'` por escenario.
+4. **Login una vez por VU** (`OnceOnlyController` JMeter): evita explosión de tokens y refleja patrón real (un usuario no re-loguea cada request). Cookie Manager + JSON extractor mantienen el token vivo toda la sesión.
+5. **CI gate como `workflow_dispatch` + cron, NO en PR**. El load test contra staging cuesta tiempo+dinero; correrlo en cada PR es anti-DX. Regla: `perf.yml` corre semanal + on-demand; PRs siguen un light-smoke (futuro: 10 vu × 1 min en `ci.yml` para detectar regresión gruesa).
+
+#### S9 — Backend Senior Hardening (8 High remanentes + 5 ADRs)
+
+1. **`describe.skip` con `it.todo` apuntando a "tests pendientes" = test fantasma**: el suite OTP H-09 estuvo skip 3+ sprints. Cierre: 14 tests unit con mocks reales (Redis/Cognito/SES/AuditWriter) + helpers `buildJwt`/`preloadSession`/`buildService(opts)`. Aplicar a cualquier `describe.skip` en suite — convertir a tests reales o eliminar.
+2. **Migrations idempotentes via `IF NOT EXISTS` / `DO $$ ... pg_type ... pg_constraint`**: 6 migraciones Sprint 4 inspeccionadas; 3 con guards explícitos seguras a manual replay, 3 dependen de Prisma `_prisma_migrations` tracking. PR rule Sprint 5: "toda nueva migración usa guards" para sobrevivir a manual replays.
+3. **EMF emitter ↔ alarms `Environment` dimension MUST match (§1.14)**: emitter `process.env.NODE_ENV` ≠ alarmas `var.environment` → INSUFFICIENT_DATA permanente en dev/prod. Test integration cross-component obligatorio en Sprint 5.
+4. **ADR template canónico**: Context / Decision / Consequences (Positive + Negative) / Alternatives considered (≥3 con razón de rechazo) / Follow-ups. El formato fuerza el rigor — alternativa sin razón = decisión débil. 5 ADRs Sprint 4 con 18 alternativas totales documentadas.
+5. **Param-passing `auditCtx?` > `Scope.REQUEST` en services hot-path**: medición ADR-0004 +30% latencia con `Scope.REQUEST` en login. Param-passing preserva throughput crítico; `AuditContextFactory` request-scoped por defecto, opt-out en services no-request-scoped (AuthService, futuros HealthService/RpcGateway).
+
+#### S10 — QA Lead + Tech Writer (E2E + DEVELOPER_GUIDE + DoR/DoD + cleanup)
+
+1. **DoR/DoD validation matrix por historia ANTES de iter 1 (gating de entrada al sprint)**: 17 columnas (A..Q) + 10 historias = 170 cells. Sin matriz, "DoR cleared" es asunto vago. Owner QA Lead, audiencia PO + tech lead.
+2. **E2E spec con `skipIfBootstrap` graceful**: tests con asserts reales que toleran 200/501 cuando el endpoint no está implementado al cierre iter 1 — permite TDD-led infrastructure (test escrito antes que el endpoint, no fail en CI sin docker). Pattern de `insured-360.e2e-spec.ts` extendido a Sprint 4.
+3. **Coverage diff iter1↔iter2 con `coverage-summary.json`**: NEW-FINDING-S10-04 — sin snapshot, % global puede caer silenciosamente aunque cada nuevo módulo tenga 80%. Documento `docs/sprint4/COVERAGE_DIFF.md` con TODO orquestador.
+4. **Cleanup placeholder code post-deploy**: `chat-fab.tsx` placeholder Sprint 3 quedó huérfano post-iter1 widget chatbot real (S4 NEW-FINDING). Audit obligatorio en cierre sprint: grep referencias + delete archivos no consumidos.
+5. **DEVELOPER_GUIDE como single source of truth + sprint-by-sprint extension**: §2.X cheat-sheet crece +1 sección por nuevo tipo de cambio (Sprint 4: §2.6 chart/report, §2.7 chatbot KB, §2.8 EventBridge cron). §1 anti-patterns crece con cada finding sistémico (Sprint 4: §1.12 TZ + §1.13 SES SDK + §1.14 EMF dim + §1.15 contract-first + §1.16 modelos pre-existentes). §8 lecciones por bundle/agente.
 
 ---
 

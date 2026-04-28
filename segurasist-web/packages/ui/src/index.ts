@@ -27,3 +27,4 @@ export * from './components/file-drop';
 export * from './components/alert-banner';
 export * from './components/breadcrumbs';
 export * from './components/chat-widget';
+export * from './components/charts';

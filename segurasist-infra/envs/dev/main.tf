@@ -357,14 +357,21 @@ module "s3_audit" {
 }
 
 ############################################
-# SQS queues (5): layout, insureds-creation, pdf (certificates), emails, reports
+# SQS queues (6): layout, insureds-creation, pdf (certificates), emails,
+# reports, monthly-reports
 #
 # C-09 / H-29 — todas son **standard** (NO FIFO). El módulo `sqs-queue` ya
 # instancia DLQ con redrive policy (`maxReceiveCount=3`) y SSE-KMS. Las URLs
 # se exportan a la app vía `outputs.tf` → variables de App Runner
 # (`SQS_QUEUE_LAYOUT`, `SQS_QUEUE_INSUREDS_CREATION`, `SQS_QUEUE_PDF`,
-# `SQS_QUEUE_EMAIL`, `SQS_QUEUE_REPORTS`). Ningún worker debe fabricar URLs
-# vía string-replace — eso rompe en AWS real (account-id distinto).
+# `SQS_QUEUE_EMAIL`, `SQS_QUEUE_REPORTS`, `SQS_QUEUE_MONTHLY_REPORTS`).
+# Ningún worker debe fabricar URLs vía string-replace — eso rompe en AWS
+# real (account-id distinto).
+#
+# `monthly-reports` (S4-04): visibility timeout = 600s porque el handler
+# itera N tenants y genera N PDFs (cada uno ~5s puppeteer); 10 min cubre
+# tenants medianos (~100 tenants). Si el handler tarda más, aumentar VT
+# o trocear el job (TODO Sprint 5).
 ############################################
 
 locals {
@@ -374,6 +381,7 @@ locals {
     "pdf"               = { vt = 120, retention = 345600 }
     "emails"            = { vt = 30,  retention = 345600 }
     "reports"           = { vt = 300, retention = 345600 }
+    "monthly-reports"   = { vt = 600, retention = 345600 }
   }
 }
 
@@ -400,6 +408,56 @@ module "eventbus" {
   archive_retention_days = 30
 
   tags = merge(local.common_tags, { Component = "events" })
+}
+
+############################################
+# S4-04 — EventBridge cron rule (monthly reports)
+#
+# Día 1 de cada mes 14:00 UTC ≈ 09:00 CST (sin DST) / 08:00 CST (con DST).
+# Mexico abandonó DST en 2022 → 14:00 UTC = 08:00 CST permanente. El
+# producto pidió "9 AM CST" pero el orchestrator del worker interpreta el
+# trigger como "fin de mes / inicio de mes según corresponda" — el cron
+# se dispara el día 1 y el handler resuelve el período al "mes anterior"
+# (period_year, period_month) para generar el reporte de cierre.
+############################################
+
+module "cron_monthly_reports" {
+  source = "../../modules/eventbridge-rule"
+
+  name            = "${local.name_prefix}-cron-monthly-reports"
+  description     = "Dispara generación de reportes mensuales (S4-04). Día 1 de cada mes 14:00 UTC."
+  cron_expression = "cron(0 14 1 * ? *)"
+  enabled         = true
+
+  target_sqs_arn = module.sqs["monthly-reports"].queue_arn
+
+  tags = merge(local.common_tags, { Component = "cron-monthly-reports", Owner = "S3" })
+}
+
+# Permiso para que EventBridge publique en la cola monthly-reports. Sin
+# este policy, EventBridge falla con `FailedInvocations` y la alarma
+# `eventbridge-rule-failed` se dispara.
+data "aws_iam_policy_document" "monthly_reports_queue_policy" {
+  statement {
+    sid    = "AllowEventBridgePublish"
+    effect = "Allow"
+    actions = ["sqs:SendMessage"]
+    principals {
+      type        = "Service"
+      identifiers = ["events.amazonaws.com"]
+    }
+    resources = [module.sqs["monthly-reports"].queue_arn]
+    condition {
+      test     = "ArnEquals"
+      variable = "aws:SourceArn"
+      values   = [module.cron_monthly_reports.rule_arn]
+    }
+  }
+}
+
+resource "aws_sqs_queue_policy" "monthly_reports" {
+  queue_url = module.sqs["monthly-reports"].queue_url
+  policy    = data.aws_iam_policy_document.monthly_reports_queue_policy.json
 }
 
 ############################################

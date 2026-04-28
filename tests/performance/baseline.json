@@ -1,0 +1,134 @@
+{
+  "$schema": "./baseline.schema.json",
+  "version": 1,
+  "captured": null,
+  "captured_run_id": null,
+  "tool": "jmeter",
+  "target": {
+    "base_url": "https://api.staging.segurasist.com",
+    "tenant": "hospitales-mac",
+    "scenario_portal": "tests/performance/jmeter/portal-load-1000.jmx",
+    "scenario_admin": "tests/performance/jmeter/admin-load-100.jmx"
+  },
+  "global_thresholds": {
+    "p95_ms_max": 500,
+    "p99_ms_max": 1500,
+    "error_rate_pct_max": 1.0
+  },
+  "portal_endpoints": {
+    "GET /v1/insureds/me": {
+      "p50_ms": null,
+      "p95_ms": null,
+      "p99_ms": null,
+      "avg_ms": null,
+      "error_rate_pct": null,
+      "guard_p95_ms": 300,
+      "notes": "Endpoint hot — read del propio insured. Espera RLS hit, sin joins pesados."
+    },
+    "GET /v1/insureds/me/coverages": {
+      "p50_ms": null,
+      "p95_ms": null,
+      "p99_ms": null,
+      "avg_ms": null,
+      "error_rate_pct": null,
+      "guard_p95_ms": 400,
+      "notes": "Join coverages + plan + price book. Considerar índice (insured_id, valid_from)."
+    },
+    "GET /v1/certificates/mine": {
+      "p50_ms": null,
+      "p95_ms": null,
+      "p99_ms": null,
+      "avg_ms": null,
+      "error_rate_pct": null,
+      "guard_p95_ms": 400,
+      "notes": "Lista de certificates. Pre-signed URL S3 en cada item — costo CPU."
+    },
+    "POST /v1/chatbot/message": {
+      "p50_ms": null,
+      "p95_ms": null,
+      "p99_ms": null,
+      "avg_ms": null,
+      "error_rate_pct": null,
+      "guard_p95_ms": 800,
+      "notes": "S4-05/06. KB lookup + LLM/regex matcher. Si excede 800ms revisar p95 KB query."
+    },
+    "POST /v1/claims": {
+      "p50_ms": null,
+      "p95_ms": null,
+      "p99_ms": null,
+      "avg_ms": null,
+      "error_rate_pct": null,
+      "guard_p95_ms": 500,
+      "notes": "Write path. SQS publish + audit. Idempotencia DB-side."
+    }
+  },
+  "admin_endpoints": {
+    "GET /v1/insureds": {
+      "p50_ms": null,
+      "p95_ms": null,
+      "p99_ms": null,
+      "avg_ms": null,
+      "error_rate_pct": null,
+      "guard_p95_ms": 500,
+      "notes": "Paginated 20/page. Cuidar OFFSET grande → keyset pagination si excede."
+    },
+    "GET /v1/batches": {
+      "p50_ms": null,
+      "p95_ms": null,
+      "p99_ms": null,
+      "avg_ms": null,
+      "error_rate_pct": null,
+      "guard_p95_ms": 500
+    },
+    "POST /v1/insureds": {
+      "p50_ms": null,
+      "p95_ms": null,
+      "p99_ms": null,
+      "avg_ms": null,
+      "error_rate_pct": null,
+      "guard_p95_ms": 700,
+      "notes": "Write + RENAPO stub + audit. Esperado mayor que reads."
+    },
+    "PATCH /v1/insureds/:id": {
+      "p50_ms": null,
+      "p95_ms": null,
+      "p99_ms": null,
+      "avg_ms": null,
+      "error_rate_pct": null,
+      "guard_p95_ms": 500
+    },
+    "GET /v1/reports/conciliacion": {
+      "p50_ms": null,
+      "p95_ms": null,
+      "p99_ms": null,
+      "avg_ms": null,
+      "error_rate_pct": null,
+      "guard_p95_ms": 1500,
+      "notes": "S4-01. Query agregada. Excepción al gate global porque es report — gate específico 1500ms."
+    },
+    "GET /v1/audit/timeline": {
+      "p50_ms": null,
+      "p95_ms": null,
+      "p99_ms": null,
+      "avg_ms": null,
+      "error_rate_pct": null,
+      "guard_p95_ms": 700,
+      "notes": "S4-09. Cursor pagination + JOIN audit_logs."
+    },
+    "POST /v1/exports": {
+      "p50_ms": null,
+      "p95_ms": null,
+      "p99_ms": null,
+      "avg_ms": null,
+      "error_rate_pct": null,
+      "guard_p95_ms": 2000,
+      "notes": "Async export — solo enqueue + 202. Si se hace sync, gate se rompe."
+    }
+  },
+  "_instructions": [
+    "Este archivo se actualiza tras el primer run real en staging post-S4-10.",
+    "Workflow `.github/workflows/perf.yml` debería: 1) ejecutar; 2) parsear JTL; 3) si p95 < guard sustituir baseline en PR auto.",
+    "F0/QA approve manual del PR de baseline.",
+    "Regresión: si run nuevo > 1.2x baseline en cualquier endpoint, abrir issue."
+  ]
+}

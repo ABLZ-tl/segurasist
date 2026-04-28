@@ -23,6 +23,9 @@ const VALID_ENV: NodeJS.ProcessEnv = {
   SQS_QUEUE_EMAIL: 'http://q3',
   SQS_QUEUE_REPORTS: 'http://q4',
   SQS_QUEUE_INSUREDS_CREATION: 'http://q5',
+  // S4-04 — cron mensual.
+  SQS_QUEUE_MONTHLY_REPORTS: 'http://q6',
+  MONTHLY_REPORT_RECIPIENTS: 'ops@segurasist.local,admin@hospitalesmac.local',
   SES_SENDER_DOMAIN: 'mac.local',
   SES_CONFIGURATION_SET: 'cs',
   KMS_KEY_ID: 'alias/test',

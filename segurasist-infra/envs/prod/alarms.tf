@@ -187,6 +187,7 @@ locals {
     "pdf"               = "RB-012"
     "emails"            = "RB-004"
     "reports"           = "RB-004"
+    "monthly-reports"   = "RB-014"
   }
 }
 
@@ -433,6 +434,33 @@ module "alarm_cognito_throttle" {
 }
 
 ############################################
+# S4-04 — EventBridge cron monthly-reports FailedInvocations.
+# Prod: cualquier failure en el cron mensual es P1 (los hospitales esperan
+# el reporte el día 1; no llegar = ruptura SLA del producto).
+############################################
+
+module "alarm_cron_monthly_reports_failed" {
+  source = "../../modules/cloudwatch-alarm"
+
+  name        = "${local.name_prefix}-cron-monthly-reports-failed"
+  description = "EventBridge cron-monthly-reports FailedInvocations > 0 (S4-04, RB-014, P1)"
+  namespace   = "AWS/Events"
+  metric_name = "FailedInvocations"
+  dimensions  = { RuleName = module.cron_monthly_reports.rule_name }
+
+  statistic           = "Sum"
+  period_seconds      = 300
+  evaluation_periods  = 1
+  datapoints_to_alarm = 1
+  comparison_operator = "GreaterThanThreshold"
+  threshold           = 0
+  treat_missing_data  = "notBreaching"
+
+  sns_topic_arn = aws_sns_topic.alerts.arn
+  tags          = merge(local.common_tags, { Runbook = "RB-014", Component = "cron", Severity = "P1" })
+}
+
+############################################
 # Outputs
 ############################################
 
@@ -459,6 +487,7 @@ output "alarm_arns" {
       audit_writer_degraded      = module.alarm_audit_writer_degraded.alarm_arn
       audit_mirror_lag           = module.alarm_audit_mirror_lag.alarm_arn
       audit_chain_tampering      = module.alarm_audit_chain_tampering.alarm_arn
+      cron_monthly_reports_failed = module.alarm_cron_monthly_reports_failed.alarm_arn
     },
     { for k, m in module.alarm_sqs_dlq_depth : "sqs_dlq_${k}" => m.alarm_arn },
     { for k, m in module.alarm_lambda_errors : "lambda_errors_${k}" => m.alarm_arn },

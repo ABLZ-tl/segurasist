@@ -85,6 +85,33 @@ export const EnvSchema = z
      */
     SQS_QUEUE_INSUREDS_CREATION: z.string().url(),
 
+    /**
+     * S4-04 — Cola del cron mensual (EventBridge → SQS → MonthlyReportsHandler).
+     * Standard (NO FIFO). EventBridge rule `segurasist-<env>-cron-monthly-reports`
+     * publica un mensaje el día 1 a las 14:00 UTC; el handler NestJS hace
+     * polling, itera tenants activos y genera reporte mensual + envía email.
+     * Idempotencia DB-side: tabla `monthly_report_runs` UNIQUE
+     * `(tenant_id, period_year, period_month)`.
+     */
+    SQS_QUEUE_MONTHLY_REPORTS: z.string().url(),
+
+    /**
+     * S4-04 — Lista CSV de destinatarios del PDF mensual. Mínimo 1 email.
+     * En MVP es estático (operations + product owner del cliente Hospitales
+     * MAC); Sprint 5 lo migrará a una tabla `tenant_subscriptions` con
+     * override por tenant. Validamos cada item como email.
+     */
+    MONTHLY_REPORT_RECIPIENTS: z
+      .string()
+      .min(1)
+      .transform((s) =>
+        s
+          .split(',')
+          .map((v) => v.trim())
+          .filter(Boolean),
+      )
+      .pipe(z.array(z.string().email()).min(1)),
+
     // SES
     SES_SENDER_DOMAIN: z.string().min(1),
     SES_CONFIGURATION_SET: z.string().min(1),
@@ -181,6 +208,15 @@ export const EnvSchema = z
 
     /** S3-01 — Lockout temporal por CURP tras superar OTP_MAX_ATTEMPTS varias veces (segundos). */
     OTP_LOCKOUT_SECONDS: z.coerce.number().int().min(60).max(86_400).default(900),
+
+    /**
+     * S4-08 — Inbox del equipo MAC que recibe escalamientos del chatbot
+     * (history-in-the-loop). Cada vez que un asegurado pide "hablar con humano",
+     * `EscalationService` envía un email a este destinatario con el histórico
+     * de la conversación. En dev/test apunta a Mailpit (`mac-support@segurasist.local`),
+     * en prod debe ser una distribución gestionada por MAC (e.g. soporte@mac.com.mx).
+     */
+    MAC_SUPPORT_EMAIL: z.string().email().default('mac-support@segurasist.local'),
   })
   .superRefine((env, ctx) => {
     // M4 — Cross-validation: en producción no se permite un COGNITO_ENDPOINT

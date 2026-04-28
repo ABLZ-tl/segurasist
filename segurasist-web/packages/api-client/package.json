@@ -17,7 +17,9 @@
     "./hooks/chat": "./src/hooks/chat.ts",
     "./hooks/auth": "./src/hooks/auth.ts",
     "./hooks/exports": "./src/hooks/exports.ts",
-    "./hooks/claims": "./src/hooks/claims.ts"
+    "./hooks/claims": "./src/hooks/claims.ts",
+    "./hooks/chatbot": "./src/hooks/chatbot.ts",
+    "./hooks/audit-timeline": "./src/hooks/audit-timeline.ts"
   },
   "files": ["src"],
   "scripts": {
