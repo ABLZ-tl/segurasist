@@ -15,14 +15,18 @@
  * que la fila ya se creó, atrapamos `P2002` (unique violation) y lo
  * tratamos como éxito.
  *
- * Conteos del batch:
+ * Conteos del batch (post Sprint 4 fix C-06/C-07/C-08):
  *   - `processed_rows` aumenta por cada mensaje consumido.
  *   - `success_rows` aumenta sólo si la inserción fue exitosa (incluyendo
  *     re-entrega que ya estaba persistida).
  *   - `failed_rows` aumenta si el handler falló por causa NO recuperable.
+ *   - `rows_ok / rows_error` NO se tocan acá — son counters de la fase de
+ *     VALIDATION (LayoutWorker / sync upload).
  *
- * Cuando `processed == ok + error == batch.rowsOk` → batch `completed` +
- * evento `batch.completed`.
+ * Cuando `processed_rows >= queued_count` (el target real del confirm; puede
+ * ser un subset de rows_ok si se usó `rowsToInclude`) → batch `completed` +
+ * evento `batch.completed` exactly-once vía compare-and-set sobre
+ * `completed_event_emitted_at`.
  */
 import { SQSClient } from '@aws-sdk/client-sqs';
 import { PrismaBypassRlsService } from '@common/prisma/prisma-bypass-rls.service';
@@ -59,8 +63,7 @@ export class InsuredsCreationWorkerService implements OnModuleInit, OnModuleDest
     @Inject(ENV_TOKEN) private readonly env: Env,
   ) {
     this.enabled = (process.env.WORKERS_ENABLED ?? 'false') === 'true';
-    // Convención: misma URL que LAYOUT pero con cola distinta.
-    this.queueUrl = env.SQS_QUEUE_LAYOUT.replace('layout-validation-queue', 'insureds-creation-queue');
+    this.queueUrl = env.SQS_QUEUE_INSUREDS_CREATION;
   }
 
   onModuleInit(): void {
@@ -138,11 +141,10 @@ export class InsuredsCreationWorkerService implements OnModuleInit, OnModuleDest
         batchId,
         rowNumber,
       });
-      await this.sqs.sendMessage(
-        this.env.SQS_QUEUE_PDF,
-        event as unknown as Record<string, unknown>,
-        `${createdInsuredId}:created`,
-      );
+      // C-09: dedupeId removido — la cola PDF es standard. Idempotencia del
+      // PDF generator se cubre DB-side via UNIQUE `(tenant_id, insured_id,
+      // version)` en `certificates` (F1 owner del worker downstream).
+      await this.sqs.sendMessage(this.env.SQS_QUEUE_PDF, event as unknown as Record<string, unknown>);
     }
 
     await this.bumpBatchCounters(batchId, tenantId, success);
@@ -190,50 +192,128 @@ export class InsuredsCreationWorkerService implements OnModuleInit, OnModuleDest
   }
 
   /**
-   * Incrementa contadores del batch. Si todas las filas válidas se
-   * procesaron, marca `completed` y emite `batch.completed`.
+   * Incrementa contadores del batch atómicamente y, si todas las filas
+   * encoladas en `confirm()` ya fueron procesadas, transiciona el batch a
+   * `completed` y emite `batch.completed` exactly-once.
    *
-   * Usamos un UPDATE con expresiones SQL para evitar TOCTOU entre lectura y
-   * escritura cuando varias instancias del worker corren en paralelo. La
-   * unicidad la garantiza Postgres.
+   * Diseño (post fix C-06/C-07/C-08):
+   *
+   *   1. Un sólo `UPDATE ... RETURNING` incrementa
+   *      `processed_rows / success_rows / failed_rows` y devuelve la fila
+   *      completa. NO tocamos `rows_ok / rows_error` (esos son counters de
+   *      la fase validación, owned por LayoutWorker / sync upload).
+   *   2. Si después del UPDATE el batch está listo para completarse
+   *      (`processed_rows >= queued_count` y status=`processing`), se intenta
+   *      una transición atómica:
+   *
+   *        UPDATE batches
+   *           SET status='completed',
+   *               completed_at=NOW(),
+   *               completed_event_emitted_at=NOW()
+   *         WHERE id=:id
+   *           AND status='processing'
+   *           AND completed_event_emitted_at IS NULL
+   *           AND processed_rows >= queued_count
+   *
+   *      Si esta UPDATE actualiza 0 filas, otro worker concurrente ya
+   *      completó el batch — silenciamos y NO emitimos. Si actualiza 1 fila,
+   *      somos los winners y emitimos el evento.
+   *
+   *   3. El UNIQUE PARTIAL INDEX
+   *      `idx_batches_completed_once ON batches(id) WHERE
+   *      completed_event_emitted_at IS NOT NULL` es backup defensivo: si por
+   *      algún bug futuro la guard `completed_event_emitted_at IS NULL` se
+   *      bypaseara, Postgres rechazaría la 2da inserción.
    */
   private async bumpBatchCounters(batchId: string, tenantId: string, success: boolean): Promise<void> {
-    // No tenemos columna `processed_rows` — usamos `rowsOk` y `rowsError` ya
-    // existentes, pero su semántica acá es: cuántos PROCESADOS post-confirm.
-    // En la fase de validación se setearon a los counts del preview; al
-    // confirmar se reinician en este path.
-    // (Fix: idealmente agregaríamos `processed_rows` al schema; queda anotado
-    // como TODO para cuando aterricen las migraciones de Sprint 2.)
-    await this.prismaBypass.client.$executeRaw`
-      UPDATE batches SET rows_ok = rows_ok + ${success ? 1 : 0},
-                         rows_error = rows_error + ${success ? 0 : 1},
-                         updated_at = NOW()
-      WHERE id = ${batchId}::uuid AND tenant_id = ${tenantId}::uuid
+    // 1) Incremento atómico de processed/success/failed. RETURNING devuelve la
+    //    fila post-update para evitar el read-after-write en una segunda query
+    //    (que reintroduciría el TOCTOU).
+    type BatchRow = {
+      id: string;
+      status: string;
+      rows_total: number;
+      rows_ok: number;
+      rows_error: number;
+      processed_rows: number;
+      success_rows: number;
+      failed_rows: number;
+      queued_count: number | null;
+      completed_event_emitted_at: Date | null;
+    };
+    const updated = await this.prismaBypass.client.$queryRaw<BatchRow[]>`
+      UPDATE batches
+         SET processed_rows = processed_rows + 1,
+             success_rows   = success_rows + ${success ? 1 : 0},
+             failed_rows    = failed_rows + ${success ? 0 : 1},
+             updated_at     = NOW()
+       WHERE id = ${batchId}::uuid AND tenant_id = ${tenantId}::uuid
+   RETURNING id, status::text AS status, rows_total, rows_ok, rows_error,
+             processed_rows, success_rows, failed_rows, queued_count,
+             completed_event_emitted_at
     `;
-    // ¿Está completo?
-    const batch = await this.prismaBypass.client.batch.findFirst({
-      where: { id: batchId, tenantId },
-      select: { id: true, status: true, rowsTotal: true, rowsOk: true, rowsError: true },
-    });
-    if (batch && batch.status === 'processing' && batch.rowsOk + batch.rowsError >= batch.rowsTotal) {
-      await this.prismaBypass.client.batch.update({
-        where: { id: batchId },
-        data: { status: 'completed', completedAt: new Date() },
-      });
-      const event = buildBatchCompletedEventImported({
-        batchId,
-        tenantId,
-        rowsTotal: batch.rowsTotal,
-        rowsOk: batch.rowsOk,
-        rowsError: batch.rowsError,
-      });
-      await this.sqs.sendMessage(
-        this.env.SQS_QUEUE_LAYOUT,
-        event as unknown as Record<string, unknown>,
-        `${batchId}:completed`,
-      );
-      this.log.log({ batchId }, 'batch completado');
+    const batch = updated[0];
+    if (!batch) {
+      this.log.warn({ batchId, tenantId }, 'bumpBatchCounters: batch no encontrado');
+      return;
     }
+
+    // 2) ¿Está listo para completarse? Comparamos contra `queued_count` (el
+    //    target real del confirm), NO contra `rows_total`. Si queued_count es
+    //    NULL (legacy/migración) caemos a rows_ok como fallback razonable.
+    const target = batch.queued_count ?? batch.rows_ok;
+    if (
+      batch.status !== 'processing' ||
+      batch.completed_event_emitted_at !== null ||
+      batch.processed_rows < target ||
+      target <= 0
+    ) {
+      return;
+    }
+
+    // 3) Compare-and-set: sólo el primer caller que ve la condición ganará.
+    //    El UPDATE con guard `completed_event_emitted_at IS NULL` y
+    //    `processed_rows >= queued_count` retorna 0 filas si otro worker
+    //    nos ganó la carrera.
+    const claimed = await this.prismaBypass.client.$queryRaw<Array<{ id: string }>>`
+      UPDATE batches
+         SET status = 'completed'::batch_status,
+             completed_at = NOW(),
+             completed_event_emitted_at = NOW(),
+             updated_at = NOW()
+       WHERE id = ${batchId}::uuid
+         AND tenant_id = ${tenantId}::uuid
+         AND status = 'processing'::batch_status
+         AND completed_event_emitted_at IS NULL
+         AND processed_rows >= COALESCE(queued_count, rows_ok)
+         AND COALESCE(queued_count, rows_ok) > 0
+   RETURNING id
+    `;
+    if (claimed.length === 0) {
+      // Otro worker concurrente ya emitió el evento — exactly-once preservado.
+      this.log.log({ batchId }, 'batch ya completado por otro worker (race lost)');
+      return;
+    }
+
+    // Ganamos la carrera; emitimos el evento. `rowsOk/rowsError` se reportan
+    // como totales de PROCESSING (success_rows / failed_rows), no como los
+    // counters de validación, que son una métrica distinta.
+    const event = buildBatchCompletedEventImported({
+      batchId,
+      tenantId,
+      rowsTotal: batch.rows_total,
+      rowsOk: batch.success_rows,
+      rowsError: batch.failed_rows,
+    });
+    // C-09: dedupeId removido — exactly-once ya está garantizado por el CAS
+    // sobre `completed_event_emitted_at` arriba (UPDATE devuelve 0 filas si
+    // otro worker ganó la carrera). MessageDeduplicationId era redundante y
+    // se ignoraba en cola standard.
+    await this.sqs.sendMessage(this.env.SQS_QUEUE_LAYOUT, event as unknown as Record<string, unknown>);
+    this.log.log(
+      { batchId, processed: batch.processed_rows, target },
+      'batch completado (exactly-once)',
+    );
   }
 }
 

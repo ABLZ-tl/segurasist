@@ -1,6 +1,7 @@
 import { CurrentUser, AuthUser } from '@common/decorators/current-user.decorator';
 import { Roles } from '@common/decorators/roles.decorator';
 import { Tenant, TenantCtx } from '@common/decorators/tenant.decorator';
+import { assertPlatformAdmin } from '@common/guards/assert-platform-admin';
 import { JwtAuthGuard } from '@common/guards/jwt-auth.guard';
 import { RolesGuard } from '@common/guards/roles.guard';
 import { ZodValidationPipe } from '@common/pipes/zod-validation.pipe';
@@ -114,6 +115,10 @@ export class BatchesController {
     @Req() req: FastifyRequest & { user?: AuthUser; tenant?: TenantCtx },
   ) {
     const platformAdmin = req.user?.platformAdmin === true;
+    if (platformAdmin) {
+      // H-14 — runtime defense-in-depth para PrismaBypassRlsService.
+      assertPlatformAdmin(req.user);
+    }
     return this.batches.list(q, {
       platformAdmin,
       tenantId: platformAdmin ? q.tenantId : req.tenant?.id,
@@ -129,6 +134,9 @@ export class BatchesController {
     @Req() req: FastifyRequest & { user?: AuthUser; tenant?: TenantCtx },
   ) {
     const platformAdmin = req.user?.platformAdmin === true;
+    if (platformAdmin) {
+      assertPlatformAdmin(req.user); // H-14
+    }
     return this.batches.findOne(id, {
       platformAdmin,
       tenantId: platformAdmin ? q.tenantId : req.tenant?.id,

@@ -357,15 +357,23 @@ module "s3_audit" {
 }
 
 ############################################
-# SQS queues (4): layout, certificates, emails, reports
+# SQS queues (5): layout, insureds-creation, pdf (certificates), emails, reports
+#
+# C-09 / H-29 — todas son **standard** (NO FIFO). El módulo `sqs-queue` ya
+# instancia DLQ con redrive policy (`maxReceiveCount=3`) y SSE-KMS. Las URLs
+# se exportan a la app vía `outputs.tf` → variables de App Runner
+# (`SQS_QUEUE_LAYOUT`, `SQS_QUEUE_INSUREDS_CREATION`, `SQS_QUEUE_PDF`,
+# `SQS_QUEUE_EMAIL`, `SQS_QUEUE_REPORTS`). Ningún worker debe fabricar URLs
+# vía string-replace — eso rompe en AWS real (account-id distinto).
 ############################################
 
 locals {
   queues = {
-    layout       = { vt = 60,  retention = 345600 }
-    certificates = { vt = 120, retention = 345600 }
-    emails       = { vt = 30,  retention = 345600 }
-    reports      = { vt = 300, retention = 345600 }
+    "layout"            = { vt = 60,  retention = 345600 }
+    "insureds-creation" = { vt = 120, retention = 345600 }
+    "pdf"               = { vt = 120, retention = 345600 }
+    "emails"            = { vt = 30,  retention = 345600 }
+    "reports"           = { vt = 300, retention = 345600 }
   }
 }
 

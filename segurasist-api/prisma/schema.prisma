@@ -150,6 +150,28 @@ enum ChatKbStatus {
   @@map("chat_kb_status")
 }
 
+/// H-01 / P3 — enum extendido para acabar con el "overload" de `login`/`read`
+/// como semánticas múltiples (OTP request, OTP verify, certificate view,
+/// certificate download, export download). Antes había callers
+/// (auth.service.ts:233/318, certificates.service.ts:225, insureds.service.ts)
+/// codificando el sub-action dentro de `payloadDiff.subAction='viewed_360'` o
+/// `resourceType='auth.otp.requested'` — drift y queries imposibles
+/// (e.g. "todas las descargas de un mes").
+///
+/// Valores agregados:
+///   - otp_requested / otp_verified  → flow OTP del portal (auth.service)
+///   - read_viewed                  → vista 360, single resource read tracked
+///   - read_downloaded              → presigned URL emitido (PII pasa por
+///                                    nuestros servers vía signed URL)
+///   - export_downloaded            → user descargó un export PII previamente
+///                                    generado (NO es la generación, eso es `export`)
+///
+/// Migración (`20260428_audit_action_enum_extend`) usa
+/// `ALTER TYPE ... ADD VALUE IF NOT EXISTS` — Postgres soporta agregar
+/// valores enum desde la 12+ sin downtime. Filas existentes con `login` que
+/// representaban OTP no se re-escriben automáticamente: los tests de
+/// regresión solo verifican que las nuevas escrituras usan los valores
+/// correctos. Migración a los nuevos valores en services es iter 2 (F6).
 enum AuditAction {
   create
   update
@@ -159,6 +181,11 @@ enum AuditAction {
   logout
   export
   reissue
+  otp_requested
+  otp_verified
+  read_viewed
+  read_downloaded
+  export_downloaded
 
   @@map("audit_action")
 }
@@ -419,12 +446,29 @@ model Batch {
   fileS3Key   String      @map("file_s3_key") @db.VarChar(512)
   fileName    String      @map("file_name") @db.VarChar(255)
   status      BatchStatus @default(validating)
+  /// Counters fase VALIDATION (LayoutWorker / sync upload). NO los pisa el
+  /// InsuredsCreationWorker — el worker tiene sus propios contadores
+  /// (`processedRows`, `successRows`, `failedRows`).
   rowsTotal   Int         @default(0) @map("rows_total")
   rowsOk      Int         @default(0) @map("rows_ok")
   rowsError   Int         @default(0) @map("rows_error")
+  /// Counters fase PROCESSING (InsuredsCreationWorker). Se setean en `confirm()`
+  /// reseteados a 0 y se incrementan atómicamente por el worker. Cuando
+  /// `processedRows >= queuedCount` el batch transiciona a `completed`.
+  processedRows Int       @default(0) @map("processed_rows")
+  successRows   Int       @default(0) @map("success_rows")
+  failedRows    Int       @default(0) @map("failed_rows")
+  /// Número real de mensajes encolados al confirmar (puede ser subset de
+  /// `rowsOk` si `confirm()` recibió `rowsToInclude`). Comparar contadores
+  /// del worker contra esto, NO contra `rowsTotal`.
+  queuedCount Int?        @map("queued_count")
   createdBy   String      @map("created_by") @db.Uuid
   startedAt   DateTime?   @map("started_at")
   completedAt DateTime?   @map("completed_at")
+  /// Defensa exactly-once para `batch.completed`. Set vía UPDATE atómico
+  /// `WHERE completed_event_emitted_at IS NULL`; solo un caller gana la
+  /// carrera y emite el evento. UNIQUE index parcial backup en migración.
+  completedEventEmittedAt DateTime? @map("completed_event_emitted_at") @db.Timestamptz
   createdAt   DateTime    @default(now()) @map("created_at")
   updatedAt   DateTime    @updatedAt @map("updated_at")
   deletedAt   DateTime?   @map("deleted_at")

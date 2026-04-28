@@ -1,10 +1,12 @@
 import { CurrentUser, AuthUser } from '@common/decorators/current-user.decorator';
 import { Public, Roles } from '@common/decorators/roles.decorator';
 import { Tenant, TenantCtx } from '@common/decorators/tenant.decorator';
+import { assertPlatformAdmin } from '@common/guards/assert-platform-admin';
 import { JwtAuthGuard } from '@common/guards/jwt-auth.guard';
 import { RolesGuard } from '@common/guards/roles.guard';
 import { ZodValidationPipe } from '@common/pipes/zod-validation.pipe';
 import { Throttle } from '@common/throttler/throttler.decorators';
+import { AuditContextFactory } from '@modules/audit/audit-context.factory';
 import { Body, Controller, Get, Param, ParseUUIDPipe, Post, Query, Req, UseGuards } from '@nestjs/common';
 import type { FastifyRequest } from 'fastify';
 import { CertificatesService, type CertificatesScope } from './certificates.service';
@@ -21,7 +23,10 @@ import {
 
 @Controller({ path: 'certificates', version: '1' })
 export class CertificatesController {
-  constructor(private readonly certs: CertificatesService) {}
+  constructor(
+    private readonly certs: CertificatesService,
+    private readonly auditCtx: AuditContextFactory,
+  ) {}
 
   /**
    * Verificación pública por hash. NO requiere auth (es lo que el QR del
@@ -48,6 +53,10 @@ export class CertificatesController {
     queryTenantId: string | undefined,
   ): CertificatesScope {
     const platformAdmin = req.user?.platformAdmin === true;
+    if (platformAdmin) {
+      // H-14 — runtime defense-in-depth para PrismaBypassRlsService.
+      assertPlatformAdmin(req.user);
+    }
     return {
       platformAdmin,
       tenantId: platformAdmin ? queryTenantId : req.tenant?.id,
@@ -75,13 +84,10 @@ export class CertificatesController {
   @Get('mine')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('insured')
-  mine(@CurrentUser() user: AuthUser, @Req() req: FastifyRequest & { user?: AuthUser }) {
-    const ip = (req.ip ?? '').toString() || undefined;
-    const ua = req.headers['user-agent'];
-    const userAgent = typeof ua === 'string' ? ua : undefined;
-    const reqId = req.id;
-    const traceId = typeof reqId === 'string' ? reqId : undefined;
-    return this.certs.urlForSelf(user, { ip, userAgent, traceId });
+  mine(@CurrentUser() user: AuthUser) {
+    // F6 iter 2 H-01 — AuditContext canónico via factory. Sustituye la
+    // extracción manual ad-hoc previa.
+    return this.certs.urlForSelf(user, this.auditCtx.fromRequest());
   }
 
   @Get(':id')

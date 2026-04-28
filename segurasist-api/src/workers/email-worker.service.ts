@@ -214,7 +214,15 @@ export class EmailWorkerService implements OnApplicationBootstrap, OnModuleDestr
         text: textBody,
         configurationSet: `segurasist-${this.env.NODE_ENV}`,
         headers: { 'X-Trace-Id': traceId },
-        tags: { cert: cert.id },
+        // H-11 — Tags propagadas a SES (CloudWatch + SNS notifications).
+        // `tenant_id` permite aggregations de bounces/complaints por tenant
+        // sin parsear payload. `email_type` discrimina tipo del template
+        // (Sprint 5 agregará `claim-update`, `password-reset`, etc).
+        tags: {
+          cert: cert.id,
+          tenant_id: tenant.id,
+          email_type: 'certificate-issued',
+        },
       });
       await this.prismaBypass.client.emailEvent.create({
         data: {

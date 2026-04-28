@@ -3,7 +3,10 @@
 module.exports = {
   ci: {
     collect: {
-      url: ['http://localhost:3001/'],
+      // H-22 (Sprint 4) — el portal corre en :3002 (admin queda en :3001).
+      // Apuntar a 3001 medía la app equivocada y producía gaps fictisios de
+      // Performance/A11y. Un bug que se enmascaraba a sí mismo: corregido.
+      url: ['http://localhost:3002/'],
       startServerCommand: 'pnpm --filter @segurasist/portal start',
       startServerReadyPattern: 'ready',
       numberOfRuns: 3,

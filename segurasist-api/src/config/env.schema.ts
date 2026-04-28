@@ -75,6 +75,15 @@ export const EnvSchema = z
     SQS_QUEUE_PDF: z.string().url(),
     SQS_QUEUE_EMAIL: z.string().url(),
     SQS_QUEUE_REPORTS: z.string().url(),
+    /**
+     * F4 + F5 coordination (iter 2): cola dedicada para `InsuredsCreationWorker`
+     * post-`confirm()` del batch. La cola standard `insureds-creation` (con DLQ)
+     * vive en `scripts/localstack-bootstrap.sh` (dev) y los 3 envs Terraform
+     * (`segurasist-infra/envs/{dev,staging,prod}/main.tf`). Idempotencia
+     * DB-side: `batch_processed_rows (tenant_id, batch_id, row_number)` UNIQUE
+     * + CAS atómico sobre `Batch.completedEventEmittedAt`. La cola NO es FIFO.
+     */
+    SQS_QUEUE_INSUREDS_CREATION: z.string().url(),
 
     // SES
     SES_SENDER_DOMAIN: z.string().min(1),
@@ -150,8 +159,15 @@ export const EnvSchema = z
      * reemplaza por CUSTOM_AUTH (cognito Lambda triggers); en MVP/dev local es
      * el atajo más simple sin perder seguridad: el atacante necesita el OTP que
      * jamás abandona el correo del titular.
+     *
+     * C-04 — NO default value. La variable es obligatoria y NO puede ser un
+     * valor hardcoded conocido (`Demo123!`, `Password123!`, etc) en producción.
+     * El cross-validation `superRefine` abajo enforces:
+     *   - longitud mínima 8 (siempre).
+     *   - en `NODE_ENV=production`: longitud >=14 + presencia de símbolo + NO en
+     *     blocklist de hardcodeds conocidos.
      */
-    INSURED_DEFAULT_PASSWORD: z.string().min(8).default('Demo123!'),
+    INSURED_DEFAULT_PASSWORD: z.string().min(8),
 
     /**
      * S3-01 — TTL del OTP en Redis. 5 minutos es el balance recomendado por
@@ -177,6 +193,54 @@ export const EnvSchema = z
           code: z.ZodIssueCode.custom,
           path: ['COGNITO_ENDPOINT'],
           message: `COGNITO_ENDPOINT con valor no-AWS no es permitido en producción. Detected: ${env.COGNITO_ENDPOINT}`,
+        });
+      }
+    }
+
+    // C-04 — INSURED_DEFAULT_PASSWORD: hardcoded blocklist + prod-strength.
+    // El valor `Demo123!` (y similares) era el default histórico del schema.
+    // Si llegan a producción, atacante puede saltarse OTP via AdminInitiateAuth
+    // con la password compartida. Bloqueamos en boot.
+    const HARDCODED_BLOCKLIST = new Set([
+      'Demo123!',
+      'demo123!',
+      'Password123!',
+      'password',
+      'Password1!',
+      'Changeme123!',
+      'Admin123!',
+      'Test123!',
+      'Welcome1!',
+      'Welcome123!',
+    ]);
+    if (HARDCODED_BLOCKLIST.has(env.INSURED_DEFAULT_PASSWORD)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['INSURED_DEFAULT_PASSWORD'],
+        message:
+          'INSURED_DEFAULT_PASSWORD contiene un valor hardcoded conocido (e.g. "Demo123!"). ' +
+          'Cambia el valor por uno aleatorio (>=14 chars con símbolos en producción). ' +
+          'Ver C-04 en docs/audit/01-auth-rbac-v2.md.',
+      });
+    }
+    if (env.NODE_ENV === 'production') {
+      const pwd = env.INSURED_DEFAULT_PASSWORD;
+      if (pwd.length < 14) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['INSURED_DEFAULT_PASSWORD'],
+          message: `INSURED_DEFAULT_PASSWORD debe ser >=14 caracteres en producción (recibido: ${pwd.length}).`,
+        });
+      }
+      // Al menos un símbolo no-alfanumérico (NIST SP 800-63B "memorized secret"
+      // — no es estrictamente requerido por NIST, pero defendemos contra
+      // valores tipo `Password1234567` triviales).
+      if (!/[^A-Za-z0-9]/.test(pwd)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['INSURED_DEFAULT_PASSWORD'],
+          message:
+            'INSURED_DEFAULT_PASSWORD debe contener al menos un símbolo no-alfanumérico en producción.',
         });
       }
     }

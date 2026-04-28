@@ -22,10 +22,14 @@ const VALID_ENV: NodeJS.ProcessEnv = {
   SQS_QUEUE_PDF: 'http://q2',
   SQS_QUEUE_EMAIL: 'http://q3',
   SQS_QUEUE_REPORTS: 'http://q4',
+  SQS_QUEUE_INSUREDS_CREATION: 'http://q5',
   SES_SENDER_DOMAIN: 'mac.local',
   SES_CONFIGURATION_SET: 'cs',
   KMS_KEY_ID: 'alias/test',
   CORS_ALLOWED_ORIGINS: 'http://localhost,http://app.local',
+  // C-04 — INSURED_DEFAULT_PASSWORD ya NO tiene default; los tests deben
+  // proveer un valor que pase el blocklist + reglas prod.
+  INSURED_DEFAULT_PASSWORD: 'TestPwd-StrongRandom_123!',
 };
 
 describe('EnvSchema', () => {
@@ -165,6 +169,102 @@ describe('EnvSchema', () => {
     expect(r.LOG_LEVEL).toBe('info');
     expect(r.TRACE_SAMPLE_RATE).toBe(0.05);
     expect(r.AWS_REGION).toBe('mx-central-1');
+  });
+
+  // C-04 — INSURED_DEFAULT_PASSWORD: blocklist + prod-strength rules.
+  describe('INSURED_DEFAULT_PASSWORD prod-guard (C-04)', () => {
+    it('NO tiene default — ausente ⇒ falla la validación', () => {
+      const env: Record<string, string | undefined> = { ...VALID_ENV };
+      delete env.INSURED_DEFAULT_PASSWORD;
+      const r = EnvSchema.safeParse(env);
+      expect(r.success).toBe(false);
+    });
+
+    it('rechaza password "Demo123!" en cualquier NODE_ENV (blocklist global)', () => {
+      const r = EnvSchema.safeParse({
+        ...VALID_ENV,
+        NODE_ENV: 'development',
+        INSURED_DEFAULT_PASSWORD: 'Demo123!',
+      });
+      expect(r.success).toBe(false);
+      if (!r.success) {
+        const msg = r.error.issues.map((i) => i.message).join('|');
+        expect(msg).toMatch(/hardcoded conocido/);
+      }
+    });
+
+    it('rechaza password "Demo123!" en NODE_ENV=production', () => {
+      const r = EnvSchema.safeParse({
+        ...VALID_ENV,
+        NODE_ENV: 'production',
+        // Cognito region → AWS pattern para que NO falle por el otro guard.
+        INSURED_DEFAULT_PASSWORD: 'Demo123!',
+      });
+      expect(r.success).toBe(false);
+      if (!r.success) {
+        const issues = r.error.issues.filter((i) => i.path.includes('INSURED_DEFAULT_PASSWORD'));
+        expect(issues.length).toBeGreaterThan(0);
+      }
+    });
+
+    it('rechaza otros hardcoded conocidos (Password123!, Welcome123!)', () => {
+      for (const pwd of ['Password123!', 'Welcome123!', 'Admin123!', 'Test123!']) {
+        const r = EnvSchema.safeParse({ ...VALID_ENV, INSURED_DEFAULT_PASSWORD: pwd });
+        expect(r.success).toBe(false);
+      }
+    });
+
+    it('NODE_ENV=production + password <14 chars ⇒ falla', () => {
+      const r = EnvSchema.safeParse({
+        ...VALID_ENV,
+        NODE_ENV: 'production',
+        INSURED_DEFAULT_PASSWORD: 'Short1!a',
+      });
+      expect(r.success).toBe(false);
+      if (!r.success) {
+        const msg = r.error.issues.map((i) => i.message).join('|');
+        expect(msg).toMatch(/>=14 caracteres en producción/);
+      }
+    });
+
+    it('NODE_ENV=production + password sin símbolo ⇒ falla', () => {
+      const r = EnvSchema.safeParse({
+        ...VALID_ENV,
+        NODE_ENV: 'production',
+        INSURED_DEFAULT_PASSWORD: 'aaaaaaaaaaaaaaaa1B',
+      });
+      expect(r.success).toBe(false);
+      if (!r.success) {
+        const msg = r.error.issues.map((i) => i.message).join('|');
+        expect(msg).toMatch(/símbolo no-alfanumérico/);
+      }
+    });
+
+    it('NODE_ENV=production + password fuerte (>=14, símbolo, no blocklist) ⇒ ok', () => {
+      const r = EnvSchema.safeParse({
+        ...VALID_ENV,
+        NODE_ENV: 'production',
+        INSURED_DEFAULT_PASSWORD: 'StrongRandom-Prod!92xkz',
+      });
+      expect(r.success).toBe(true);
+    });
+
+    it('NODE_ENV=development + password mínima (8 chars, no blocklist) ⇒ ok', () => {
+      const r = EnvSchema.safeParse({
+        ...VALID_ENV,
+        NODE_ENV: 'development',
+        INSURED_DEFAULT_PASSWORD: 'devlocal',
+      });
+      expect(r.success).toBe(true);
+    });
+
+    it('rechaza password <8 chars (regla base z.string().min(8))', () => {
+      const r = EnvSchema.safeParse({
+        ...VALID_ENV,
+        INSURED_DEFAULT_PASSWORD: 'tiny',
+      });
+      expect(r.success).toBe(false);
+    });
   });
 });
 

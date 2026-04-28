@@ -1,50 +1,18 @@
+import { scrubSensitive } from '@common/utils/scrub-sensitive';
 import { AuditWriterService, type AuditEvent } from '@modules/audit/audit-writer.service';
 import { CallHandler, ExecutionContext, Injectable, Logger, NestInterceptor, Optional } from '@nestjs/common';
 import { FastifyRequest } from 'fastify';
 import { Observable, tap } from 'rxjs';
 
 /**
- * Lista de claves cuyo valor jamás debe entrar en `payloadDiff`. Se aplica
- * recursivamente. Mantener sincronizado con la lista de redact de pino en
- * `app.module.ts`. Cualquier path encontrado se reemplaza por '[REDACTED]'.
+ * H-01 / P3 — el interceptor consume `scrubSensitive` y `SENSITIVE_LOG_KEYS`
+ * desde `@common/utils/scrub-sensitive` (lista única, depth 10). Antes
+ * había una segunda lista local (depth 8) duplicada con drift.
+ *
+ * Mantener referencia al alias `redact` para los tests existentes
+ * (`__test.redact`) que dependen del nombre histórico.
  */
-const REDACTED = '[REDACTED]';
-const SENSITIVE_KEYS = new Set<string>([
-  'password',
-  'token',
-  'idToken',
-  'accessToken',
-  'refreshToken',
-  'cognitoSub',
-  'curp',
-  'rfc',
-  'authorization',
-  'cookie',
-  'otp',
-  'secret',
-  'apiKey',
-  'apikey',
-]);
-
-function redact(value: unknown, depth = 0): unknown {
-  if (depth > 8) return REDACTED; // hard stop por seguridad y log size.
-  if (value === null || value === undefined) return value;
-  if (Array.isArray(value)) {
-    return value.map((v) => redact(v, depth + 1));
-  }
-  if (typeof value === 'object') {
-    const out: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-      if (SENSITIVE_KEYS.has(k)) {
-        out[k] = REDACTED;
-      } else {
-        out[k] = redact(v, depth + 1);
-      }
-    }
-    return out;
-  }
-  return value;
-}
+const redact = (value: unknown, depth = 0): unknown => scrubSensitive(value, depth);
 
 function methodToAction(
   method: string,

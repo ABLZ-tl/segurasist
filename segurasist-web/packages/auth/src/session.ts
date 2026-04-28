@@ -1,9 +1,22 @@
 import type { NextRequest, NextResponse } from 'next/server';
+import {
+  clearSessionCookies as clearSessionCookiesShared,
+  setSessionCookiesForNames,
+} from '@segurasist/security/cookie';
 import { REFRESH_COOKIE, SESSION_COOKIE } from './config';
 import type { CognitoTokens } from './cognito';
 
-const SESSION_MAX_AGE = 60 * 15; // 15 min
-const REFRESH_MAX_AGE = 60 * 60 * 24 * 7; // 7 days
+/**
+ * Cookie helpers for the Cognito Hosted UI flow used by the admin app.
+ *
+ * Sprint 4 / B-COOKIES-DRY (audit C-11 + H-06):
+ *   - All session cookies now route through `@segurasist/security/cookie`,
+ *     which forces `sameSite='strict'` regardless of caller. This closes the
+ *     silent-refresh CSRF gap exposed by the legacy `lax` defaults.
+ *   - Names (`SESSION_COOKIE` / `REFRESH_COOKIE`) stay here in `./config`
+ *     because they're admin-app-specific; the security package does not own
+ *     naming, only attribute hardening.
+ */
 
 /** Read access token from request cookies. */
 export function getAccessTokenFromRequest(req: NextRequest): string | undefined {
@@ -15,29 +28,20 @@ export function getRefreshTokenFromRequest(req: NextRequest): string | undefined
 }
 
 /**
- * Persist tokens as HttpOnly Secure SameSite=Lax cookies on the given response.
- * This is the only place tokens should ever touch the wire from this app.
+ * Persist tokens as HttpOnly Secure SameSite=Strict cookies on the given
+ * response. Single source of strictness: the @segurasist/security factory.
  */
 export function setSessionCookies(res: NextResponse, tokens: CognitoTokens): void {
-  res.cookies.set(SESSION_COOKIE, tokens.access_token, {
-    httpOnly: true,
-    secure: true,
-    sameSite: 'lax',
-    path: '/',
-    maxAge: tokens.expires_in ?? SESSION_MAX_AGE,
-  });
-  if (tokens.refresh_token) {
-    res.cookies.set(REFRESH_COOKIE, tokens.refresh_token, {
-      httpOnly: true,
-      secure: true,
-      sameSite: 'lax',
-      path: '/',
-      maxAge: REFRESH_MAX_AGE,
-    });
-  }
+  setSessionCookiesForNames(
+    res,
+    { sessionCookieName: SESSION_COOKIE, refreshCookieName: REFRESH_COOKIE },
+    tokens,
+  );
 }
 
 export function clearSessionCookies(res: NextResponse): void {
-  res.cookies.delete(SESSION_COOKIE);
-  res.cookies.delete(REFRESH_COOKIE);
+  clearSessionCookiesShared(res, {
+    sessionCookieName: SESSION_COOKIE,
+    refreshCookieName: REFRESH_COOKIE,
+  });
 }

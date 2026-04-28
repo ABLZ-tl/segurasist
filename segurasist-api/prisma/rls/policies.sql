@@ -46,6 +46,10 @@ GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO segurasist_admin;
 DO $$
 DECLARE
   tbl TEXT;
+  -- Lista canónica derivada de TODAS las tablas con `tenant_id` en
+  -- `prisma/schema.prisma` (verificado 2026-04-27 — F3 iter 1, C-15).
+  -- Si agregas una tabla con tenant_id en el schema, AGRÉGALA aquí
+  -- (drift ⇒ RLS off ⇒ multi-tenant breach).
   tables TEXT[] := ARRAY[
     'users',
     'packages',
@@ -60,7 +64,15 @@ DECLARE
     'email_events',
     'chat_messages',
     'chat_kb',
-    'audit_log'
+    'system_alerts',  -- F3 iter1 NEW-FINDING: tenant_id NULLABLE (alertas
+                      -- platform-wide). Política trata NULL = mismatch
+                      -- (current_setting → NULL → false), igual que `users`
+                      -- superadmin: cliente normal `segurasist_app` jamás ve
+                      -- alertas globales — sólo segurasist_admin via BYPASSRLS.
+    'audit_log',
+    'exports'         -- C-15: faltaba aquí. Migration 20260427 sí crea la tabla
+                      -- con políticas locales, pero `apply-rls.sh` re-aplicado
+                      -- contra DB nueva omitía RLS en `exports` ⇒ drift.
   ];
 BEGIN
   FOREACH tbl IN ARRAY tables LOOP

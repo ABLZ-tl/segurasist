@@ -404,23 +404,27 @@ describe('InsuredsService', () => {
       await expect(svc.find360(insuredId, scope)).rejects.toThrow(NotFoundException);
     });
 
-    it('persiste audit log con action=read y subAction=viewed_360', async () => {
+    it('persiste audit log con action=read_viewed (F6 iter 2: enum extendido)', async () => {
       const { svc, prisma, audit } = build();
       seedFulfilledClient(prisma);
+      // F6 iter 2 H-01 — el shape custom `{ip, userAgent, traceId}` se sustituyó
+      // por `AuditContext` canónico (mismos campos, tipo importado del factory).
       await svc.find360(insuredId, scope, { ip: '189.1.2.3', userAgent: 'jest', traceId: 't1' });
       expect(audit.record).toHaveBeenCalledTimes(1);
       const evt = audit.record.mock.calls[0]?.[0];
       expect(evt).toMatchObject({
         tenantId: tenant.id,
         actorId: 'u1',
-        action: 'read',
+        action: 'read_viewed',
         resourceType: 'insureds',
         resourceId: insuredId,
         ip: '189.1.2.3',
         userAgent: 'jest',
         traceId: 't1',
-        payloadDiff: { subAction: 'viewed_360' },
       });
+      // El payloadDiff.subAction='viewed_360' ya NO se persiste — el enum
+      // extendido lo cubre semánticamente.
+      expect((evt as { payloadDiff?: unknown }).payloadDiff).toBeUndefined();
     });
 
     it('una query secundaria que falle (allSettled) NO bloquea el resto: devuelve [] en esa sección', async () => {

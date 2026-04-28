@@ -320,9 +320,19 @@ export class BatchesValidatorService {
    * Valida todas las filas. Aplica deduplicación intra-archivo
    * automáticamente: las ocurrencias 2+ obtienen un error
    * `DUPLICATED_IN_FILE` (la primera ocurrencia mantiene su validación normal).
+   *
+   * Si `precomputed` se pasa, NO se vuelve a calcular `findIntraFileDuplicates`
+   * — la usa un caller chunked (LayoutWorker) que necesita detectar duplicados
+   * entre chunks (C-05): si computásemos por chunk, dups separados por >500
+   * filas no se marcarían. El caller debe haber corrido
+   * `findIntraFileDuplicates` sobre TODO el set de filas antes del loop.
    */
-  validateAll(rows: readonly ParsedRow[], ctx: ValidationContext): RowResult[] {
-    const { duplicates, firstSeen } = this.findIntraFileDuplicates(rows);
+  validateAll(
+    rows: readonly ParsedRow[],
+    ctx: ValidationContext,
+    precomputed?: { duplicates: ReadonlySet<string>; firstSeen: ReadonlyMap<string, number> },
+  ): RowResult[] {
+    const { duplicates, firstSeen } = precomputed ?? this.findIntraFileDuplicates(rows);
     const out: RowResult[] = [];
     const seenInThisLoop = new Set<string>();
     for (const r of rows) {

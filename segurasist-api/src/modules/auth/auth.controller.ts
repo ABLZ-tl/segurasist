@@ -4,6 +4,7 @@ import { TenantCtx } from '@common/decorators/tenant.decorator';
 import { JwtAuthGuard } from '@common/guards/jwt-auth.guard';
 import { ZodValidationPipe } from '@common/pipes/zod-validation.pipe';
 import { TenantThrottle, Throttle } from '@common/throttler/throttler.decorators';
+import { AuditContextFactory } from '@modules/audit/audit-context.factory';
 import { Body, Controller, HttpCode, HttpStatus, Post, Get, Req, UseGuards, UsePipes } from '@nestjs/common';
 import type { FastifyRequest } from 'fastify';
 import { AuthService } from './auth.service';
@@ -20,7 +21,10 @@ import {
 
 @Controller({ path: 'auth', version: '1' })
 export class AuthController {
-  constructor(private readonly auth: AuthService) {}
+  constructor(
+    private readonly auth: AuthService,
+    private readonly auditCtx: AuditContextFactory,
+  ) {}
 
   @Public()
   // Anti bruteforce: 5 logins por minuto por (ip+ruta).
@@ -47,7 +51,10 @@ export class AuthController {
   @HttpCode(HttpStatus.OK)
   @UsePipes(new ZodValidationPipe(OtpRequestSchema))
   otpRequest(@Body() dto: OtpRequestDto) {
-    return this.auth.otpRequest(dto);
+    // F6 iter 2 H-01 — propaga {ip, userAgent, traceId} canónicos al service
+    // via AuditContextFactory.fromRequest(). Sustituye el shape ad-hoc previo
+    // (donde el row de audit `otp_requested` carecía de IP/UA/traceId).
+    return this.auth.otpRequest(dto, this.auditCtx.fromRequest());
   }
 
   @Public()
@@ -57,10 +64,17 @@ export class AuthController {
   @HttpCode(HttpStatus.OK)
   @UsePipes(new ZodValidationPipe(OtpVerifySchema))
   otpVerify(@Body() dto: OtpVerifyDto) {
-    return this.auth.otpVerify(dto);
+    // F6 iter 2 H-01 — ver comentario en otpRequest.
+    return this.auth.otpVerify(dto, this.auditCtx.fromRequest());
   }
 
   @Public()
+  // H-08 — Anti brute-force de refresh tokens. Sin cap, un atacante con un
+  // refresh válido (filtrado por XSS o SSRF) podría rotar tokens indefinidamente
+  // y los tokens viejos quedarían en el grace period (revoke list lazy). Cap
+  // 10/min/IP es ~3x el budget legítimo de un cliente con silent-refresh
+  // agresivo (cada 10s ⇒ 6/min). Mantiene `Throttle` consistente con `/login`.
+  @Throttle({ ttl: 60_000, limit: 10 })
   @Post('refresh')
   @HttpCode(HttpStatus.OK)
   @UsePipes(new ZodValidationPipe(RefreshSchema))

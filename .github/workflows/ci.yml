@@ -561,6 +561,42 @@ jobs:
         working-directory: ${{ github.workspace }}
 
   # ----------------------------------------------------------------------
+  # trivy — Sprint 4 fix bundle B-CI (F8)
+  # Filesystem vuln scan en todo el repo (segurasist-api + segurasist-web +
+  # segurasist-infra + .github + docs). Falla si hay HIGH o CRITICAL fixable
+  # (ignore-unfixed evita ruido por CVE sin fix upstream). Independiente de
+  # paths-filter porque deps de un proyecto pueden afectar transitivamente
+  # al otro (ej. monorepo lockfile shared) — corre siempre.
+  # ----------------------------------------------------------------------
+
+  trivy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run Trivy filesystem scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          severity: 'HIGH,CRITICAL'
+          exit-code: '1'
+          ignore-unfixed: true
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+
+      - name: Upload Trivy SARIF to GitHub Security tab
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: 'trivy-results.sarif'
+          category: 'trivy-fs'
+
+  # ----------------------------------------------------------------------
   # Dependency review — sólo en PRs (compara base..HEAD)
   # ----------------------------------------------------------------------
 
@@ -596,6 +632,7 @@ jobs:
       - web-unit
       - web-security-scan
       - web-dast
+      - trivy
       - dependency-review
     if: always()
     runs-on: ubuntu-latest
@@ -614,7 +651,8 @@ jobs:
             "${{ needs.web-lint-typecheck.result }}" \
             "${{ needs.web-unit.result }}" \
             "${{ needs.web-security-scan.result }}" \
-            "${{ needs.web-dast.result }}"; do
+            "${{ needs.web-dast.result }}" \
+            "${{ needs.trivy.result }}"; do
             case "$r" in
               success|skipped) ;;
               *) echo "Job result '$r' failed gate"; fail=1 ;;

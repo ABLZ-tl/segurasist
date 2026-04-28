@@ -66,7 +66,7 @@ Toma snapshot inmediato (ver [Mitigación interim](#mitigación-interim)).
   4. **CSP estricto** + cookies `SameSite=Strict + Secure + HttpOnly` ya en producción de DEV.
   5. **Magic-bytes validation** en uploads (`/v1/batches`): un EXE renombrado .xlsx se rechaza con 415 antes de tocar S3.
 - **Limitación interim**: SIN WAF perimetral, un ataque volumétrico (DDoS L7, scraping masivo) llega directo al backend. El Throttler aplicación lo absorbe parcialmente pero el costo computacional (CPU + Redis ops) lo paga el API. Mitigación: tests de carga en Sprint 4 dimensionan App Runner para sostener picos sin WAF.
-- **Cierre**: Sprint 5 instancia el módulo en AWS real, asocia con App Runner + CloudFront (Amplify), valida managed rules en COUNT 30 días y promueve AnonymousIpList a BLOCK con doble firma CISO. Detalle en `segurasist-infra/docs/security/waf-managed-rules.md` y `RB-012-waf-rules.md`.
+- **Cierre**: Sprint 5 instancia el módulo en AWS real, asocia con App Runner + CloudFront (Amplify), valida managed rules en COUNT 30 días y promueve AnonymousIpList a BLOCK con doble firma CISO. Detalle en `segurasist-infra/docs/security/waf-managed-rules.md` y `RB-016-waf-rules.md` (renumerado desde `RB-012` en F8 iter 2).
 
 ---
 

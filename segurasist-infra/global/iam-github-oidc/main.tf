@@ -144,6 +144,33 @@ data "aws_iam_policy_document" "trust_staging_tf_apply" {
   }
 }
 
+# C-13 — `tf_plan_staging` trust policy.
+#
+# Mismo patrón que `trust_dev_tf_plan`: permitido para PRs (read-only) y
+# main branch del repo `segurasist-infra`. PR triggers el workflow
+# `terraform-plan.yml`; el plan jamás escribe estado, sólo lee.
+data "aws_iam_policy_document" "trust_staging_tf_plan" {
+  provider = aws.staging
+  statement {
+    effect  = "Allow"
+    actions = ["sts:AssumeRoleWithWebIdentity"]
+    principals {
+      type        = "Federated"
+      identifiers = [aws_iam_openid_connect_provider.github_staging.arn]
+    }
+    condition {
+      test     = "StringEquals"
+      variable = "token.actions.githubusercontent.com:aud"
+      values   = local.github_audiences
+    }
+    condition {
+      test     = "StringLike"
+      variable = "token.actions.githubusercontent.com:sub"
+      values   = [local.infra_sub_pull_request, local.infra_sub_main_branch]
+    }
+  }
+}
+
 # Prod account
 data "aws_iam_policy_document" "trust_prod_deploy" {
   provider = aws.prod
@@ -199,6 +226,35 @@ data "aws_iam_policy_document" "trust_prod_tf_apply" {
       test     = "StringEquals"
       variable = "token.actions.githubusercontent.com:environment"
       values   = ["production"]
+    }
+  }
+}
+
+# C-13 — `tf_plan_prod` trust policy.
+#
+# Diferencia clave vs staging: prod plan se usa SOLO para review previo a
+# tag-release (no hay apply automático en main). Por eso permitimos PR y
+# main branch (lectura), pero el role asociado tiene SOLO ReadOnlyAccess.
+# El apply en prod sigue siendo `tf_apply_prod` con tag v* + environment
+# protection.
+data "aws_iam_policy_document" "trust_prod_tf_plan" {
+  provider = aws.prod
+  statement {
+    effect  = "Allow"
+    actions = ["sts:AssumeRoleWithWebIdentity"]
+    principals {
+      type        = "Federated"
+      identifiers = [aws_iam_openid_connect_provider.github_prod.arn]
+    }
+    condition {
+      test     = "StringEquals"
+      variable = "token.actions.githubusercontent.com:aud"
+      values   = local.github_audiences
+    }
+    condition {
+      test     = "StringLike"
+      variable = "token.actions.githubusercontent.com:sub"
+      values   = [local.infra_sub_pull_request, local.infra_sub_main_branch]
     }
   }
 }
@@ -295,4 +351,41 @@ resource "aws_iam_role_policy_attachment" "tf_apply_prod" {
   provider   = aws.prod
   role       = aws_iam_role.tf_apply_prod.name
   policy_arn = "arn:aws:iam::aws:policy/AdministratorAccess"
+}
+
+############################################
+# C-13 — tf_plan roles for staging + prod
+#
+# Faltaban estas dos roles: `terraform-plan.yml` referencia los 3 envs y
+# rompía el job en staging/prod (NoSuchEntity al intentar AssumeRole).
+# Ahora los 3 envs tienen rol `github-actions-tf-plan-{env}` con
+# `ReadOnlyAccess`. El apply sigue siendo separado (tf_apply_*).
+############################################
+
+resource "aws_iam_role" "tf_plan_staging" {
+  provider             = aws.staging
+  name                 = "github-actions-tf-plan-staging"
+  assume_role_policy   = data.aws_iam_policy_document.trust_staging_tf_plan.json
+  permissions_boundary = var.permissions_boundary_arn
+  max_session_duration = 3600
+}
+
+resource "aws_iam_role_policy_attachment" "tf_plan_staging_readonly" {
+  provider   = aws.staging
+  role       = aws_iam_role.tf_plan_staging.name
+  policy_arn = "arn:aws:iam::aws:policy/ReadOnlyAccess"
+}
+
+resource "aws_iam_role" "tf_plan_prod" {
+  provider             = aws.prod
+  name                 = "github-actions-tf-plan-prod"
+  assume_role_policy   = data.aws_iam_policy_document.trust_prod_tf_plan.json
+  permissions_boundary = var.permissions_boundary_arn
+  max_session_duration = 3600
+}
+
+resource "aws_iam_role_policy_attachment" "tf_plan_prod_readonly" {
+  provider   = aws.prod
+  role       = aws_iam_role.tf_plan_prod.name
+  policy_arn = "arn:aws:iam::aws:policy/ReadOnlyAccess"
 }

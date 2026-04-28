@@ -1,6 +1,7 @@
 import type { AuthUser } from '@common/decorators/current-user.decorator';
 import { Roles } from '@common/decorators/roles.decorator';
 import { Tenant, TenantCtx } from '@common/decorators/tenant.decorator';
+import { assertPlatformAdmin } from '@common/guards/assert-platform-admin';
 import { JwtAuthGuard } from '@common/guards/jwt-auth.guard';
 import { RolesGuard } from '@common/guards/roles.guard';
 import { ZodValidationPipe } from '@common/pipes/zod-validation.pipe';
@@ -40,6 +41,10 @@ export class PackagesController {
     queryTenantId: string | undefined,
   ): PackagesScope {
     const platformAdmin = req.user?.platformAdmin === true;
+    if (platformAdmin) {
+      // H-14 — runtime defense-in-depth para PrismaBypassRlsService.
+      assertPlatformAdmin(req.user);
+    }
     return {
       platformAdmin,
       tenantId: platformAdmin ? queryTenantId : req.tenant?.id,

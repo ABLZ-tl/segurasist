@@ -76,6 +76,9 @@ describe('protectMiddleware()', () => {
     const setCookies = res.headers.getSetCookie?.() ?? [];
     const sessionCookie = setCookies.find((c) => c.startsWith(`${SESSION_COOKIE}=new-at`));
     expect(sessionCookie).toBeDefined();
+    // C-11 regression test: silent refresh must emit SameSite=Strict — the
+    // legacy code emitted Lax on every refresh, leaving a CSRF gap.
+    expect(sessionCookie).toMatch(/SameSite=Strict/i);
   });
 
   it('redirects to /login when no cookies are present', async () => {

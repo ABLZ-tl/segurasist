@@ -140,6 +140,14 @@ ensure_user() {
   local role="$3"
   local tenant_attr="$4"
   local password="$5"
+  # H-27 — given_name / family_name opcionales para que el portal asegurado
+  # muestre la identidad real ("Hola, María") en lugar del fallback derivado
+  # del email ("insured.demo"). El JWT idToken propaga estos claims si el
+  # schema del pool los acepta (los pools cognito-local del bootstrap no
+  # exigen schema explícito para given_name/family_name — ambos son
+  # standard attributes del directorio Cognito).
+  local given_name="${6:-}"
+  local family_name="${7:-}"
 
   local exists
   exists=$(cog admin-get-user \
@@ -159,6 +167,16 @@ ensure_user() {
   if [[ -n "${tenant_attr}" ]]; then
     attrs_create+=("Name=custom:tenant_id,Value=${tenant_attr}")
     attrs_update+=("Name=custom:tenant_id,Value=${tenant_attr}")
+  fi
+  # H-27 — propagamos given_name/family_name SOLO si el caller los pasó
+  # (admin/operator/supervisor no los necesitan; el portal del insured sí).
+  if [[ -n "${given_name}" ]]; then
+    attrs_create+=("Name=given_name,Value=${given_name}")
+    attrs_update+=("Name=given_name,Value=${given_name}")
+  fi
+  if [[ -n "${family_name}" ]]; then
+    attrs_create+=("Name=family_name,Value=${family_name}")
+    attrs_update+=("Name=family_name,Value=${family_name}")
   fi
 
   if [[ -z "${exists}" || "${exists}" == "None" ]]; then
@@ -219,7 +237,11 @@ ensure_user "${ADMIN_POOL_ID}" "supervisor@mac.local"          "supervisor"     
 
 # Pool insured (segregado para que un insured nunca pueda obtener un token con
 # un rol admin, aun si los emails colisionan).
-ensure_user "${INSURED_POOL_ID}" "insured.demo@mac.local"      "insured"          "${TENANT_ID}" "${DEMO_PASSWORD}"
+# H-27 — given_name="María", family_name="Hernández" para que el portal asegurado
+# muestre el saludo personalizado ("Hola, María") en lugar de caer al fallback
+# derivado del email local-part ("insured.demo"). Coincide con el seed.ts del
+# insured demo (Hernández García María).
+ensure_user "${INSURED_POOL_ID}" "insured.demo@mac.local"      "insured"          "${TENANT_ID}" "${DEMO_PASSWORD}" "María" "Hernández"
 
 # =========================================================================
 # 4) Sincronizar cognito_sub real

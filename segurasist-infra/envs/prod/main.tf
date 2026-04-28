@@ -390,15 +390,20 @@ module "s3_audit" {
 }
 
 ############################################
-# SQS queues
+# SQS queues (5): layout, insureds-creation, pdf, emails, reports
+#
+# C-09 / H-29 — todas standard (NO FIFO). DLQ con `maxReceiveCount=3` +
+# SSE-KMS aplicados por el módulo. Un mensaje que falla 3 veces aterriza
+# en `<queue>-dlq` para análisis on-call (alarma SQS DLQ pendiente B-OBS).
 ############################################
 
 locals {
   queues = {
-    layout       = { vt = 60,  retention = 345600 }
-    certificates = { vt = 120, retention = 345600 }
-    emails       = { vt = 30,  retention = 345600 }
-    reports      = { vt = 300, retention = 345600 }
+    "layout"            = { vt = 60,  retention = 345600 }
+    "insureds-creation" = { vt = 120, retention = 345600 }
+    "pdf"               = { vt = 120, retention = 345600 }
+    "emails"            = { vt = 30,  retention = 345600 }
+    "reports"           = { vt = 300, retention = 345600 }
   }
 }
 

@@ -321,15 +321,19 @@ module "s3_audit" {
 }
 
 ############################################
-# SQS queues
+# SQS queues (5): layout, insureds-creation, pdf, emails, reports
+#
+# C-09 / H-29 — todas standard (NO FIFO). El módulo `sqs-queue` instancia
+# DLQ + redrive policy `maxReceiveCount=3` + SSE-KMS automáticamente.
 ############################################
 
 locals {
   queues = {
-    layout       = { vt = 60,  retention = 345600 }
-    certificates = { vt = 120, retention = 345600 }
-    emails       = { vt = 30,  retention = 345600 }
-    reports      = { vt = 300, retention = 345600 }
+    "layout"            = { vt = 60,  retention = 345600 }
+    "insureds-creation" = { vt = 120, retention = 345600 }
+    "pdf"               = { vt = 120, retention = 345600 }
+    "emails"            = { vt = 30,  retention = 345600 }
+    "reports"           = { vt = 300, retention = 345600 }
   }
 }
 

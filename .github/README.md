@@ -48,7 +48,7 @@ Todo PR a `main` debe pasar el check agregado `ci-success`, que combina:
 - Reporte HTML disponible como artifact (`zap-report-api`,
   `zap-report-web-admin`, `zap-report-web-portal`).
 - Local: `./scripts/run-zap-baseline.sh [api|admin|portal] [--full]`.
-- Runbook si el job falla: [`segurasist-infra/docs/runbooks/RB-011-dast-failure.md`](../segurasist-infra/docs/runbooks/RB-011-dast-failure.md).
+- Runbook si el job falla: [`segurasist-infra/docs/runbooks/RB-015-dast-failure.md`](../segurasist-infra/docs/runbooks/RB-015-dast-failure.md) (renumerado desde `RB-011` en F8 iter 2).
 
 ## Branch protection recomendado (post GH-001)
 

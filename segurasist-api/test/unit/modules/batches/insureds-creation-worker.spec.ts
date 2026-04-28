@@ -5,6 +5,7 @@
  *   - éxito → emite evento `insured.created` a la cola PDF.
  *   - re-entrega (P2002) → idempotente: encuentra el existente, sigue OK.
  *   - falla → no emite evento, pero igual incrementa contadores.
+ *   - completed exactly-once vía CAS sobre `completed_event_emitted_at`.
  */
 import type { PrismaBypassRlsService } from '@common/prisma/prisma-bypass-rls.service';
 import type { Env } from '@config/env.schema';
@@ -22,6 +23,47 @@ const ENV: Env = {
   SQS_QUEUE_LAYOUT: 'http://localhost:4566/000000000000/layout-validation-queue',
   SQS_QUEUE_PDF: 'http://localhost:4566/000000000000/pdf-queue',
 } as unknown as Env;
+
+/**
+ * Helper: mockea la secuencia de $queryRaw que usa `bumpBatchCounters` post
+ * fix C-06/C-07/C-08:
+ *   1. UPDATE … RETURNING que incrementa processed_rows/success_rows/failed_rows
+ *   2. (opcional) UPDATE … RETURNING id que CASea status→completed
+ */
+function mockBumpRaw(
+  prismaBypass: ReturnType<typeof mockDeep<PrismaBypassRlsService>>,
+  opts: {
+    afterBump: {
+      status?: string;
+      rows_total?: number;
+      rows_ok?: number;
+      rows_error?: number;
+      processed_rows: number;
+      success_rows: number;
+      failed_rows: number;
+      queued_count: number | null;
+      completed_event_emitted_at?: Date | null;
+    };
+    casWins?: boolean; // default true
+  },
+): void {
+  const row = {
+    id: BATCH_ID,
+    status: opts.afterBump.status ?? 'processing',
+    rows_total: opts.afterBump.rows_total ?? 0,
+    rows_ok: opts.afterBump.rows_ok ?? 0,
+    rows_error: opts.afterBump.rows_error ?? 0,
+    processed_rows: opts.afterBump.processed_rows,
+    success_rows: opts.afterBump.success_rows,
+    failed_rows: opts.afterBump.failed_rows,
+    queued_count: opts.afterBump.queued_count,
+    completed_event_emitted_at: opts.afterBump.completed_event_emitted_at ?? null,
+  };
+  const winsCAS = opts.casWins ?? true;
+  prismaBypass.client.$queryRaw
+    .mockResolvedValueOnce([row] as never)
+    .mockResolvedValueOnce((winsCAS ? [{ id: BATCH_ID }] : []) as never);
+}
 
 const sampleDto: CreateInsuredDto = {
   curp: 'HEGM860519MJCRRN08',
@@ -49,15 +91,17 @@ describe('InsuredsCreationWorkerService', () => {
       tx.beneficiary.createMany.mockResolvedValue({ count: 0 } as never);
       return (fn as (t: typeof tx) => Promise<unknown>)(tx);
     });
-    prismaBypass.client.$executeRaw.mockResolvedValue(1 as never);
-    prismaBypass.client.batch.findFirst.mockResolvedValue({
-      id: BATCH_ID,
-      status: 'processing',
-      rowsTotal: 1,
-      rowsOk: 1,
-      rowsError: 0,
-    } as never);
-    prismaBypass.client.batch.update.mockResolvedValue({} as never);
+    // Bump → processed=1 == queuedCount=1 → CAS gana → completed.
+    mockBumpRaw(prismaBypass, {
+      afterBump: {
+        rows_total: 1,
+        rows_ok: 1,
+        processed_rows: 1,
+        success_rows: 1,
+        failed_rows: 0,
+        queued_count: 1,
+      },
+    });
 
     await worker.processMessage({
       kind: 'insured.create',
@@ -83,15 +127,16 @@ describe('InsuredsCreationWorkerService', () => {
     });
     prismaBypass.client.$transaction.mockRejectedValue(p2002);
     prismaBypass.client.insured.findFirst.mockResolvedValue({ id: 'existing-1' } as never);
-    prismaBypass.client.$executeRaw.mockResolvedValue(1 as never);
-    prismaBypass.client.batch.findFirst.mockResolvedValue({
-      id: BATCH_ID,
-      status: 'processing',
-      rowsTotal: 1,
-      rowsOk: 1,
-      rowsError: 0,
-    } as never);
-    prismaBypass.client.batch.update.mockResolvedValue({} as never);
+    mockBumpRaw(prismaBypass, {
+      afterBump: {
+        rows_total: 1,
+        rows_ok: 1,
+        processed_rows: 1,
+        success_rows: 1,
+        failed_rows: 0,
+        queued_count: 1,
+      },
+    });
 
     await worker.processMessage({
       kind: 'insured.create',
@@ -106,22 +151,23 @@ describe('InsuredsCreationWorkerService', () => {
     expect(event.insuredId).toBe('existing-1');
   });
 
-  it('marca batch completed cuando processed alcanza rowsTotal', async () => {
+  it('marca batch completed cuando processed alcanza queuedCount', async () => {
     const { worker, prismaBypass, sqs } = makeWorker();
     prismaBypass.client.$transaction.mockImplementation(async (fn: unknown) => {
       const tx = mockDeep<Prisma.TransactionClient>();
       tx.insured.create.mockResolvedValue({ id: 'insured-1' } as never);
       return (fn as (t: typeof tx) => Promise<unknown>)(tx);
     });
-    prismaBypass.client.$executeRaw.mockResolvedValue(1 as never);
-    prismaBypass.client.batch.findFirst.mockResolvedValue({
-      id: BATCH_ID,
-      status: 'processing',
-      rowsTotal: 1,
-      rowsOk: 1,
-      rowsError: 0,
-    } as never);
-    prismaBypass.client.batch.update.mockResolvedValue({} as never);
+    mockBumpRaw(prismaBypass, {
+      afterBump: {
+        rows_total: 1,
+        rows_ok: 1,
+        processed_rows: 1,
+        success_rows: 1,
+        failed_rows: 0,
+        queued_count: 1,
+      },
+    });
 
     await worker.processMessage({
       kind: 'insured.create',
@@ -131,13 +177,81 @@ describe('InsuredsCreationWorkerService', () => {
       dto: sampleDto,
     });
 
-    // batch.update con status completed debió ser invocado.
-    const updateCalls = prismaBypass.client.batch.update.mock.calls.map(
-      (c) => (c[0] as { data: { status?: string } }).data,
-    );
-    expect(updateCalls.some((d) => d.status === 'completed')).toBe(true);
-    // Y el segundo evento debe ser batch.completed.
+    // El segundo evento emitido (después de insured.created) debe ser
+    // batch.completed (el CAS UPDATE garantiza exactly-once).
     const sentEvents = sqs.sendMessage.mock.calls.map((c) => c[1]);
     expect(sentEvents.some((e) => e.kind === 'batch.completed')).toBe(true);
+  });
+
+  it('NO emite batch.completed si CAS pierde la race (otro worker ya lo hizo)', async () => {
+    const { worker, prismaBypass, sqs } = makeWorker();
+    prismaBypass.client.$transaction.mockImplementation(async (fn: unknown) => {
+      const tx = mockDeep<Prisma.TransactionClient>();
+      tx.insured.create.mockResolvedValue({ id: 'insured-1' } as never);
+      return (fn as (t: typeof tx) => Promise<unknown>)(tx);
+    });
+    // CAS pierde → casWins: false
+    mockBumpRaw(prismaBypass, {
+      afterBump: {
+        rows_total: 1,
+        rows_ok: 1,
+        processed_rows: 1,
+        success_rows: 1,
+        failed_rows: 0,
+        queued_count: 1,
+      },
+      casWins: false,
+    });
+
+    await worker.processMessage({
+      kind: 'insured.create',
+      tenantId: TENANT_ID,
+      batchId: BATCH_ID,
+      rowNumber: 2,
+      dto: sampleDto,
+    });
+
+    const sentEvents = sqs.sendMessage.mock.calls.map((c) => c[1]);
+    // insured.created sí, batch.completed NO.
+    expect(sentEvents.some((e) => e.kind === 'insured.created')).toBe(true);
+    expect(sentEvents.some((e) => e.kind === 'batch.completed')).toBe(false);
+  });
+
+  it('NO emite batch.completed si processed < queued (mid-progress)', async () => {
+    const { worker, prismaBypass, sqs } = makeWorker();
+    prismaBypass.client.$transaction.mockImplementation(async (fn: unknown) => {
+      const tx = mockDeep<Prisma.TransactionClient>();
+      tx.insured.create.mockResolvedValue({ id: 'insured-1' } as never);
+      return (fn as (t: typeof tx) => Promise<unknown>)(tx);
+    });
+    // processed=50 vs queued=100 → ni siquiera se intenta el CAS.
+    prismaBypass.client.$queryRaw.mockResolvedValueOnce([
+      {
+        id: BATCH_ID,
+        status: 'processing',
+        rows_total: 100,
+        rows_ok: 100,
+        rows_error: 0,
+        processed_rows: 50,
+        success_rows: 50,
+        failed_rows: 0,
+        queued_count: 100,
+        completed_event_emitted_at: null,
+      },
+    ] as never);
+
+    await worker.processMessage({
+      kind: 'insured.create',
+      tenantId: TENANT_ID,
+      batchId: BATCH_ID,
+      rowNumber: 2,
+      dto: sampleDto,
+    });
+
+    const sentEvents = sqs.sendMessage.mock.calls.map((c) => c[1]);
+    expect(sentEvents.some((e) => e.kind === 'batch.completed')).toBe(false);
+    // Sólo $queryRaw se llamó UNA vez (el bump UPDATE…RETURNING). El CAS NO
+    // debe correr porque processed_rows < queued_count.
+    expect(prismaBypass.client.$queryRaw).toHaveBeenCalledTimes(1);
   });
 });

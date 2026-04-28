@@ -16,7 +16,7 @@
  *        el cupo de un CURP específico desde múltiples IPs.
  *     4. Genera código de 6 dígitos cripto-secure y lo persiste hasheado en
  *        Redis con TTL 5 minutos.
- *     5. Audit log `auth.otp.requested`.
+ *     5. Audit log `action='otp_requested', resourceType='auth'` (F6 iter 2).
  *
  *   POST /v1/auth/otp/verify → `otpVerify()`
  *     1. Lee la session de Redis. Si no existe → 401 ("Código expirado").
@@ -24,7 +24,7 @@
  *        cuenta una "ronda fallida" para el CURP (acumula hacia el lockout).
  *     3. Compara hash(code) timing-safe.
  *     4. Si match: borra la session, llama a Cognito para emitir tokens,
- *        audit log `auth.otp.verified`.
+ *        audit log `action='otp_verified', resourceType='auth'` (F6 iter 2).
  *
  * Por qué Redis y NO una tabla SQL: el OTP es ephemero (5min), de muy alta
  * cardinalidad y nunca se consulta histórico. Redis con TTL nativo es el
@@ -37,6 +37,7 @@
 import * as crypto from 'node:crypto';
 import { CurrentUser } from '@common/decorators/current-user.decorator';
 import { PrismaBypassRlsService } from '@common/prisma/prisma-bypass-rls.service';
+import { decodeJwt } from 'jose';
 import { ENV_TOKEN } from '@config/config.module';
 import { Env } from '@config/env.schema';
 import { CognitoService, AuthTokens } from '@infra/aws/cognito.service';
@@ -50,6 +51,7 @@ import {
   UnauthorizedException,
   Inject,
 } from '@nestjs/common';
+import type { AuditContext } from '../audit/audit-context.factory';
 import { AuditWriterService } from '../audit/audit-writer.service';
 import { EmailTemplateResolver } from '../email/email-template-resolver';
 import { LoginDto, OtpRequestDto, OtpVerifyDto, RefreshDto } from './dto/auth.dto';
@@ -128,8 +130,13 @@ export class AuthService {
    *   - anti-enumeration (siempre 200 + mensaje genérico vía controller).
    *   - rate limit por CURP (5/min) con Redis.
    *   - lockout temporal por CURP tras 5 rondas fallidas.
+   *
+   * `auditCtx` (F6 iter 2 H-01): contexto canónico {ip, userAgent, traceId}
+   * derivado del request por `AuditContextFactory.fromRequest()`. Se propaga
+   * al row de audit log para forensics ("OTP requested from IP X" queries).
+   * Opcional para retrocompat con tests existentes que llaman sin ctx.
    */
-  async otpRequest(dto: OtpRequestDto): Promise<OtpRequestResult> {
+  async otpRequest(dto: OtpRequestDto, auditCtx?: AuditContext): Promise<OtpRequestResult> {
     const curp = dto.curp.toUpperCase();
     const channel: 'email' | 'sms' = dto.channel ?? 'email';
     // El sessionId es opaco: 32 bytes hex (64 chars) — alta entropía, puede ir
@@ -223,16 +230,22 @@ export class AuthService {
       );
     }
 
-    // Audit log — el `audit_action` enum no tiene 'otp_requested' literal,
-    // usamos 'login' (semánticamente "inicio de flujo de login") con el
-    // resourceType discriminador. Mantener consistencia con `auth.login`.
+    // Audit log (F6 iter 2 H-01): action='otp_requested' (enum extendido en
+    // migration 20260428_audit_action_enum_extend). Antes usábamos
+    // action='login' + resourceType='auth.otp.requested' (overload semántico
+    // del enum) lo que rompía queries SQL eficientes por action. Ahora el
+    // enum es first-class. ip/userAgent/traceId vienen del AuditContext que
+    // el controller deriva via AuditContextFactory.fromRequest().
     if (this.audit) {
       void this.audit.record({
         tenantId: insured.tenantId,
         actorId: insured.id,
-        action: 'login',
-        resourceType: 'auth.otp.requested',
+        action: 'otp_requested',
+        resourceType: 'auth',
         resourceId: insured.id,
+        ip: auditCtx?.ip,
+        userAgent: auditCtx?.userAgent,
+        traceId: auditCtx?.traceId,
         payloadDiff: { channel: effectiveChannel, sessionPrefix: session.slice(0, 8) },
       });
     }
@@ -248,8 +261,12 @@ export class AuthService {
    *   - "Código expirado o inválido" — session inexistente (TTL vencido o nunca).
    *   - "Demasiados intentos. Solicita un nuevo código." — attempts agotados.
    *   - "Código incorrecto. Te quedan N intentos." — fallo con attempts > 0.
+   *
+   * `auditCtx` (F6 iter 2 H-01): contexto canónico desde `AuditContextFactory`
+   * para que el row de audit `otp_verified` lleve ip/userAgent/traceId. Opcional
+   * para retrocompat con specs.
    */
-  async otpVerify(dto: OtpVerifyDto): Promise<AuthTokens> {
+  async otpVerify(dto: OtpVerifyDto, auditCtx?: AuditContext): Promise<AuthTokens> {
     // Rate limit interno por session (defensa adicional al per-IP del decorator).
     const overSessionLimit = await this.checkSessionRateLimit(dto.session);
     if (overSessionLimit) {
@@ -310,19 +327,87 @@ export class AuthService {
       this.env.INSURED_DEFAULT_PASSWORD,
     );
 
-    // Audit log éxito.
+    // C-03 — persistir `insureds.cognito_sub` la primera vez que el insured
+    // verifica OTP (o re-sincronizarlo si la pool insured fue rotada y el
+    // sub cambió). Sin esto, todos los lookups posteriores de la API que
+    // hacen `findFirst({ where: { cognitoSub } })` devolverían 404 al cerrar
+    // C-02 — el portal queda funcionalmente roto post-fix de la cookie.
+    //
+    // Decodificamos el idToken (NO el access token: el sub vive en ambos
+    // pero el idToken también lleva email/given_name si los necesitamos
+    // luego). Como el token acaba de ser emitido por nuestro propio Cognito
+    // pool y aún no atravesó la red pública, basta `decodeJwt` (read-only,
+    // sin verificación de firma). El JwtAuthGuard sí verifica firma vía
+    // JWKS en cada request subsiguiente — defense-in-depth.
+    await this.persistCognitoSubFromTokens(parsed.insuredId, parsed.tenantId, tokens);
+
+    // Audit log éxito (F6 iter 2 H-01): action='otp_verified' (enum extendido).
+    // ip/userAgent/traceId provienen del AuditContext derivado por el
+    // controller (AuditContextFactory.fromRequest()).
     if (this.audit) {
       void this.audit.record({
         tenantId: parsed.tenantId,
         actorId: parsed.insuredId,
-        action: 'login',
-        resourceType: 'auth.otp.verified',
+        action: 'otp_verified',
+        resourceType: 'auth',
         resourceId: parsed.insuredId,
+        ip: auditCtx?.ip,
+        userAgent: auditCtx?.userAgent,
+        traceId: auditCtx?.traceId,
         payloadDiff: { channel: parsed.channel },
       });
     }
 
     return tokens;
+  }
+
+  /**
+   * Decodifica el idToken (o accessToken como fallback) y persiste el `sub`
+   * Cognito en `insureds.cognito_sub` si todavía no estaba o si cambió.
+   *
+   * Cualquier fallo aquí es WARNING, NO ERROR: el OTP ya fue exitoso y el
+   * usuario tiene tokens válidos. Si la persistencia falla, el próximo login
+   * la reintenta. Lo que NO podemos hacer es romper el flow happy path por
+   * un upsert de claims.
+   */
+  private async persistCognitoSubFromTokens(
+    insuredId: string,
+    tenantId: string,
+    tokens: AuthTokens,
+  ): Promise<void> {
+    try {
+      const tokenForClaims = tokens.idToken ?? tokens.accessToken;
+      if (!tokenForClaims) return;
+      const claims = decodeJwt(tokenForClaims);
+      const sub = typeof claims.sub === 'string' ? claims.sub : null;
+      if (!sub) {
+        this.log.warn({ insuredId, tenantId }, 'Cognito idToken sin claim `sub`; skip persistencia');
+        return;
+      }
+      if (!this.prismaBypass.isEnabled()) {
+        // Sin BYPASSRLS no hay forma de update sin tenant context. En dev
+        // local con la env var, este path corre. En CI sin BYPASS los tests
+        // de integración deben configurarla.
+        return;
+      }
+      // `update().where` admite sólo campos `@unique` o el PK. Usamos `id`
+      // (PK uuid). `tenantId` lo conservamos en logs/audit para trazabilidad
+      // pero no participa del filtro porque la PK ya es globalmente única.
+      // updateMany se descarta porque queremos el throw del UNIQUE conflict
+      // en cognito_sub (ver catch debajo).
+      await this.prismaBypass.client.insured.update({
+        where: { id: insuredId },
+        data: { cognitoSub: sub },
+      });
+    } catch (err) {
+      // Conflict en `cognito_sub @unique` significa que ESE sub ya pertenece
+      // a OTRO insured — escenario imposible en el modelo correcto pero
+      // posible en dev tras reset de pool. Logueamos y NO escalamos.
+      this.log.warn(
+        { err: err instanceof Error ? err.message : String(err), insuredId, tenantId },
+        'persistCognitoSubFromTokens fallo (no bloqueante; el OTP fue exitoso)',
+      );
+    }
   }
 
   async refresh(dto: RefreshDto): Promise<AuthTokens> {

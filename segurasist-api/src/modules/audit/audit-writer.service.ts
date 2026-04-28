@@ -8,6 +8,7 @@ import {
 } from '@nestjs/common';
 import { Prisma, PrismaClient } from '@prisma/client';
 import { GENESIS_HASH, computeRowHash } from './audit-hash';
+import { emitAuditMetric } from './audit-metrics-emf';
 
 /** Resultado de `verifyChain`. */
 export interface AuditChainVerification {
@@ -49,10 +50,34 @@ export interface AuditChainVerificationExtended extends AuditChainVerification {
  * `payloadDiff` es JSON arbitrario; el llamador (interceptor) ya hizo el
  * scrubbing de secretos antes de invocar `record(...)`.
  */
+/**
+ * H-01 — `AuditEventAction` agrupa los valores válidos del enum DB
+ * `AuditAction`. Mantener sincronizado con `prisma/schema.prisma` y la
+ * migración `20260428_audit_action_enum_extend`. Nuevos valores
+ * (otp_requested, otp_verified, read_viewed, read_downloaded,
+ * export_downloaded) reemplazan el "overload" semántico previo donde
+ * services codificaban el sub-action en `resourceType='auth.otp.requested'`
+ * o `payloadDiff.subAction`. Migración de callers en iter 2 (F6).
+ */
+export type AuditEventAction =
+  | 'create'
+  | 'update'
+  | 'delete'
+  | 'read'
+  | 'login'
+  | 'logout'
+  | 'export'
+  | 'reissue'
+  | 'otp_requested'
+  | 'otp_verified'
+  | 'read_viewed'
+  | 'read_downloaded'
+  | 'export_downloaded';
+
 export interface AuditEvent {
   tenantId: string;
   actorId?: string;
-  action: 'create' | 'update' | 'delete' | 'read' | 'login' | 'logout' | 'export' | 'reissue';
+  action: AuditEventAction;
   resourceType: string;
   resourceId?: string;
   ip?: string;
@@ -158,7 +183,13 @@ export class AuditWriterService implements OnModuleInit, OnModuleDestroy {
     // fuente de verdad para CloudWatch → S3 Object Lock (Sprint 5).
     this.log.log({ audit: true, ...event });
 
-    if (!this.client) return;
+    if (!this.client) {
+      // F6 iter 2 — sin BD configurada el writer está en modo pino-only;
+      // semánticamente NO es "degraded" (es config esperada en dev sin
+      // DATABASE_URL_AUDIT). No emitimos health metric aquí: la alarma
+      // se calibra contra la cardinalidad de events normales en prod.
+      return;
+    }
 
     const client = this.client;
 
@@ -214,6 +245,9 @@ export class AuditWriterService implements OnModuleInit, OnModuleDestroy {
           },
         });
       });
+      // F6 iter 2 — EMF metric `AuditWriterHealth=1` por write exitoso.
+      // F8 alarma en `Sum < 1 over 5m` detecta corte total del writer.
+      emitAuditMetric('AuditWriterHealth', 1);
     } catch (err) {
       // Aislado del pipeline HTTP. Aún así el evento queda en CloudWatch.
       this.log.warn(
@@ -225,6 +259,10 @@ export class AuditWriterService implements OnModuleInit, OnModuleDestroy {
         },
         'AuditWriter.record persist failed',
       );
+      // F6 iter 2 — EMF metric `AuditWriterHealth=0` por write fallido.
+      // Permite a F8 calcular ratio fail/total y disparar alarma cuando
+      // exceda umbral (ej. >5% en 5m).
+      emitAuditMetric('AuditWriterHealth', 0);
     }
   }
 
@@ -336,22 +374,44 @@ export class AuditWriterService implements OnModuleInit, OnModuleDestroy {
 }
 
 /**
- * Helper interno reutilizable. Idéntico al loop original de `verifyChain`,
- * extraído para que `verifyChainRows` no duplique la lógica.
+ * Forma mínima de fila aceptada por `runVerification`. Cualquier fuente
+ * (DB, S3 mirror parseado a Date, fakes en tests) que pueda proveer estos
+ * campos sirve. Exportamos el tipo para que callers (e.g. el verifier
+ * cross-source) pasen rows tipados sin duplicar la signature.
  */
-function runVerification(
-  rows: Array<{
-    id: string;
-    tenantId: string;
-    actorId: string | null;
-    action: string;
-    resourceType: string;
-    resourceId: string | null;
-    payloadDiff: unknown;
-    occurredAt: Date;
-    prevHash: string;
-    rowHash: string;
-  }>,
+export interface AuditChainVerifiableRow {
+  id: string;
+  tenantId: string;
+  actorId: string | null;
+  action: string;
+  resourceType: string;
+  resourceId: string | null;
+  payloadDiff: unknown;
+  occurredAt: Date;
+  prevHash: string;
+  rowHash: string;
+}
+
+/**
+ * Recomputa la cadena hash completa para un set de filas:
+ *   1. `prev_hash` debe matchear el `row_hash` de la fila previa (o GENESIS
+ *      en la primera fila).
+ *   2. `row_hash` debe matchear el SHA-256 recomputado a partir de los
+ *      campos persistidos (prev_hash, tenantId, actorId, action,
+ *      resourceType, resourceId, payloadDiff canónico, occurredAt).
+ *
+ * Detecta tampering coordinado donde un atacante con BYPASSRLS modifica
+ * `payloadDiff` Y regenera `row_hash` matching: si solo modificó esa fila
+ * pero no las subsiguientes, la cadena se rompe en la siguiente fila
+ * (`prev_hash` ya no matchea el nuevo `row_hash`). Si recomputó toda la
+ * cadena coordinadamente, lo detecta el cross-check DB↔S3 mirror que
+ * Object Lock COMPLIANCE protege como ground-truth.
+ *
+ * Exportada para que `AuditChainVerifierService` la use en lugar del
+ * "light path" que solo encadenaba `prev_hash` (C-10 fix).
+ */
+export function runVerification(
+  rows: Array<AuditChainVerifiableRow>,
 ): AuditChainVerification {
   let prevExpected = GENESIS_HASH;
   for (const row of rows) {

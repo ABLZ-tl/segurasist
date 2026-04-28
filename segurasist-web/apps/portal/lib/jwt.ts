@@ -1,48 +1,34 @@
 /**
- * JWT helpers shared between the Edge middleware and unit tests.
+ * JWT helpers — portal app facade over `@segurasist/security/jwt`.
+ *
+ * Closes follow-up F7-iter1 NEW-FINDING: admin↔portal `lib/jwt.ts` were
+ * near-duplicates. Base helpers (`decodeJwtPayload`, `readRoleFromToken`,
+ * `readExpFromToken`) live in the consolidated package. Portal-only helpers
+ * (`readFirstNameFromToken`, the legacy positional `isTokenExpired` signature)
+ * stay here.
  *
  * IMPORTANT: `decodeJwtPayload` does NOT verify the signature. It is only
  * used to read non-security claims (the `custom:role` for portal-only
  * gating, the `given_name`/`name`/`email` for the header greeting).
  * Authoritative verification happens in the API on every request.
  */
+import {
+  decodeJwtPayload,
+  isTokenExpired as isTokenExpiredBase,
+  readExpFromToken,
+  readRoleFromToken,
+} from '@segurasist/security/jwt';
 
-/** Decode a JWT payload without verifying the signature. Returns `null` for
- * any malformed input. Never throws. */
-export function decodeJwtPayload(
-  token: string,
-): Record<string, unknown> | null {
-  if (!token) return null;
-  const parts = token.split('.');
-  if (parts.length < 2) return null;
-  const payload = parts[1];
-  if (!payload) return null;
-  try {
-    const b64 = payload.replace(/-/g, '+').replace(/_/g, '/');
-    const padded = b64 + '='.repeat((4 - (b64.length % 4)) % 4);
-    const json = globalThis.atob(padded);
-    const obj = JSON.parse(json) as unknown;
-    if (obj && typeof obj === 'object' && !Array.isArray(obj)) {
-      return obj as Record<string, unknown>;
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-/** Extract `custom:role` (falling back to `role`). Returns `null` if absent. */
-export function readRoleFromToken(token: string): string | null {
-  const payload = decodeJwtPayload(token);
-  if (!payload) return null;
-  const claim = payload['custom:role'] ?? payload['role'];
-  return typeof claim === 'string' ? claim : null;
-}
+export { decodeJwtPayload, readExpFromToken, readRoleFromToken };
 
 /**
  * Extract a friendly first name from a JWT payload, falling back through
  * the most likely Cognito/OIDC claims:
  *   given_name → name (first token) → email (local-part) → null
+ *
+ * Portal-only: drives the header greeting in the insured-facing layout. Admin
+ * has no equivalent because the admin shell shows the tenant name, not a
+ * personal greeting.
  */
 export function readFirstNameFromToken(token: string): string | null {
   const payload = decodeJwtPayload(token);
@@ -63,18 +49,14 @@ export function readFirstNameFromToken(token: string): string | null {
   return null;
 }
 
-/** Read the `exp` (seconds since epoch). Returns `null` if absent/invalid. */
-export function readExpFromToken(token: string): number | null {
-  const payload = decodeJwtPayload(token);
-  if (!payload) return null;
-  const exp = payload['exp'];
-  return typeof exp === 'number' && Number.isFinite(exp) ? exp : null;
-}
-
-/** Returns true when the token is missing, malformed, or past its `exp`. */
+/**
+ * Returns true when the token is missing, malformed, or past its `exp`.
+ *
+ * Preserves the portal-historic positional signature (`(token, nowSeconds?)`)
+ * for backward compatibility with `apps/portal/middleware.ts` and any tests.
+ * The package-level `isTokenExpired` exposes a richer options bag (skew); use
+ * that import path for new code that needs skew tolerance.
+ */
 export function isTokenExpired(token: string, nowSeconds?: number): boolean {
-  const exp = readExpFromToken(token);
-  if (exp === null) return true;
-  const now = nowSeconds ?? Math.floor(Date.now() / 1000);
-  return now >= exp;
+  return isTokenExpiredBase(token, { nowSeconds });
 }

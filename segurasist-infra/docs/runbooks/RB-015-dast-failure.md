@@ -1,13 +1,17 @@
-# RB-011 — DAST (OWASP ZAP) failure en CI
+# RB-015 — DAST (OWASP ZAP) failure en CI
 
 - Severity: P2 (bloquea merge a `main`, no impacta producción)
 - On-call SLA: acknowledge ≤ 2 h (business hours), resolve ≤ 24 h
 - Owner: AppSec / DevOps on-call
 - Story origen: S2-08
 
-> Nota numeración: el plan original llamaba este runbook `RB-002-dast-failure`,
-> pero `RB-002` ya estaba ocupado por `RB-002-rds-connection-saturation.md`.
-> Se renumera a `RB-011` (siguiente disponible).
+> Nota numeración: este runbook nació como `RB-002-dast-failure`, luego
+> `RB-011-dast-failure` (Sprint 4) y finalmente `RB-015-dast-failure` (F8
+> iter 2): el audit del Sprint 5 reclamó los slots `RB-011` y `RB-012`
+> para los runbooks operacionales `batch-stuck-processing` y
+> `pdf-generation-backlog`. Contenido inmutable; sólo el slug cambió.
+> Cualquier link externo a `RB-011-dast-failure` debe actualizarse — los
+> runbooks viven sólo en repo y no se mantienen redirects.
 
 ## Symptom
 

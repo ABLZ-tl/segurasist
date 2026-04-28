@@ -241,6 +241,11 @@ export class UsersService {
     return client.user.findFirst({ where: { id, deletedAt: null } });
   }
 
+  /**
+   * H-14 — branch-on-bypass. El controller upstream ya invocó
+   * `assertPlatformAdmin(req.user)` antes de armar `ctx.platformAdmin`,
+   * por lo que aquí confiamos en el flag.
+   */
   private pickClient(ctx: UserCallerCtx): AnyPrismaClient {
     return ctx.platformAdmin ? this.prismaBypass.client : this.prisma.client;
   }

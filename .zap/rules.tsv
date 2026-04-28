@@ -9,7 +9,7 @@
 #   - FAIL   = endurece (default es WARN para ciertos checks); acá lo elevamos.
 #
 # Cualquier IGNORE requiere segunda firma del CISO en el PR comment cuando se
-# agregue por primera vez (RB-011-dast-failure).
+# agregue por primera vez (RB-015-dast-failure, renumerado desde RB-011 en F8 iter 2).
 
 # -------------------------------------------------------------------------
 # IGNORE — controles que no aplican o están cubiertos por otra capa

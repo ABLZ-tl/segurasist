@@ -8,16 +8,27 @@ import {
   generatePkcePair,
 } from '@segurasist/auth';
 import { clearSessionCookies, setSessionCookies } from '@segurasist/auth/session';
+import { checkOrigin } from '../../../../lib/origin-allowlist';
 
 /**
- * Simple Cognito Hosted UI route. Routes:
+ * Cognito Hosted UI route. Routes:
  *   GET  /api/auth/login?provider=MAC-SAML  → redirect to Cognito
  *   GET  /api/auth/callback                  → exchange code, set cookies
- *   POST /api/auth/logout                    → clear cookies + redirect
+ *   POST /api/auth/logout                    → clear cookies + redirect to Cognito /logout
+ *
+ * Sprint 4 / B-COOKIES-DRY:
+ *   - C-11 + H-06: session cookies are written via `@segurasist/auth/session`,
+ *     which now delegates to `@segurasist/security/cookie` and so produces
+ *     `SameSite=Strict` cookies on the Cognito callback.
+ *   - H-07: logout MUST be POST + Origin-allowlisted. The previous handler
+ *     accepted GET (and aliased `POST = GET`) which let any cross-site image
+ *     tag (`<img src="https://admin/api/auth/logout">`) destroy a logged-in
+ *     user's session. We now reject logout via GET with 405 and require a
+ *     same-origin POST.
  *
  * Note: this is a deliberate stub. In production we may switch to
- * `next-auth` v5 with the Cognito provider. The signature is kept so
- * existing routes (`signIn`, `signOut`) keep working.
+ * `next-auth` v5 with the Cognito provider. The exposed surface is GET for
+ * `login`/`callback`, POST for `logout`.
  */
 
 function randomState(): string {
@@ -27,6 +38,7 @@ function randomState(): string {
 
 export async function GET(req: NextRequest, { params }: { params: { nextauth: string[] } }) {
   const action = params.nextauth[0];
+
   if (action === 'login') {
     const provider = req.nextUrl.searchParams.get('provider') ?? undefined;
     const { verifier, challenge } = await generatePkcePair();
@@ -37,17 +49,19 @@ export async function GET(req: NextRequest, { params }: { params: { nextauth: st
       ...(provider ? { identityProvider: provider } : {}),
     });
     const res = NextResponse.redirect(url);
+    // PKCE/state are short-lived helpers, not session-bearing — they still
+    // get strict to keep the surface uniform.
     res.cookies.set(PKCE_COOKIE, verifier, {
       httpOnly: true,
       secure: true,
-      sameSite: 'lax',
+      sameSite: 'strict',
       maxAge: 600,
       path: '/',
     });
     res.cookies.set(STATE_COOKIE, state, {
       httpOnly: true,
       secure: true,
-      sameSite: 'lax',
+      sameSite: 'strict',
       maxAge: 600,
       path: '/',
     });
@@ -74,13 +88,40 @@ export async function GET(req: NextRequest, { params }: { params: { nextauth: st
     }
   }
 
+  // H-07: logout cannot be served via GET. Force the client to POST so that
+  //  - browsers won't follow `<img>` / `<link rel=prefetch>` / cross-site
+  //    navigation tags into a session-destroying call,
+  //  - the SameSite=Strict cookie can't be exfiltrated by a top-level GET.
   if (action === 'logout') {
-    const res = NextResponse.redirect(buildLogoutUrl());
-    clearSessionCookies(res);
-    return res;
+    return NextResponse.json({ error: 'method-not-allowed' }, { status: 405 });
   }
 
   return NextResponse.json({ error: 'not_found' }, { status: 404 });
 }
 
-export const POST = GET;
+export async function POST(req: NextRequest, { params }: { params: { nextauth: string[] } }) {
+  const action = params.nextauth[0];
+
+  if (action === 'logout') {
+    // H-07 defense-in-depth: even though `middleware.ts` already enforces
+    // Origin on every state-changing request, we re-check here so the
+    // logout surface stays correct if the matcher is ever misconfigured.
+    const result = checkOrigin({
+      method: req.method,
+      pathname: req.nextUrl.pathname,
+      origin: req.headers.get('origin'),
+    });
+    if (result.reject) {
+      return NextResponse.json(
+        { error: 'origin-rejected', reason: result.reason },
+        { status: 403 },
+      );
+    }
+
+    const res = NextResponse.redirect(buildLogoutUrl());
+    clearSessionCookies(res);
+    return res;
+  }
+
+  return NextResponse.json({ error: 'method-not-allowed' }, { status: 405 });
+}

@@ -33,6 +33,9 @@ const nextConfig = {
       ? "connect-src 'self' http://localhost:3000 ws://localhost:3001 https://api.segurasist.app https://cognito-idp.mx-central-1.amazonaws.com"
       : "connect-src 'self' https://api.segurasist.app https://cognito-idp.mx-central-1.amazonaws.com";
 
+    // H-05b (preventiva): admin previsualiza certificados en iframe igual
+    // que el portal (Sprint 4 onwards). Heredar `frame-src` desde ya evita
+    // que el bug del portal se reintroduzca acá la próxima iteración.
     const csp = [
       "default-src 'self'",
       scriptSrc,
@@ -40,6 +43,7 @@ const nextConfig = {
       "img-src 'self' data: https://*.amazonaws.com",
       "font-src 'self' data:",
       connectSrc,
+      "frame-src 'self' https://*.s3.mx-central-1.amazonaws.com https://*.cloudfront.net",
       "frame-ancestors 'none'",
       "base-uri 'self'",
       "form-action 'self' https://*.amazoncognito.com",

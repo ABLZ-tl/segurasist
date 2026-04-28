@@ -1,4 +1,6 @@
+import { CurrentUser, type AuthUser } from '@common/decorators/current-user.decorator';
 import { Roles } from '@common/decorators/roles.decorator';
+import { assertPlatformAdmin } from '@common/guards/assert-platform-admin';
 import { JwtAuthGuard } from '@common/guards/jwt-auth.guard';
 import { RolesGuard } from '@common/guards/roles.guard';
 import { Controller, Delete, Get, Param, ParseUUIDPipe, Patch, Post, UseGuards } from '@nestjs/common';
@@ -11,7 +13,11 @@ export class TenantsController {
   constructor(private readonly tenants: TenantsService) {}
 
   @Get()
-  list() {
+  list(@CurrentUser() user: AuthUser) {
+    // H-14 — defense-in-depth: además del @Roles('admin_segurasist') del
+    // class-decorator, validamos el role en runtime antes de tocar el
+    // service que usa PrismaBypassRlsService (BYPASSRLS, cross-tenant).
+    assertPlatformAdmin(user);
     return this.tenants.list();
   }
 
@@ -21,22 +27,26 @@ export class TenantsController {
    * que el resto del controller). Devuelve `[{id, name, slug}]`.
    */
   @Get('active')
-  listActive() {
+  listActive(@CurrentUser() user: AuthUser) {
+    assertPlatformAdmin(user); // H-14
     return this.tenants.listActive();
   }
 
   @Post()
-  create() {
+  create(@CurrentUser() user: AuthUser) {
+    assertPlatformAdmin(user); // H-14
     return this.tenants.create();
   }
 
   @Patch(':id')
-  update(@Param('id', new ParseUUIDPipe()) _id: string) {
+  update(@Param('id', new ParseUUIDPipe()) _id: string, @CurrentUser() user: AuthUser) {
+    assertPlatformAdmin(user); // H-14
     return this.tenants.update();
   }
 
   @Delete(':id')
-  remove(@Param('id', new ParseUUIDPipe()) _id: string) {
+  remove(@Param('id', new ParseUUIDPipe()) _id: string, @CurrentUser() user: AuthUser) {
+    assertPlatformAdmin(user); // H-14
     return this.tenants.remove();
   }
 }

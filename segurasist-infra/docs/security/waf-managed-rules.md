@@ -74,7 +74,7 @@ Este documento explica, por cada AWS Managed Rule Group activado en el módulo, 
 
 Updated continuamente por AWS, no por nosotros.
 
-**Falsos positivos esperados**: ocasional (un MAC desde un ISP cuya IP rotó de un actor malicioso anterior). Mitigación: IP allowlist explícita (ver runbook RB-012).
+**Falsos positivos esperados**: ocasional (un MAC desde un ISP cuya IP rotó de un actor malicioso anterior). Mitigación: IP allowlist explícita (ver runbook RB-016).
 
 ### 5. AWSManagedRulesAnonymousIpList
 
@@ -98,7 +98,7 @@ Updated continuamente por AWS, no por nosotros.
 - REGIONAL: 500 req/5min ≈ 100 req/min/IP.
 - CLOUDFRONT: 1000 req/5min ≈ 200 req/min/IP.
 
-**Falsos positivos**: ver runbook RB-012 § Caso especial. Solución típica: IP set allowlist para MACs con NAT corporativo (todos sus operadores comparten 1 IP).
+**Falsos positivos**: ver runbook RB-016 § Caso especial. Solución típica: IP set allowlist para MACs con NAT corporativo (todos sus operadores comparten 1 IP).
 
 > Esta rule es complementaria al **Throttler aplicación-level** (ventana 1min, key user-IP + tenant). El WAF cubre el peor caso (volumetría descontrolada); el Throttler cubre granularidad fina (per-user, per-tenant, per-route).
 
@@ -145,6 +145,6 @@ Escala lineal: a 10M req/mes total ~$30/mes; a 100M req/mes ~$80/mes.
 ## Referencias
 
 - `segurasist-infra/modules/waf-web-acl/README.md`
-- `segurasist-infra/docs/runbooks/RB-012-waf-rules.md`
+- `segurasist-infra/docs/runbooks/RB-016-waf-rules.md` (renumerado desde `RB-012` en F8 iter 2)
 - AWS: [Best practices for AWS Managed Rules](https://docs.aws.amazon.com/waf/latest/developerguide/waf-managed-rule-best-practices.html)
 - OWASP CRS: https://coreruleset.org/ (referencia conceptual; AWS CRS es propio)

@@ -147,12 +147,26 @@ export class SesService {
   }
 
   private async sendViaSes(opts: SendEmailOpts, headers: Record<string, string>): Promise<SendEmailResult> {
-    // SDK v3 SendEmailCommand NO soporta headers custom directamente; la API
-    // moderna de SES (SendRawEmailCommand) sí, pero requiere construir MIME.
-    // Para MVP enviamos por SendEmailCommand y dejamos los headers para el
-    // upgrade Sprint 5 (cuando integremos SendRawEmailCommand + DKIM por tenant).
+    // SDK v3 SendEmailCommand NO soporta headers MIME custom directamente; la
+    // API moderna de SES (SendRawEmailCommand) sí, pero requiere construir MIME.
+    // Para MVP enviamos por SendEmailCommand y dejamos los `headers` MIME para
+    // el upgrade Sprint 5 (cuando integremos SendRawEmailCommand + DKIM por
+    // tenant). Sin embargo `Tags` SÍ las soporta SendEmailCommand (H-11) y
+    // las propagamos abajo para CloudWatch SES + segmentación.
     const _headersUnused = headers;
     void _headersUnused;
+
+    // H-11 — Tags: SDK v3 acepta `Tags: [{ Name, Value }]` en SendEmailCommand
+    // (ver @aws-sdk/client-ses SendEmailRequest.Tags). Cada tag aparece en:
+    //   - CloudWatch metrics dimensions (cuando configuration-set lo enabled).
+    //   - SNS notifications (Bounce/Complaint/Delivery) como `mail.tags`.
+    //   - Event destinations (Kinesis, S3) para análisis post-hoc.
+    // Restricciones AWS:
+    //   - Hasta 50 tags por mensaje.
+    //   - Name/Value: `[A-Za-z0-9_-]{1,256}`. Sanitizamos chars no permitidos
+    //     a `_` para no fallar SES con `InvalidParameterValue`.
+    const sesTags = mapToSesTags(opts.tags);
+
     const out = await this.client.send(
       new SendEmailCommand({
         Source: opts.from,
@@ -165,6 +179,7 @@ export class SesService {
           },
         },
         ConfigurationSetName: opts.configurationSet ?? this.configurationSet,
+        ...(sesTags.length > 0 ? { Tags: sesTags } : {}),
       }),
     );
     return { messageId: out.MessageId ?? '', transport: 'aws' };
@@ -191,4 +206,38 @@ export class SesService {
 export function resolveTransport(env: Partial<Pick<Env, 'NODE_ENV' | 'EMAIL_TRANSPORT'>>): 'smtp' | 'aws' {
   if (env.EMAIL_TRANSPORT) return env.EMAIL_TRANSPORT;
   return env.NODE_ENV === 'production' || env.NODE_ENV === 'staging' ? 'aws' : 'smtp';
+}
+
+/**
+ * H-11 — Convierte `Record<string,string>` a `MessageTag[]` válido para SES.
+ *
+ * AWS SES requiere que `Name`/`Value` matcheen `^[A-Za-z0-9_-]+$` (longitud
+ * 1..256). Cualquier char fuera del set lo reemplazamos por `_` y truncamos
+ * a 256 — esto evita 400s por inputs no-ASCII o con `:` (por ejemplo si un
+ * caller pasa un email-tag con `@`). Si el value queda vacío post-sanitize,
+ * el tag se descarta (silently) en lugar de fallar el send.
+ *
+ * Exportado para tests del adapter.
+ */
+export function mapToSesTags(
+  tags: Record<string, string> | undefined,
+): Array<{ Name: string; Value: string }> {
+  if (!tags) return [];
+  const out: Array<{ Name: string; Value: string }> = [];
+  for (const [rawName, rawValue] of Object.entries(tags)) {
+    const name = sanitizeTagToken(rawName);
+    const value = sanitizeTagToken(rawValue);
+    if (!name || !value) continue;
+    out.push({ Name: name, Value: value });
+    // SES limita 50 tags por mensaje. Hard-cap para evitar loops accidentales.
+    if (out.length >= 50) break;
+  }
+  return out;
+}
+
+function sanitizeTagToken(input: string): string {
+  if (typeof input !== 'string') return '';
+  // SES regex: [A-Za-z0-9_-] only.
+  const replaced = input.replace(/[^A-Za-z0-9_-]/g, '_');
+  return replaced.slice(0, 256);
 }

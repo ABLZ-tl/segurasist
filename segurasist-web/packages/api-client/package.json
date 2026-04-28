@@ -24,7 +24,8 @@
     "lint": "eslint \"src/**/*.{ts,tsx}\"",
     "typecheck": "tsc --noEmit",
     "openapi:gen": "openapi-typescript ${OPENAPI_URL:-https://api.segurasist.app/openapi.json} -o ./src/generated/openapi.d.ts",
-    "test:unit": "vitest run --passWithNoTests"
+    "test:unit": "vitest run",
+    "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
     "@tanstack/react-query": "5.51.11",
@@ -35,8 +36,13 @@
   },
   "devDependencies": {
     "@segurasist/config": "workspace:*",
+    "@testing-library/react": "16.0.0",
     "@types/react": "18.3.3",
+    "@vitest/coverage-v8": "2.0.4",
+    "jsdom": "24.1.1",
     "openapi-typescript": "7.0.2",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
     "typescript": "5.4.5",
     "vitest": "2.0.4"
   }

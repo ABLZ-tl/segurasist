@@ -431,22 +431,41 @@ export class BatchesService {
     for (const r of results) {
       if (!r.valid) continue;
       if (allowed && !allowed.has(r.rowNumber)) continue;
-      await this.sqs.sendMessage(
-        this.queueUrlForCreations(),
-        {
-          kind: 'insured.create',
-          tenantId: tenant.id,
-          batchId: id,
-          rowNumber: r.rowNumber,
-          dto: r.dto,
-        },
-        `${id}:${r.rowNumber}`, // dedupeId — defensa contra re-entregas en at-least-once.
-      );
+      await this.sqs.sendMessage(this.queueUrlForCreations(), {
+        kind: 'insured.create',
+        tenantId: tenant.id,
+        batchId: id,
+        rowNumber: r.rowNumber,
+        dto: r.dto,
+      });
+      // Idempotencia: NO se pasa dedupeId — la cola es standard y SQS ignora
+      // `MessageDeduplicationId` (C-09). La defensa contra re-entrega vive en
+      // DB-side via UNIQUE `(tenant_id, curp)` en `insureds` + el guard
+      // `INSERT ON CONFLICT` en `batch_processed_rows` (F5 migration).
       queued += 1;
     }
+    // C-06 + C-08 fix:
+    //   - Setear `queuedCount` con el subset real encolado (puede ser <rowsOk
+    //     si el caller pasó `rowsToInclude`). El worker compara contra esto,
+    //     NO contra `rowsTotal` (que incluiría filas inválidas + no incluidas
+    //     y dejaría el batch en `processing` infinito).
+    //   - Resetear `processedRows/successRows/failedRows` a 0 — son los
+    //     contadores de la fase processing del worker. Si hubiese un retry de
+    //     confirm() (ej. cancel + reconfirm en futuro), arrancan limpios.
+    //   - Limpiar `completedEventEmittedAt` por la misma razón.
+    //   - NO se tocan `rowsTotal/rowsOk/rowsError` que son la verdad de la
+    //     fase de validación.
     await this.prisma.client.batch.update({
       where: { id },
-      data: { status: 'processing', startedAt: batch.startedAt ?? new Date() },
+      data: {
+        status: 'processing',
+        startedAt: batch.startedAt ?? new Date(),
+        queuedCount: queued,
+        processedRows: 0,
+        successRows: 0,
+        failedRows: 0,
+        completedEventEmittedAt: null,
+      },
     });
     return { queued, status: 'processing', batchId: id };
   }
@@ -476,11 +495,7 @@ export class BatchesService {
   }
 
   private queueUrlForCreations(): string {
-    // No tenemos cola dedicada en env (solo `SQS_QUEUE_LAYOUT`/`PDF`/...);
-    // reusamos la `LAYOUT` con un `kind` distinto. El worker la separa por
-    // `kind`. Cuando se agregue `SQS_QUEUE_INSUREDS_CREATION` al env schema,
-    // reemplazar este getter.
-    return this.env.SQS_QUEUE_LAYOUT.replace('layout-validation-queue', 'insureds-creation-queue');
+    return this.env.SQS_QUEUE_INSUREDS_CREATION;
   }
 
   private async fetchS3Buffer(s3Key: string): Promise<Buffer> {
@@ -613,11 +628,10 @@ export class BatchesService {
     totals: { rowsTotal: number; rowsOk: number; rowsError: number },
   ): Promise<void> {
     const event = buildBatchPreviewReadyEvent({ batchId, tenantId, ...totals });
-    await this.sqs.sendMessage(
-      this.env.SQS_QUEUE_LAYOUT,
-      event as unknown as Record<string, unknown>,
-      `${batchId}:preview_ready`,
-    );
+    // C-09: dedupeId removido — cola standard ignora MessageDeduplicationId.
+    // Idempotencia downstream se cubre por el batch_id + status='preview_ready'
+    // que el consumidor (frontend / hooks) puede usar como guard.
+    await this.sqs.sendMessage(this.env.SQS_QUEUE_LAYOUT, event as unknown as Record<string, unknown>);
   }
 
   /**

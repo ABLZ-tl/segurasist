@@ -46,6 +46,19 @@ fi
 if command -v psql >/dev/null 2>&1; then
   ROLES=$(psql "${PGURL}" -tAc "SELECT string_agg(rolname, ',') FROM pg_roles WHERE rolname IN ('segurasist_app','segurasist_admin');" 2>/dev/null || echo "")
   echo "[apply-rls] roles presentes: ${ROLES}"
+
+  # C-15 — Drift check. La política RLS sobre `exports` históricamente sólo
+  # vivía en la migración `20260427_add_exports_table` y faltaba en este
+  # `policies.sql`, así que aplicar el script contra una DB nueva omitía RLS
+  # para `exports`. Verificamos POST-apply que existe la policy y bombeamos
+  # error temprano si alguien quita la tabla del array.
+  EXPORTS_POL=$(psql "${PGURL}" -tAc "SELECT count(*) FROM pg_policies WHERE schemaname='public' AND tablename='exports';" 2>/dev/null || echo "0")
+  EXPORTS_POL=$(echo "${EXPORTS_POL}" | tr -d '[:space:]')
+  if [[ "${EXPORTS_POL}" -lt 2 ]]; then
+    echo "[apply-rls] WARN: tabla 'exports' tiene ${EXPORTS_POL} políticas (esperadas >=2: select+modify). Drift?" >&2
+  else
+    echo "[apply-rls] exports policies presentes: ${EXPORTS_POL}"
+  fi
 fi
 
 echo "[apply-rls] OK"

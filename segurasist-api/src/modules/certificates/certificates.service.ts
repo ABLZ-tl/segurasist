@@ -16,9 +16,11 @@ import { ENV_TOKEN } from '@config/config.module';
 import { Env } from '@config/env.schema';
 import { S3Service } from '@infra/aws/s3.service';
 import { SqsService } from '@infra/aws/sqs.service';
+import type { AuditContext } from '@modules/audit/audit-context.factory';
 import { AuditWriterService } from '@modules/audit/audit-writer.service';
 import { ForbiddenException, Inject, Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
-import type { Prisma } from '@prisma/client';
+// H-16 — `Prisma` ya no se importa: el cast `as unknown as Prisma.InsuredWhereInput`
+// del lookup `urlForSelf` se eliminó (ver línea ~200).
 import {
   CERTIFICATE_REISSUE_REQUESTED_KIND,
   type CertificateReissueRequestedEvent,
@@ -173,16 +175,17 @@ export class CertificatesService {
    *
    * RBAC defensivo: aún cuando el RolesGuard ya impone `@Roles('insured')`
    * a nivel handler, el service comprueba `user.role` para defensa en
-   * profundidad. Audit log obligatorio: `action='read'`,
-   * `resourceType='certificates'`, con `subAction='downloaded'` codificado en
-   * `payloadDiff` (el enum `AuditAction` no tiene un verb 'download' explícito).
+   * profundidad. Audit log obligatorio: `action='read_downloaded'`,
+   * `resourceType='certificates'`. F6 iter 2 H-01: el enum AuditAction se
+   * extendió con `read_downloaded` para reemplazar el overload semántico
+   * previo (`action='read'` + `payloadDiff.subAction='downloaded'`).
    *
    * Devuelve 404 si todavía no se emitió el certificado del asegurado — el FE
    * pinta empty state con CTA "tu certificado está siendo generado".
    */
   async urlForSelf(
     user: AuthUser,
-    audit?: { ip?: string; userAgent?: string; traceId?: string },
+    auditCtx?: AuditContext,
   ): Promise<{
     url: string;
     expiresAt: string;
@@ -195,19 +198,28 @@ export class CertificatesService {
       throw new ForbiddenException('Endpoint solo para asegurados');
     }
 
-    // Lookup del insured propio por cognitoSub. NOTE: la columna depende de la
-    // migración Sprint 4 que liga insured ↔ pool insured (ver findSelf en
-    // InsuredsService); cast where input para no romper TS strict.
+    // H-16 — `cognitoSub` ya está en el Prisma client (schema Sprint 4: ver
+    // `Insured.cognitoSub` y `@@unique([cognitoSub])`). El cast
+    // `as unknown as Prisma.InsuredWhereInput` era deuda residual de cuando
+    // la migración estaba pending. Eliminado para que el typing capture
+    // regresiones futuras.
     const insured = await this.prisma.client.insured.findFirst({
-      where: { cognitoSub: user.cognitoSub, deletedAt: null } as unknown as Prisma.InsuredWhereInput,
+      where: { cognitoSub: user.cognitoSub, deletedAt: null },
       select: { id: true, tenantId: true },
     });
     if (!insured) {
       throw new NotFoundException('Aún no se ha emitido tu certificado');
     }
 
+    // B4-V2-16 — filtrar `status='issued'` evita devolver certs `revoked` o
+    // `replaced` al asegurado: si la última versión está revocada, el portal
+    // debe pintar empty state (cert siendo regenerado) en lugar de servir un
+    // PDF con stamp inválido. Adicionalmente protege contra el placeholder
+    // `revoked` que el PASS-1 fail path del pdf-worker persiste cuando
+    // Puppeteer falla (ver F1 NEW-FINDING iter 1) — ese cert tiene hash
+    // random y no debe alcanzar al usuario final.
     const cert = await this.prisma.client.certificate.findFirst({
-      where: { insuredId: insured.id, deletedAt: null },
+      where: { insuredId: insured.id, deletedAt: null, status: 'issued' },
       orderBy: { issuedAt: 'desc' },
     });
     if (!cert) {
@@ -218,20 +230,21 @@ export class CertificatesService {
     const url = await this.s3.getPresignedGetUrl(this.env.S3_BUCKET_CERTIFICATES, cert.s3Key, ttlSeconds);
     const expiresAt = new Date(Date.now() + ttlSeconds * 1000).toISOString();
 
-    // Audit fire-and-forget. La descarga PII pasa por nuestros servidores
-    // (presigned generation), así que el evento queda trazado al cognitoSub
-    // del actor. Sin auditWriter inyectado (unit tests) → log y skip.
+    // Audit fire-and-forget (F6 iter 2 H-01): action='read_downloaded' (enum
+    // extendido) reemplaza el overload payloadDiff.subAction='downloaded'.
+    // ip/userAgent/traceId vienen del AuditContext canónico derivado por el
+    // controller (AuditContextFactory.fromRequest()). Sin auditWriter inyectado
+    // (unit tests) → log y skip.
     if (this.auditWriter) {
       void this.auditWriter.record({
         tenantId: insured.tenantId,
         actorId: user.id,
-        action: 'read',
+        action: 'read_downloaded',
         resourceType: 'certificates',
         resourceId: cert.id,
-        ip: audit?.ip,
-        userAgent: audit?.userAgent,
-        traceId: audit?.traceId,
-        payloadDiff: { subAction: 'downloaded' },
+        ip: auditCtx?.ip,
+        userAgent: auditCtx?.userAgent,
+        traceId: auditCtx?.traceId,
       });
     } else {
       this.log.log(

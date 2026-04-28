@@ -47,7 +47,10 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         style={{ paddingTop: 'env(safe-area-inset-top)' }}
       >
         <div className="flex items-center gap-2 lg:gap-3">
-          <MobileDrawer role={me.role} userLabel={userLabel} />
+          {/* H-25 — propagamos ownTenantLabel al drawer mobile (igual que el
+              `<TenantSwitcher>` desktop) para que el switcher mobile lea la
+              identidad real del JWT en lugar del mock "mac". */}
+          <MobileDrawer role={me.role} userLabel={userLabel} ownTenantLabel={me.tenantId ?? undefined} />
           <a
             href="/dashboard"
             className="flex items-center gap-2 text-[15px] font-semibold tracking-tightest text-fg lg:text-[15px]"

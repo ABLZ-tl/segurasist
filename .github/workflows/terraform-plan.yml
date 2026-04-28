@@ -1,0 +1,319 @@
+name: Terraform Plan
+
+# F8 iter 2 — closes the cross-cutting NEW-FINDING raised in iter 1
+# (`.github/workflows/terraform-plan.yml` did not exist; the C-13 audit
+# expected this file to consume the OIDC roles `tf_plan_{dev,staging,prod}`
+# created in `segurasist-infra/global/iam-github-oidc/main.tf`).
+#
+# The workflow runs ONLY on pull requests against `main` (and on manual
+# `workflow_dispatch` for ops verification). It assumes one of the
+# read-only `tf_plan_*` roles per env via OIDC, runs `terraform init` and
+# `terraform plan` against `segurasist-infra/envs/<env>/`, and posts the
+# resulting plan as a comment on the PR. The plan never writes state —
+# the trust policies on the roles only allow `pull_request` and `main`
+# branches and the attached managed policy is `ReadOnlyAccess`.
+#
+# Apply happens in a separate workflow (out of scope for F8): only after
+# merge to `main`, manual approval gate, and via the `tf_apply_{staging,
+# prod}` roles which sit in distinct trust policies (main branch only).
+#
+# Required GitHub secrets (one per env, set at the repo level — these are
+# the ARNs of the IAM roles created by Terraform in `iam-github-oidc/`,
+# exposed via the `tf_role_arns` output):
+#   - TF_PLAN_DEV_ROLE_ARN
+#   - TF_PLAN_STAGING_ROLE_ARN
+#   - TF_PLAN_PROD_ROLE_ARN
+#
+# Notes:
+#   - `terraform init -backend=false` keeps the runner from talking to
+#     the S3 backend; plans here are advisory (PR review aid). The plan
+#     will be re-run with the real backend during apply, where state
+#     locks matter.
+#   - `continue-on-error: true` on the `plan` step is intentional: if a
+#     module references a resource that does not yet exist in the env
+#     (typical for early Sprint PRs), we still want to surface the diff
+#     for review instead of failing the whole job.
+#   - Region `mx-central-1` is hardcoded because every env lives there.
+#     us-east-1 alarms (CloudFront WAF in prod) are managed via aliased
+#     providers inside `prod/main.tf` and do NOT require a separate plan
+#     job — `aws-actions/configure-aws-credentials` only sets the default
+#     region, the alias provider takes its own.
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'segurasist-infra/**'
+      - '.github/workflows/terraform-plan.yml'
+  workflow_dispatch: {}
+
+# Plans are read-only but we still cancel duplicate runs for the same
+# branch — saves runner minutes when a PR sees several pushes.
+concurrency:
+  group: terraform-plan-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  id-token: write       # required for OIDC AssumeRoleWithWebIdentity
+  pull-requests: write  # required to post the plan as a PR comment
+
+env:
+  TF_VERSION: '1.7.5'
+  AWS_REGION: 'mx-central-1'
+
+jobs:
+  plan-dev:
+    name: terraform plan (dev)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (dev OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.TF_PLAN_DEV_ROLE_ARN }}
+          role-session-name: gh-terraform-plan-dev-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Terraform fmt check
+        run: terraform -chdir=segurasist-infra/envs/dev fmt -check -recursive
+
+      - name: Terraform init (no backend)
+        run: terraform -chdir=segurasist-infra/envs/dev init -backend=false -input=false
+
+      - name: Terraform validate
+        run: terraform -chdir=segurasist-infra/envs/dev validate -no-color
+
+      - name: Terraform plan
+        id: plan
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          terraform -chdir=segurasist-infra/envs/dev plan \
+            -no-color -input=false -lock=false 2>&1 | tee plan-dev.txt
+
+      - name: Upload plan output
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraform-plan-dev
+          path: plan-dev.txt
+          retention-days: 14
+
+      - name: Comment plan on PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const plan = fs.readFileSync('plan-dev.txt', 'utf8');
+            const truncated = plan.length > 60000
+              ? plan.slice(0, 60000) + '\n\n…(truncated, see artifact `terraform-plan-dev`)'
+              : plan;
+            const body = [
+              '### Terraform Plan — `dev`',
+              '',
+              '<details><summary>Show plan</summary>',
+              '',
+              '```hcl',
+              truncated,
+              '```',
+              '',
+              '</details>',
+            ].join('\n');
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body,
+            });
+
+      - name: Fail job if plan errored
+        if: steps.plan.outcome == 'failure'
+        run: |
+          echo "::error::terraform plan (dev) reported an error — see plan-dev.txt"
+          exit 1
+
+  plan-staging:
+    name: terraform plan (staging)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (staging OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.TF_PLAN_STAGING_ROLE_ARN }}
+          role-session-name: gh-terraform-plan-staging-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Terraform fmt check
+        run: terraform -chdir=segurasist-infra/envs/staging fmt -check -recursive
+
+      - name: Terraform init (no backend)
+        run: terraform -chdir=segurasist-infra/envs/staging init -backend=false -input=false
+
+      - name: Terraform validate
+        run: terraform -chdir=segurasist-infra/envs/staging validate -no-color
+
+      - name: Terraform plan
+        id: plan
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          terraform -chdir=segurasist-infra/envs/staging plan \
+            -no-color -input=false -lock=false 2>&1 | tee plan-staging.txt
+
+      - name: Upload plan output
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraform-plan-staging
+          path: plan-staging.txt
+          retention-days: 14
+
+      - name: Comment plan on PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const plan = fs.readFileSync('plan-staging.txt', 'utf8');
+            const truncated = plan.length > 60000
+              ? plan.slice(0, 60000) + '\n\n…(truncated, see artifact `terraform-plan-staging`)'
+              : plan;
+            const body = [
+              '### Terraform Plan — `staging`',
+              '',
+              '<details><summary>Show plan</summary>',
+              '',
+              '```hcl',
+              truncated,
+              '```',
+              '',
+              '</details>',
+            ].join('\n');
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body,
+            });
+
+      - name: Fail job if plan errored
+        if: steps.plan.outcome == 'failure'
+        run: |
+          echo "::error::terraform plan (staging) reported an error — see plan-staging.txt"
+          exit 1
+
+  plan-prod:
+    name: terraform plan (prod)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (prod OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.TF_PLAN_PROD_ROLE_ARN }}
+          role-session-name: gh-terraform-plan-prod-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Terraform fmt check
+        run: terraform -chdir=segurasist-infra/envs/prod fmt -check -recursive
+
+      - name: Terraform init (no backend)
+        run: terraform -chdir=segurasist-infra/envs/prod init -backend=false -input=false
+
+      - name: Terraform validate
+        run: terraform -chdir=segurasist-infra/envs/prod validate -no-color
+
+      - name: Terraform plan
+        id: plan
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          terraform -chdir=segurasist-infra/envs/prod plan \
+            -no-color -input=false -lock=false 2>&1 | tee plan-prod.txt
+
+      - name: Upload plan output
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraform-plan-prod
+          path: plan-prod.txt
+          retention-days: 14
+
+      - name: Comment plan on PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const plan = fs.readFileSync('plan-prod.txt', 'utf8');
+            const truncated = plan.length > 60000
+              ? plan.slice(0, 60000) + '\n\n…(truncated, see artifact `terraform-plan-prod`)'
+              : plan;
+            const body = [
+              '### Terraform Plan — `prod`',
+              '',
+              '<details><summary>Show plan</summary>',
+              '',
+              '```hcl',
+              truncated,
+              '```',
+              '',
+              '</details>',
+            ].join('\n');
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body,
+            });
+
+      - name: Fail job if plan errored
+        if: steps.plan.outcome == 'failure'
+        run: |
+          echo "::error::terraform plan (prod) reported an error — see plan-prod.txt"
+          exit 1
+
+  plan-success:
+    # Aggregate gate so PR branch protection has a single required check
+    # ("terraform-plan / plan-success") instead of three.
+    name: plan-success
+    runs-on: ubuntu-latest
+    if: always()
+    needs: [plan-dev, plan-staging, plan-prod]
+    steps:
+      - name: Verify all envs planned successfully
+        run: |
+          if [[ "${{ needs.plan-dev.result }}"     != "success" || \
+                "${{ needs.plan-staging.result }}" != "success" || \
+                "${{ needs.plan-prod.result }}"    != "success" ]]; then
+            echo "::error::One or more terraform plan jobs failed:"
+            echo "  plan-dev:     ${{ needs.plan-dev.result }}"
+            echo "  plan-staging: ${{ needs.plan-staging.result }}"
+            echo "  plan-prod:    ${{ needs.plan-prod.result }}"
+            exit 1
+          fi
+          echo "All terraform plan jobs passed."

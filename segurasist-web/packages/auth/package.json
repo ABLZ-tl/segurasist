@@ -18,6 +18,7 @@
     "test:unit": "vitest run"
   },
   "dependencies": {
+    "@segurasist/security": "workspace:*",
     "jose": "5.6.3"
   },
   "peerDependencies": {

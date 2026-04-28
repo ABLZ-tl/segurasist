@@ -43,6 +43,7 @@ import { AuditWriterService } from '@modules/audit/audit-writer.service';
 import { PuppeteerService } from '@modules/certificates/puppeteer.service';
 import type { ExportFilters } from '@modules/insureds/dto/export.dto';
 import { EXPORT_ROW_HARD_CAP } from '@modules/insureds/dto/export.dto';
+import { buildInsuredsWhere } from '@modules/insureds/where-builder';
 import { Inject, Injectable, Logger, OnApplicationBootstrap, OnModuleDestroy } from '@nestjs/common';
 import ExcelJS from 'exceljs';
 
@@ -299,32 +300,14 @@ export class ReportsWorkerService implements OnApplicationBootstrap, OnModuleDes
    * a EXPORT_ROW_HARD_CAP filas (200k) — más allá lanza error y el job
    * queda en 'failed'.
    *
-   * Reusa la lógica de `buildExportWhere` indirectamente vía Prisma raw
-   * filter (duplicamos aquí porque el service es request-scoped y este
-   * worker es application-scoped).
+   * H-17 — usa `buildInsuredsWhere` compartido (mismo helper que
+   * `InsuredsService.list` y `buildExportWhere`). El worker añade
+   * explícitamente `tenantId` porque corre con BYPASSRLS y NO tiene
+   * `app.current_tenant` que filtre por defecto.
    */
   private async queryInsureds(tenantId: string, filters: ExportFilters): Promise<InsuredRow[]> {
-    const where: Record<string, unknown> = { tenantId, deletedAt: null };
-    if (filters.status) where.status = filters.status;
-    if (filters.packageId) where.packageId = filters.packageId;
-    if (filters.q) {
-      const term = filters.q.trim();
-      where.OR = [
-        { fullName: { contains: term, mode: 'insensitive' } },
-        { curp: { contains: term.toUpperCase() } },
-        { rfc: { contains: term.toUpperCase() } },
-        { metadata: { path: ['numeroEmpleadoExterno'], string_contains: term } },
-      ];
-    }
-    const validFromRange: { gte?: Date; lte?: Date } = {};
-    if (filters.validFromGte) validFromRange.gte = new Date(filters.validFromGte);
-    if (filters.validFromLte) validFromRange.lte = new Date(filters.validFromLte);
-    if (Object.keys(validFromRange).length > 0) where.validFrom = validFromRange;
-
-    const validToRange: { gte?: Date; lte?: Date } = {};
-    if (filters.validToGte) validToRange.gte = new Date(filters.validToGte);
-    if (filters.validToLte) validToRange.lte = new Date(filters.validToLte);
-    if (Object.keys(validToRange).length > 0) where.validTo = validToRange;
+    const where = buildInsuredsWhere(filters) as Record<string, unknown>;
+    where.tenantId = tenantId;
 
     // Fetch en lotes de 5000 con cursor para evitar OOM con 60k filas.
     // (Prisma findMany sin take leería todo en memoria de una; el hard cap

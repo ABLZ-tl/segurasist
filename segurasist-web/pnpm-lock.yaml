@@ -48,6 +48,9 @@ importers:
       '@segurasist/i18n':
         specifier: workspace:*
         version: link:../../packages/i18n
+      '@segurasist/security':
+        specifier: workspace:*
+        version: link:../../packages/security
       '@segurasist/ui':
         specifier: workspace:*
         version: link:../../packages/ui
@@ -163,6 +166,9 @@ importers:
       '@segurasist/i18n':
         specifier: workspace:*
         version: link:../../packages/i18n
+      '@segurasist/security':
+        specifier: workspace:*
+        version: link:../../packages/security
       '@segurasist/ui':
         specifier: workspace:*
         version: link:../../packages/ui
@@ -263,9 +269,6 @@ importers:
       '@tanstack/react-query':
         specifier: 5.51.11
         version: 5.51.11(react@18.3.1)
-      react:
-        specifier: 18.3.1
-        version: 18.3.1
       zustand:
         specifier: 4.5.4
         version: 4.5.4(@types/react@18.3.3)(react@18.3.1)
@@ -273,12 +276,27 @@ importers:
       '@segurasist/config':
         specifier: workspace:*
         version: link:../config
+      '@testing-library/react':
+        specifier: 16.0.0
+        version: 16.0.0(@testing-library/dom@10.4.1)(@types/react-dom@18.3.0)(@types/react@18.3.3)(react-dom@18.3.1)(react@18.3.1)
       '@types/react':
         specifier: 18.3.3
         version: 18.3.3
+      '@vitest/coverage-v8':
+        specifier: 2.0.4
+        version: 2.0.4(vitest@2.0.4)
+      jsdom:
+        specifier: 24.1.1
+        version: 24.1.1
       openapi-typescript:
         specifier: 7.0.2
         version: 7.0.2(typescript@5.4.5)
+      react:
+        specifier: 18.3.1
+        version: 18.3.1
+      react-dom:
+        specifier: 18.3.1
+        version: 18.3.1(react@18.3.1)
       typescript:
         specifier: 5.4.5
         version: 5.4.5
@@ -288,6 +306,9 @@ importers:
 
   packages/auth:
     dependencies:
+      '@segurasist/security':
+        specifier: workspace:*
+        version: link:../security
       jose:
         specifier: 5.6.3
         version: 5.6.3
@@ -353,6 +374,21 @@ importers:
       typescript:
         specifier: 5.4.5
         version: 5.4.5
+
+  packages/security:
+    devDependencies:
+      '@segurasist/config':
+        specifier: workspace:*
+        version: link:../config
+      next:
+        specifier: 14.2.5
+        version: 14.2.5(@babel/core@7.29.0)(@playwright/test@1.45.3)(react-dom@18.3.1)(react@18.3.1)
+      typescript:
+        specifier: 5.4.5
+        version: 5.4.5
+      vitest:
+        specifier: 2.0.4
+        version: 2.0.4(@types/node@20.14.10)(jsdom@24.1.1)
 
   packages/ui:
     dependencies:

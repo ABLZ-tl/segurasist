@@ -4,17 +4,10 @@ import * as React from 'react';
 import * as DialogPrimitive from '@radix-ui/react-dialog';
 import { usePathname } from 'next/navigation';
 import { Menu, X } from 'lucide-react';
-import {
-  Avatar,
-  AvatarFallback,
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@segurasist/ui';
+import { Avatar, AvatarFallback } from '@segurasist/ui';
 import { SidebarNav } from './sidebar-nav';
 import { ThemeToggle } from './theme-toggle';
+import { TenantSwitcher, TenantSwitcherDisabledForRole } from '../../components/header/tenant-switcher';
 import { ROLE_LABEL, type Role } from '../../lib/rbac';
 
 function initialsOf(name: string): string {
@@ -29,11 +22,23 @@ function initialsOf(name: string): string {
 export interface MobileDrawerProps {
   role: Role | null;
   userLabel: string;
+  /**
+   * H-25 — tenant del JWT del usuario, propagado por el layout server-component
+   * (mismo prop que `<TenantSwitcher>` desktop). Mostrado a roles non-superadmin
+   * en el read-only del drawer.
+   */
+  ownTenantLabel?: string;
 }
 
 /** Mobile-only drawer wrapping the sidebar nav. Closes on route change so nav
- *  taps don't leave the drawer open over the destination page. */
-export function MobileDrawer({ role, userLabel }: MobileDrawerProps): JSX.Element {
+ *  taps don't leave the drawer open over the destination page.
+ *
+ *  H-25 — el tenant switcher mobile usa el mismo componente real que desktop
+ *  (`<TenantSwitcher>`), no el mock hard-coded "mac". Para roles non-superadmin
+ *  cae a `<TenantSwitcherDisabledForRole>` con el tenant del JWT. El componente
+ *  desktop estaba shadow-clased a `lg:block`, así que envolvemos en un
+ *  contenedor sin esa restricción para que aparezca también en el drawer. */
+export function MobileDrawer({ role, userLabel, ownTenantLabel }: MobileDrawerProps): JSX.Element {
   const [open, setOpen] = React.useState(false);
   const pathname = usePathname();
 
@@ -79,16 +84,18 @@ export function MobileDrawer({ role, userLabel }: MobileDrawerProps): JSX.Elemen
             </DialogPrimitive.Close>
           </div>
 
-          <div className="border-b border-border px-3 py-3">
-            <Select defaultValue="mac">
-              <SelectTrigger aria-label="Cambiar tenant" className="h-10 text-[13px]">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="mac">Hospitales MAC</SelectItem>
-                <SelectItem value="demo">Demo Tenant</SelectItem>
-              </SelectContent>
-            </Select>
+          {/* H-25 — switcher real (mismo backing store + endpoint que desktop).
+              Forzamos visibilidad mobile con `lg:hidden` override en el wrapper:
+              el componente real tiene `hidden lg:block`, así que envolvemos en un
+              <div> que neutraliza el hidden y deja el children visible en cualquier
+              breakpoint del drawer (que ya es `<lg`). Para roles non-superadmin,
+              `<TenantSwitcherDisabledForRole>` muestra el tenant del JWT. */}
+          <div className="mobile-drawer-tenant-switcher border-b border-border px-3 py-3 [&>div]:!block [&>div]:w-full">
+            {role === 'admin_segurasist' ? (
+              <TenantSwitcher role={role} ownTenantLabel={ownTenantLabel} />
+            ) : (
+              <TenantSwitcherDisabledForRole ownTenantLabel={ownTenantLabel} />
+            )}
           </div>
 
           <div className="flex-1 overflow-y-auto">

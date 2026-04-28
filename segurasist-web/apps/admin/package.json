@@ -16,6 +16,7 @@
     "@segurasist/api-client": "workspace:*",
     "@segurasist/auth": "workspace:*",
     "@segurasist/i18n": "workspace:*",
+    "@segurasist/security": "workspace:*",
     "@segurasist/ui": "workspace:*",
     "@tanstack/react-query": "5.51.11",
     "@tanstack/react-table": "8.19.3",

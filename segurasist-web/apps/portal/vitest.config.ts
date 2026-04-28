@@ -27,13 +27,34 @@ export default defineConfig({
     css: false,
     include: ['{app,lib,components,test}/**/*.{test,spec}.{ts,tsx}'],
     coverage: {
+      provider: 'v8',
       include: [
         'app/**/*.{ts,tsx}',
         'lib/**/*.{ts,tsx}',
         'components/**/*.{ts,tsx}',
       ],
-      exclude: ['**/*.d.ts', '**/*.stories.{ts,tsx}', '**/*.test.{ts,tsx}'],
+      exclude: [
+        '**/*.d.ts',
+        '**/*.stories.{ts,tsx}',
+        '**/*.test.{ts,tsx}',
+        '**/*.spec.{ts,tsx}',
+        '**/types/**',
+        '**/types.ts',
+        'app/layout.tsx',
+        'app/(auth)/layout.tsx',
+        'app/(app)/layout.tsx',
+        'app/api/proxy/[...path]/route.ts',
+      ],
       reporter: ['text-summary', 'text', 'html'],
+      // H-21 (Sprint 4) — threshold real para portal. Sin esto, el
+      // pipeline pasaba aunque la cobertura fuera 0%. Empezamos en
+      // 60/55/60/60 igual que admin para nivelar la barra.
+      thresholds: {
+        statements: 60,
+        branches: 55,
+        functions: 60,
+        lines: 60,
+      },
     },
   },
 });

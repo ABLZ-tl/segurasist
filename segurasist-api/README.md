@@ -85,7 +85,7 @@ open .zap-reports/api-<timestamp>.html
 
 Pre-requisitos: Docker Desktop. Reglas custom en `.zap/rules.tsv`. Si encuentras
 findings reales o falsos positivos, sigue
-[`segurasist-infra/docs/runbooks/RB-011-dast-failure.md`](../segurasist-infra/docs/runbooks/RB-011-dast-failure.md).
+[`segurasist-infra/docs/runbooks/RB-015-dast-failure.md`](../segurasist-infra/docs/runbooks/RB-015-dast-failure.md) (renumerado desde `RB-011` en F8 iter 2).
 
 ## Estructura
 

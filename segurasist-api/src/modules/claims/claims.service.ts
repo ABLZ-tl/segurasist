@@ -1,5 +1,6 @@
 import type { AuthUser } from '@common/decorators/current-user.decorator';
 import { PrismaService } from '@common/prisma/prisma.service';
+import type { AuditContext } from '@modules/audit/audit-context.factory';
 import { AuditWriterService } from '@modules/audit/audit-writer.service';
 import {
   ForbiddenException,
@@ -73,13 +74,20 @@ export class ClaimsService {
    * Rate limit: el controller aplica `@Throttle({ttl:3600_000,limit:3})`
    * (3 reportes/hora por user-IP) — anti spam manual.
    */
-  async createForSelf(user: AuthUser, dto: CreateClaimSelfDto): Promise<ClaimSelfResult> {
+  async createForSelf(
+    user: AuthUser,
+    dto: CreateClaimSelfDto,
+    auditCtx?: AuditContext,
+  ): Promise<ClaimSelfResult> {
     if (user.role !== 'insured') {
       throw new ForbiddenException('Endpoint solo para asegurados');
     }
 
+    // H-16 — `cognitoSub` ya existe en Prisma client (schema Sprint 4); el
+    // cast `as unknown as Prisma.InsuredWhereInput` quedó como deuda residual
+    // cuando la migración estaba pending y se elimina para no esconder typos.
     const insured = await this.prisma.client.insured.findFirst({
-      where: { cognitoSub: user.cognitoSub, deletedAt: null } as unknown as Prisma.InsuredWhereInput,
+      where: { cognitoSub: user.cognitoSub, deletedAt: null },
       select: { id: true, tenantId: true },
     });
     if (!insured) {
@@ -112,12 +120,18 @@ export class ClaimsService {
     });
 
     if (this.auditWriter) {
+      // H-24 — auditCtx (ip/userAgent/traceId) viene del controller via
+      // AuditContextFactory.fromRequest(). Si llamado desde tests sin ctx,
+      // los campos quedan undefined (writer los persiste como NULL).
       void this.auditWriter.record({
         tenantId: insured.tenantId,
         actorId: user.id,
         action: 'create',
         resourceType: 'claims',
         resourceId: created.id,
+        ip: auditCtx?.ip,
+        userAgent: auditCtx?.userAgent,
+        traceId: auditCtx?.traceId,
         payloadDiff: {
           subAction: 'reported',
           type: dto.type,

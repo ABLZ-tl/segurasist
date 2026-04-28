@@ -27,7 +27,9 @@ const DEFAULT_PUBLIC = [
  * Reusable Next.js middleware that:
  *  - lets public paths through,
  *  - validates the access token via Cognito JWKS,
- *  - on expiry, attempts to refresh and re-set cookies in the response,
+ *  - on expiry, attempts to refresh and re-set cookies (via the consolidated
+ *    `@segurasist/security/cookie` factory, so silent refresh produces the
+ *    same SameSite=Strict cookies as login — audit C-11),
  *  - on failure, redirects to /login.
  *
  * Use it from `apps/<app>/middleware.ts`:

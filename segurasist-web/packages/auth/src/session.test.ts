@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { NextRequest, NextResponse } from 'next/server';
 import { REFRESH_COOKIE, SESSION_COOKIE } from './config';
 import {
@@ -8,6 +8,19 @@ import {
   setSessionCookies,
 } from './session';
 import type { CognitoTokens } from './cognito';
+
+// Sprint 4 / B-COOKIES-DRY: setSessionCookies now delegates to
+// `@segurasist/security/cookie`, which gates `secure` via the NODE_ENV
+// allowlist (production/staging). These tests pin NODE_ENV=production so
+// they assert the real prod-shape cookie attributes.
+const ORIGINAL_NODE_ENV = process.env['NODE_ENV'];
+beforeEach(() => {
+  process.env['NODE_ENV'] = 'production';
+});
+afterEach(() => {
+  if (ORIGINAL_NODE_ENV === undefined) delete process.env['NODE_ENV'];
+  else process.env['NODE_ENV'] = ORIGINAL_NODE_ENV;
+});
 
 function buildRequest(cookies: Record<string, string> = {}): NextRequest {
   const cookieHeader = Object.entries(cookies)
@@ -62,7 +75,9 @@ describe('setSessionCookies()', () => {
     expect(session?.value).toBe('at');
     expect(session?.httpOnly).toBe(true);
     expect(session?.secure).toBe(true);
-    expect(session?.sameSite).toBe('lax');
+    // Sprint 4 / B-COOKIES-DRY (C-11): all session cookies must be
+    // SameSite=Strict — see packages/security/src/cookie.ts.
+    expect(session?.sameSite).toBe('strict');
     expect(session?.path).toBe('/');
     expect(session?.maxAge).toBe(600);
 

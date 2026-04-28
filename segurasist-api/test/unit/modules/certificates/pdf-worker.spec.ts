@@ -1,6 +1,7 @@
 /**
  * Unit tests del PdfWorkerService — mock Puppeteer/S3/SQS/Prisma.
  */
+import { createHash } from 'node:crypto';
 import type { PrismaBypassRlsService } from '../../../../src/common/prisma/prisma-bypass-rls.service';
 import type { Env } from '../../../../src/config/env.schema';
 import type { S3Service } from '../../../../src/infra/aws/s3.service';
@@ -104,7 +105,8 @@ describe('PdfWorkerService', () => {
     });
 
     expect(result.certificateId).toBe('cert-1');
-    expect(puppeteer.renderPdf).toHaveBeenCalledTimes(1);
+    // Fix C-01: 2-pass render (PASS-1 hash, PASS-2 con QR del hash real).
+    expect(puppeteer.renderPdf).toHaveBeenCalledTimes(2);
     expect(s3.putObject).toHaveBeenCalledTimes(1);
     const putCall = (s3.putObject as jest.Mock).mock.calls[0][0];
     expect(putCall.ServerSideEncryption).toBe('aws:kms');
@@ -264,6 +266,81 @@ describe('PdfWorkerService', () => {
     expect(data.hash).toMatch(/^[a-f0-9]{64}$/);
     expect(data.s3Key).toMatch(/v1\.pdf$/);
     expect(data.qrPayload).toMatch(/\/v1\/certificates\/verify\/[a-f0-9]{64}$/);
+  });
+
+  /**
+   * Fix C-01 invariant: `Certificate.hash` debe ser el SHA-256 del buffer
+   * Puppeteer (PASS-1) — NO un valor random derivado de `randomUUID()`.
+   *
+   * Pre-fix: el test "buffer→SHA===hash" fallaba porque `pdf-worker.service.ts`
+   * persistía `provisionalHash` (random) en BD; el SHA real se calculaba
+   * pero se descartaba (`void pdfHash`).
+   *
+   * Post-fix: el worker hace 2-pass render. PASS-1 produce buffer cuyo
+   * SHA-256 es `realHash`, persistido como `Certificate.hash` y codificado
+   * en el QR del PASS-2.
+   */
+  it('Fix C-01: Certificate.hash === SHA-256(buffer Puppeteer PASS-1)', async () => {
+    const { mockClient, prismaBypass, s3, sqs, puppeteer } = makeMocks();
+    const tenantId = '11111111-1111-1111-1111-111111111111';
+    const fixedBuffer = Buffer.from('%PDF-1.4 fixed-content-for-hash-test');
+    const expectedSha = createHash('sha256').update(fixedBuffer).digest('hex');
+
+    // Cuando Puppeteer es invocado, devuelve siempre el mismo buffer
+    // → SHA(PASS-1) === SHA(PASS-2) === expectedSha.
+    (puppeteer.renderPdf as jest.Mock).mockResolvedValue({
+      pdf: fixedBuffer,
+      durationMs: 50,
+    });
+
+    mockClient.insured.findFirst.mockResolvedValue({
+      id: 'i1',
+      tenantId,
+      packageId: 'p1',
+      fullName: 'Y',
+      curp: 'CURP',
+      validFrom: new Date('2026-01-01'),
+      validTo: new Date('2026-12-31'),
+      package: { id: 'p1', name: 'P', coverages: [] },
+    });
+    mockClient.tenant.findFirst.mockResolvedValue({ id: tenantId, name: 'T', slug: 'mac', brandJson: null });
+    mockClient.package.findFirst.mockResolvedValue({ id: 'p1', name: 'P', coverages: [] });
+    mockClient.certificate.create.mockResolvedValue({ id: 'c1' });
+
+    const worker = new PdfWorkerService(prismaBypass, s3, sqs, puppeteer, makeEnv());
+    await worker.handleEvent({
+      kind: 'insured.created',
+      tenantId,
+      insuredId: 'i1',
+      packageId: 'p1',
+      source: { batchId: 'b', rowNumber: 1 },
+      occurredAt: new Date().toISOString(),
+    });
+
+    // Invariante crítico C-01: hash persistido === SHA-256 del buffer.
+    const certData = mockClient.certificate.create.mock.calls[0][0].data;
+    expect(certData.hash).toBe(expectedSha);
+
+    // qrPayload codifica el realHash en la URL de verificación.
+    expect(certData.qrPayload).toBe(
+      `http://localhost:3000/v1/certificates/verify/${expectedSha}`,
+    );
+
+    // S3 metadata: x-hash matchea Certificate.hash (lookup); además
+    // x-sha256-content guarda el SHA del archivo real subido.
+    const putMeta = (s3.putObject as jest.Mock).mock.calls[0][0].Metadata;
+    expect(putMeta['x-hash']).toBe(expectedSha);
+    expect(putMeta['x-sha256-content']).toBe(expectedSha);
+
+    // Evento certificate.issued lleva el hash real (no random).
+    const msg = (sqs.sendMessage as jest.Mock).mock.calls[0][1] as {
+      kind: string;
+      hash: string;
+      verificationUrl: string;
+    };
+    expect(msg.kind).toBe('certificate.issued');
+    expect(msg.hash).toBe(expectedSha);
+    expect(msg.verificationUrl).toContain(`/verify/${expectedSha}`);
   });
 
   it('NO emite issued si tenant no existe (lanza error semántico)', async () => {

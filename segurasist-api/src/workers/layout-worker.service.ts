@@ -129,6 +129,14 @@ export class LayoutWorkerService implements OnModuleInit, OnModuleDestroy {
         rows.map((r) => (r.raw.curp ?? '').toUpperCase()),
       );
 
+      // C-05 fix: pre-computar duplicados intra-archivo SOBRE TODAS las filas
+      // ANTES del loop de chunks. Si los computamos por chunk
+      // (`validateAll(slice, ctx)` los recalcularía sobre slice), las CURPs
+      // duplicadas separadas por >VALIDATION_CHUNK_SIZE filas NUNCA se marcan
+      // `DUPLICATED_IN_FILE` (cada chunk las ve sólo una vez). Pasamos el set
+      // pre-computado al validator para que lo use sin recalcular.
+      const intraFile = this.validator.findIntraFileDuplicates(rows);
+
       let processed = 0;
       let okCount = 0;
       let errorCount = 0;
@@ -136,7 +144,7 @@ export class LayoutWorkerService implements OnModuleInit, OnModuleDestroy {
 
       for (let i = 0; i < rows.length; i += VALIDATION_CHUNK_SIZE) {
         const slice = rows.slice(i, i + VALIDATION_CHUNK_SIZE);
-        const chunkResults = this.validator.validateAll(slice, ctx);
+        const chunkResults = this.validator.validateAll(slice, ctx, intraFile);
         allResults.push(...chunkResults);
         for (const r of chunkResults) {
           if (r.valid) okCount += 1;
@@ -171,11 +179,10 @@ export class LayoutWorkerService implements OnModuleInit, OnModuleDestroy {
         rowsOk: okCount,
         rowsError: errorCount,
       });
-      await this.sqs.sendMessage(
-        this.env.SQS_QUEUE_LAYOUT,
-        event as unknown as Record<string, unknown>,
-        `${batchId}:preview_ready`,
-      );
+      // C-09: dedupeId removido — cola standard ignora MessageDeduplicationId.
+      // El re-procesamiento es idempotente por construcción (batchError
+      // deleteMany + recreate al inicio del processBatch).
+      await this.sqs.sendMessage(this.env.SQS_QUEUE_LAYOUT, event as unknown as Record<string, unknown>);
       this.log.log({ batchId, ok: okCount, error: errorCount }, 'preview_ready emitido');
     } catch (err) {
       this.log.error({ err, batchId, tenantId }, 'fallo procesamiento batch');

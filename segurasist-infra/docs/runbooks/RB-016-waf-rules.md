@@ -1,4 +1,4 @@
-# RB-012 — WAF block legítimo / managed rules tunables
+# RB-016 — WAF block legítimo / managed rules tunables
 
 - Severity: P2 (cliente afectado, no incidente sistémico)
 - On-call SLA: acknowledge ≤ 1 h (business hours), resolve ≤ 8 h
@@ -6,7 +6,10 @@
 - Story origen: S3-10
 - Modulo afectado: `segurasist-infra/modules/waf-web-acl`
 
-> Numeración: `RB-011` se asignó a DAST en S2-08; este runbook toma `RB-012`.
+> Numeración: este runbook tomaba `RB-012`; F8 iter 2 lo renumeró a
+> `RB-016` para liberar el slot `RB-012` para
+> `RB-012-pdf-generation-backlog.md` (audit Sprint 5). DAST migró
+> simétricamente de `RB-011` a `RB-015`.
 
 ## Symptom
 

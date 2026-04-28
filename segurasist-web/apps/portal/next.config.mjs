@@ -17,6 +17,12 @@ const nextConfig = {
     typedRoutes: true,
   },
   async headers() {
+    // H-05: el preview del certificado se monta en un <iframe> que carga la
+    // URL firmada del PDF (S3 presigned o CloudFront). Sin `frame-src` la
+    // directiva cae a `default-src 'self'` y el iframe queda en blanco en
+    // prod. Permitimos S3 mx-central-1 y CloudFront — ambos proyectados por
+    // la infra. `frame-ancestors 'none'` sigue protegiendo al portal de ser
+    // embebido por terceros (clickjacking) — son directivas ortogonales.
     const csp = [
       "default-src 'self'",
       "script-src 'self' 'unsafe-inline'",
@@ -24,6 +30,7 @@ const nextConfig = {
       "img-src 'self' data: https://*.amazonaws.com",
       "font-src 'self' data:",
       "connect-src 'self' https://api.segurasist.app https://cognito-idp.mx-central-1.amazonaws.com",
+      "frame-src 'self' https://*.s3.mx-central-1.amazonaws.com https://*.cloudfront.net",
       "frame-ancestors 'none'",
       "base-uri 'self'",
       "form-action 'self' https://*.amazoncognito.com",

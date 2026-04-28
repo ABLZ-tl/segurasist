@@ -20,6 +20,8 @@ output "tf_role_arns" {
   description = "Terraform role ARNs (assume from infra workflow)"
   value = {
     plan_dev      = aws_iam_role.tf_plan_dev.arn
+    plan_staging  = aws_iam_role.tf_plan_staging.arn
+    plan_prod     = aws_iam_role.tf_plan_prod.arn
     apply_staging = aws_iam_role.tf_apply_staging.arn
     apply_prod    = aws_iam_role.tf_apply_prod.arn
   }

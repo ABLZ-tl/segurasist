@@ -31,6 +31,7 @@ import { ENV_TOKEN } from '@config/config.module';
 import type { Env } from '@config/env.schema';
 import { S3Service } from '@infra/aws/s3.service';
 import { SqsService } from '@infra/aws/sqs.service';
+import type { AuditContext } from '@modules/audit/audit-context.factory';
 import { AuditWriterService } from '@modules/audit/audit-writer.service';
 import {
   ConflictException,
@@ -50,6 +51,7 @@ import {
   type ExportStatusResponse,
 } from './dto/export.dto';
 import { CreateInsuredDto, ListInsuredsQuery, UpdateInsuredDto } from './dto/insured.dto';
+import { buildInsuredsWhere } from './where-builder';
 
 /** Presigned download TTL (24h, deliberadamente menor que certificados que duran 7d). */
 const EXPORT_DOWNLOAD_TTL_SECONDS = 24 * 60 * 60;
@@ -267,45 +269,17 @@ export class InsuredsService {
     const limit = Math.min(query.limit ?? DEFAULT_LIMIT, MAX_LIMIT);
     const client = this.clientFor(scope);
 
-    const where: Prisma.InsuredWhereInput = { deletedAt: null };
+    // H-17 — `list`, `buildExportWhere` y `reports-worker.queryInsureds`
+    // comparten la misma forma de filtros (q/status/packageId/validFrom/To).
+    // El builder centraliza el OR fuzzy + ranges para que filtros nuevos
+    // toquen UN solo sitio (ver `where-builder.ts`).
+    const where = buildInsuredsWhere(query);
     // Path superadmin: tenantId opcional (cross-tenant si no se pasa).
     // Path RLS: el filtro lo aplica `app.current_tenant`; el tenantId del scope
     // (que viene del JWT) ya está implícito y no necesita where adicional.
     if (scope.platformAdmin && scope.tenantId) {
       where.tenantId = scope.tenantId;
     }
-    if (query.status) where.status = query.status;
-    if (query.packageId) where.packageId = query.packageId;
-    if (query.q) {
-      const term = query.q.trim();
-      // S3-07 — buscamos también en `metadata.numeroEmpleadoExterno` como
-      // proxy de "número de póliza" (en MVP no hay columna policy_number
-      // dedicada — el batch ingest CSV viene con ese campo en metadata).
-      // Prisma JSON filter `path:[...]` + `string_contains` traduce a
-      // `metadata->'numeroEmpleadoExterno' ILIKE '%term%'`. Sin índice GIN
-      // sobre el path: aceptable para MVP (volumen <100k) — en S5 se evalúa
-      // promover a columna first-class si crece el peso.
-      where.OR = [
-        { fullName: { contains: term, mode: 'insensitive' } },
-        { curp: { contains: term.toUpperCase() } },
-        { rfc: { contains: term.toUpperCase() } },
-        {
-          metadata: {
-            path: ['numeroEmpleadoExterno'],
-            string_contains: term,
-          },
-        },
-      ];
-    }
-    const validFromRange: { gte?: Date; lte?: Date } = {};
-    if (query.validFromGte) validFromRange.gte = new Date(query.validFromGte);
-    if (query.validFromLte) validFromRange.lte = new Date(query.validFromLte);
-    if (Object.keys(validFromRange).length > 0) where.validFrom = validFromRange;
-
-    const validToRange: { gte?: Date; lte?: Date } = {};
-    if (query.validToGte) validToRange.gte = new Date(query.validToGte);
-    if (query.validToLte) validToRange.lte = new Date(query.validToLte);
-    if (Object.keys(validToRange).length > 0) where.validTo = validToRange;
 
     if (query.cursor) {
       const decoded = decodeCursor(query.cursor);
@@ -425,10 +399,11 @@ export class InsuredsService {
    * (anti-enumeration: NO 403 para no diferenciar entre "no existe" y "no
    * autorizado").
    *
-   * Audit: persiste `action='read'` con `resourceType='insureds'` y
-   * `payloadDiff={ subAction: 'viewed_360' }` — fire-and-forget. El enum
-   * `AuditAction` no incluye 'view' explícito, así que codificamos el
-   * sub-action en el diff (compatible con el chain hash existente).
+   * Audit: persiste `action='read_viewed'` con `resourceType='insureds'`
+   * (fire-and-forget). F6 iter 2 H-01: antes era `action='read'` con
+   * `payloadDiff.subAction='viewed_360'` (overload semántico) — ahora el
+   * enum `AuditAction` extendido (migration 20260428_audit_action_enum_extend)
+   * permite queries SQL eficientes por action sin scan JSON.
    *
    * Tenant isolation: usamos siempre `clientFor(scope)`. En path
    * tenant-scoped, RLS filtra automáticamente; el `where.tenantId` adicional
@@ -437,7 +412,7 @@ export class InsuredsService {
   async find360(
     id: string,
     scope: InsuredsScope,
-    audit?: { ip?: string; userAgent?: string; traceId?: string },
+    auditCtx?: AuditContext,
   ): Promise<Insured360> {
     const client = this.clientFor(scope);
     const baseWhere: Prisma.InsuredWhereInput = { id, deletedAt: null };
@@ -622,19 +597,20 @@ export class InsuredsService {
       })),
     };
 
-    // Audit fire-and-forget. Sub-action `viewed_360` codificado en payloadDiff
-    // porque el enum AuditAction sólo cubre verbs CRUD/login/logout/export/reissue.
+    // Audit fire-and-forget (F6 iter 2 H-01): action='read_viewed' (enum
+    // extendido) reemplaza el overload payloadDiff.subAction='viewed_360'.
+    // ip/userAgent/traceId vienen del AuditContext canónico que el controller
+    // deriva via AuditContextFactory.fromRequest() — drift entre callers cero.
     if (this.auditWriter) {
       void this.auditWriter.record({
         tenantId: insuredTenantId,
         actorId: scope.actorId,
-        action: 'read',
+        action: 'read_viewed',
         resourceType: 'insureds',
         resourceId: id,
-        ip: audit?.ip,
-        userAgent: audit?.userAgent,
-        traceId: audit?.traceId,
-        payloadDiff: { subAction: 'viewed_360' },
+        ip: auditCtx?.ip,
+        userAgent: auditCtx?.userAgent,
+        traceId: auditCtx?.traceId,
       });
     }
 
@@ -665,12 +641,13 @@ export class InsuredsService {
     if (user.role !== 'insured') {
       throw new ForbiddenException('Endpoint solo para asegurados');
     }
-    // NOTE — el lookup por `cognitoSub` asume que la columna existe en la
-    // tabla `insureds` (migración paralela del Sprint 4 que liga el insured
-    // creado por OTP con el sub del pool insured). El where va casteado para
-    // no romper el TS strict si la migración aún no está aplicada en main.
+    // H-16 — la columna `cognitoSub` ya está en el schema (Prisma client
+    // generado post-migración Sprint 4: ver `Insured.cognitoSub` y
+    // `@@unique([cognitoSub])`). El cast `as unknown as Prisma.InsuredWhereInput`
+    // anterior era deuda residual cuando la migración estaba pending; ya no
+    // es necesario y se elimina para que el typing detecte regresiones.
     const insured = await this.prisma.client.insured.findFirst({
-      where: { cognitoSub: user.cognitoSub, deletedAt: null } as unknown as Prisma.InsuredWhereInput,
+      where: { cognitoSub: user.cognitoSub, deletedAt: null },
       include: { package: true, tenant: true },
     });
     if (!insured) {
@@ -897,7 +874,6 @@ export class InsuredsService {
           format,
           filters,
         },
-        exportId,
       );
     } catch (err) {
       this.log.error(
@@ -984,35 +960,15 @@ export class InsuredsService {
   }
 
   /**
-   * S3-09 — Construye el WHERE compartido entre `list` y el worker de export.
-   * Reutilizamos esto para garantizar que el export incluya EXACTAMENTE las
-   * mismas filas que el listado del FE. Hard-cap aplicado por el caller.
+   * S3-09 / H-17 — Construye el WHERE compartido entre `list` y el worker de
+   * export. Re-export delgado del builder compartido (`where-builder.ts`):
+   * delega 100% del armado para que la equivalencia con `list` esté
+   * garantizada por construcción (un sólo punto de modificación).
    *
    * NO incluye cursor/limit (export procesa todo).
    */
   buildExportWhere(filters: ExportFilters): Prisma.InsuredWhereInput {
-    const where: Prisma.InsuredWhereInput = { deletedAt: null };
-    if (filters.status) where.status = filters.status;
-    if (filters.packageId) where.packageId = filters.packageId;
-    if (filters.q) {
-      const term = filters.q.trim();
-      where.OR = [
-        { fullName: { contains: term, mode: 'insensitive' } },
-        { curp: { contains: term.toUpperCase() } },
-        { rfc: { contains: term.toUpperCase() } },
-        { metadata: { path: ['numeroEmpleadoExterno'], string_contains: term } },
-      ];
-    }
-    const validFromRange: { gte?: Date; lte?: Date } = {};
-    if (filters.validFromGte) validFromRange.gte = new Date(filters.validFromGte);
-    if (filters.validFromLte) validFromRange.lte = new Date(filters.validFromLte);
-    if (Object.keys(validFromRange).length > 0) where.validFrom = validFromRange;
-
-    const validToRange: { gte?: Date; lte?: Date } = {};
-    if (filters.validToGte) validToRange.gte = new Date(filters.validToGte);
-    if (filters.validToLte) validToRange.lte = new Date(filters.validToLte);
-    if (Object.keys(validToRange).length > 0) where.validTo = validToRange;
-    return where;
+    return buildInsuredsWhere(filters);
   }
 
   /** Hard cap exportable (anti-megacrayón PII). Re-export para tests. */

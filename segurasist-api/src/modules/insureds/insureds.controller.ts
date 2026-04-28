@@ -1,10 +1,12 @@
 import { CurrentUser, type AuthUser } from '@common/decorators/current-user.decorator';
 import { Roles } from '@common/decorators/roles.decorator';
 import { Tenant, TenantCtx } from '@common/decorators/tenant.decorator';
+import { assertPlatformAdmin } from '@common/guards/assert-platform-admin';
 import { JwtAuthGuard } from '@common/guards/jwt-auth.guard';
 import { RolesGuard } from '@common/guards/roles.guard';
 import { ZodValidationPipe } from '@common/pipes/zod-validation.pipe';
 import { Throttle } from '@common/throttler/throttler.decorators';
+import { AuditContextFactory } from '@modules/audit/audit-context.factory';
 import {
   Body,
   Controller,
@@ -38,7 +40,10 @@ import { InsuredsService, type InsuredsScope } from './insureds.service';
 @Controller({ path: 'insureds', version: '1' })
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class InsuredsController {
-  constructor(private readonly insureds: InsuredsService) {}
+  constructor(
+    private readonly insureds: InsuredsService,
+    private readonly auditCtx: AuditContextFactory,
+  ) {}
 
   /**
    * M2 — extrae el scope (platformAdmin + tenantId) leyendo `req.user`
@@ -51,6 +56,12 @@ export class InsuredsController {
     queryTenantId: string | undefined,
   ): InsuredsScope {
     const platformAdmin = req.user?.platformAdmin === true;
+    if (platformAdmin) {
+      // H-14 — runtime defense-in-depth: si el flag platformAdmin viene en true,
+      // el service usará PrismaBypassRlsService (BYPASSRLS, cross-tenant). Validamos
+      // que el role del JWT sea admin_segurasist antes de permitirlo.
+      assertPlatformAdmin(req.user);
+    }
     return {
       platformAdmin,
       tenantId: platformAdmin ? queryTenantId : req.tenant?.id,
@@ -112,12 +123,10 @@ export class InsuredsController {
     @Query() q: { tenantId?: string },
     @Req() req: FastifyRequest & { user?: AuthUser; tenant?: TenantCtx },
   ) {
-    const ip = (req.ip ?? '').toString() || undefined;
-    const ua = req.headers['user-agent'];
-    const userAgent = typeof ua === 'string' ? ua : undefined;
-    const reqId = req.id;
-    const traceId = typeof reqId === 'string' ? reqId : undefined;
-    return this.insureds.find360(id, this.buildScope(req, q.tenantId), { ip, userAgent, traceId });
+    // F6 iter 2 H-01 — AuditContext canónico via factory (request-scoped).
+    // Sustituye la extracción manual ad-hoc previa de {ip, userAgent, traceId}
+    // por la lista única SENSITIVE_KEYS-aware del factory.
+    return this.insureds.find360(id, this.buildScope(req, q.tenantId), this.auditCtx.fromRequest());
   }
 
   @Post()
@@ -170,16 +179,14 @@ export class InsuredsController {
   ) {
     const userId = req.user?.id;
     if (!userId) throw new HttpException('Unauthorized', HttpStatus.UNAUTHORIZED);
-    const ip = (req.ip ?? '').toString() || undefined;
-    const ua = req.headers['user-agent'];
-    const userAgent = typeof ua === 'string' ? ua : undefined;
-    const reqId = req.id;
-    const traceId = typeof reqId === 'string' ? reqId : undefined;
+    // F6 iter 2 H-01 — propagar AuditContext canónico para el row de audit
+    // `export`. El service combina con `actor.id` (que es el user del JWT).
+    const ctx = this.auditCtx.fromRequest();
     return this.insureds.exportRequest(dto.format, dto.filters, tenant, {
       id: userId,
-      ip,
-      userAgent,
-      traceId,
+      ip: ctx.ip,
+      userAgent: ctx.userAgent,
+      traceId: ctx.traceId,
     });
   }
 }

@@ -1,5 +1,6 @@
 import { Global, Module } from '@nestjs/common';
 import { AuditChainVerifierService } from './audit-chain-verifier.service';
+import { AuditContextFactory } from './audit-context.factory';
 import { AuditS3MirrorService } from './audit-s3-mirror.service';
 import { AuditWriterService } from './audit-writer.service';
 
@@ -31,7 +32,7 @@ import { AuditWriterService } from './audit-writer.service';
  */
 @Global()
 @Module({
-  providers: [AuditWriterService, AuditS3MirrorService, AuditChainVerifierService],
-  exports: [AuditWriterService, AuditS3MirrorService, AuditChainVerifierService],
+  providers: [AuditWriterService, AuditS3MirrorService, AuditChainVerifierService, AuditContextFactory],
+  exports: [AuditWriterService, AuditS3MirrorService, AuditChainVerifierService, AuditContextFactory],
 })
 export class AuditPersistenceModule {}

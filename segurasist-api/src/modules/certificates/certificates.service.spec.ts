@@ -83,18 +83,22 @@ describe('CertificatesService.urlForSelf', () => {
       'certificates/t-1/ins-cert-1/v2.pdf',
       7 * 24 * 60 * 60,
     );
-    // Audit log obligatorio.
+    // Audit log obligatorio (F6 iter 2 H-01: action='read_downloaded' del enum
+    // extendido reemplaza el overload payloadDiff.subAction='downloaded').
     expect(audit.record).toHaveBeenCalledWith(
       expect.objectContaining({
         tenantId: 't-1',
         actorId: cognitoSub,
-        action: 'read',
+        action: 'read_downloaded',
         resourceType: 'certificates',
         resourceId: 'cert-1',
         ip: '10.0.0.1',
-        payloadDiff: { subAction: 'downloaded' },
+        userAgent: 'jest',
+        traceId: 't1',
       }),
     );
+    const auditCall = (audit.record as jest.Mock).mock.calls[0]?.[0];
+    expect((auditCall as { payloadDiff?: unknown }).payloadDiff).toBeUndefined();
   });
 
   it('sin cert emitido → NotFoundException con mensaje user-friendly', async () => {

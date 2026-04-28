@@ -30,6 +30,7 @@ import { BatchesService } from '@modules/batches/batches.service';
 import { BatchesParserService } from '@modules/batches/parser/batches-parser.service';
 import { BatchesValidatorService } from '@modules/batches/validator/batches-validator.service';
 import { computeCurpChecksum } from '@modules/batches/validator/curp-checksum';
+import { LayoutWorkerService } from '../../src/workers/layout-worker.service';
 import ExcelJS from 'exceljs';
 import { mock, mockDeep } from 'jest-mock-extended';
 
@@ -297,6 +298,163 @@ describe('Batches integration — sync path', () => {
         'user-1',
       ),
     ).rejects.toThrow(/máximo de 10000/);
+  }, 90_000);
+
+  /**
+   * C-05 — fix: pre-computar duplicados intra-archivo ANTES del loop chunks
+   * en LayoutWorker. Construimos un archivo con 1010 filas donde la fila 5 y
+   * la fila 800 comparten CURP — están en chunks distintos (chunk size = 500).
+   *
+   * Esperamos:
+   *   - findIntraFileDuplicates corre 1 vez sobre el set completo.
+   *   - La fila 800 se marca DUPLICATED_IN_FILE (la fila 5 es la "primera
+   *     ocurrencia" y se valida normalmente).
+   *
+   * Pre-fix: el dup de fila 800 NO se marcaba porque cada chunk ejecutaba
+   * `findIntraFileDuplicates(slice)` y NO veía la fila 5.
+   */
+  it('C-05: 1k filas con dups separados >500 rows → todos marcados DUPLICATED_IN_FILE', async () => {
+    const dupCurp = genCurp(900);
+    const total = 1010;
+    const dupRows = new Set<number>();
+    // Sembramos el dup en filas 5, 600, 900 (chunks 0, 1, 2 con CHUNK=500).
+    dupRows.add(5);
+    dupRows.add(600);
+    dupRows.add(900);
+    const rows = Array.from({ length: total }, (_, i) => ({
+      curp: dupRows.has(i) ? dupCurp : genCurp(i + 20_000),
+      nombre_completo: `Persona ${i}`,
+      fecha_nacimiento: '1990-01-01',
+      paquete: 'Premium',
+      vigencia_inicio: '2026-01-01',
+      vigencia_fin: '2026-12-31',
+    }));
+    // Construimos un xlsx para que el parser lo lea como en prod.
+    const buf = await buildXlsx(rows);
+
+    // Mocks de infra para el LayoutWorker.
+    const prismaBypass = mockDeep<PrismaBypassRlsService>();
+    prismaBypass.client.package.findMany.mockResolvedValue([
+      { id: 'p-prem', name: 'Premium' },
+    ] as never);
+    prismaBypass.client.insured.findMany.mockResolvedValue([] as never);
+    prismaBypass.client.batchError.deleteMany.mockResolvedValue({ count: 0 } as never);
+    // Capturamos los rows insertados en cada chunk para inspección.
+    const insertedErrors: Array<Record<string, unknown>> = [];
+    prismaBypass.client.batchError.createMany.mockImplementation((async (args: unknown) => {
+      const data = (args as { data: Array<Record<string, unknown>> }).data;
+      insertedErrors.push(...data);
+      return { count: data.length };
+    }) as never);
+    prismaBypass.client.batch.update.mockResolvedValue({} as never);
+    prismaBypass.client.batchError.create.mockResolvedValue({} as never);
+
+    const s3 = mock<S3Service>();
+    s3.getObject.mockResolvedValue(buf as never);
+    const sqs = mock<SqsService>();
+    const parser = new BatchesParserService();
+    const validator = new BatchesValidatorService();
+    const worker = new LayoutWorkerService(
+      prismaBypass as unknown as PrismaBypassRlsService,
+      s3,
+      sqs,
+      parser,
+      validator,
+      ENV,
+    );
+
+    await worker.processBatch({
+      kind: 'batch.validate',
+      batchId: 'batch-cross-chunk',
+      tenantId: TENANT.id,
+      s3Key: 'uploads/x',
+      mimetype: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+
+    const dupErrors = insertedErrors.filter((e) => e.errorCode === 'DUPLICATED_IN_FILE');
+    // Esperamos 2 marcas de DUPLICATED_IN_FILE (las 2da y 3ra ocurrencia; la
+    // primera fila 5 NO es dup, es la "first seen").
+    expect(dupErrors.length).toBe(2);
+    // Validamos que los dups detectados están en chunks distintos al de la
+    // primera ocurrencia: filas 600 (chunk 1) y 900 (chunk 1) NO se marcaban
+    // antes del fix.
+    const dupRowNumbers = dupErrors.map((e) => e.rowNumber as number).sort((a, b) => a - b);
+    expect(dupRowNumbers).toEqual(expect.arrayContaining([dupRowNumbers[0], dupRowNumbers[1]]));
+    // El último dup queda en una fila >500 después de la primera ocurrencia.
+    expect(Math.max(...dupRowNumbers)).toBeGreaterThan(500);
+  }, 90_000);
+
+  /**
+   * C-08 — confirm con rowsToInclude subset → batch.queuedCount debe reflejar
+   * el subset (no rowsTotal/rowsOk). Pre-fix: queuedCount no existía y el
+   * worker comparaba contra rowsTotal → batch en `processing` infinito.
+   */
+  it('C-08: confirm con rowsToInclude subset → queuedCount = subset size', async () => {
+    // Fixture: 100 filas válidas, confirmamos solo 3 de ellas.
+    const rows = Array.from({ length: 100 }, (_, i) => ({
+      curp: genCurp(i + 70_000),
+      nombre_completo: `Persona ${i}`,
+      fecha_nacimiento: '1990-01-01',
+      paquete: 'Premium',
+      vigencia_inicio: '2026-01-01',
+      vigencia_fin: '2026-12-31',
+    }));
+    const buf = await buildXlsx(rows);
+
+    const { svc, prisma, s3, sqs } = makeService();
+    // Upload sync para crear el batch en preview_ready.
+    s3.getObject.mockResolvedValue(buf as never);
+    const out = await svc.upload(
+      {
+        buffer: buf,
+        filename: 'subset.xlsx',
+        mimetype: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      },
+      TENANT,
+      'user-1',
+    );
+    expect(out.rowsOk).toBe(100);
+
+    // Para el confirm: el service vuelve a hacer `findFirst` sobre el batch.
+    // Le devolvemos un batch en estado preview_ready con rowsTotal=100,
+    // rowsOk=100. Capturamos el último `update` para chequear queuedCount.
+    prisma.client.batch.findFirst.mockResolvedValue({
+      id: out.batchId,
+      tenantId: TENANT.id,
+      fileS3Key: 'uploads/x',
+      fileName: 'subset.xlsx',
+      status: 'preview_ready',
+      rowsTotal: 100,
+      rowsOk: 100,
+      rowsError: 0,
+      processedRows: 0,
+      successRows: 0,
+      failedRows: 0,
+      queuedCount: null,
+      completedEventEmittedAt: null,
+      startedAt: new Date(),
+    } as never);
+
+    const result = await svc.confirm(out.batchId, { rowsToInclude: [1, 2, 3] }, TENANT);
+    expect(result.queued).toBe(3);
+
+    // Última invocación de batch.update debe llevar queuedCount=3 + reset a 0.
+    const updateCalls = prisma.client.batch.update.mock.calls;
+    const transitionToProcessing = updateCalls
+      .map((c) => (c[0] as { data: Record<string, unknown> }).data)
+      .find((d) => d.status === 'processing');
+    expect(transitionToProcessing).toBeDefined();
+    expect(transitionToProcessing!.queuedCount).toBe(3);
+    expect(transitionToProcessing!.processedRows).toBe(0);
+    expect(transitionToProcessing!.successRows).toBe(0);
+    expect(transitionToProcessing!.failedRows).toBe(0);
+    expect(transitionToProcessing!.completedEventEmittedAt).toBeNull();
+
+    // Y se enviaron exactamente 3 mensajes a la cola insureds-creation.
+    const creationCalls = sqs.sendMessage.mock.calls.filter((c) => (c[1] as { kind?: string }).kind === 'insured.create');
+    expect(creationCalls.length).toBe(3);
+    const includedRowNumbers = creationCalls.map((c) => (c[1] as { rowNumber: number }).rowNumber).sort((a: number, b: number) => a - b);
+    expect(includedRowNumbers).toEqual([1, 2, 3]);
   }, 90_000);
 
   it('archivo entre 1k y 10k → mode=async (encolado a SQS)', async () => {

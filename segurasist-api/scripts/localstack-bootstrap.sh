@@ -132,8 +132,17 @@ aws_local s3api put-object-lock-configuration \
 echo "[s3] ${AUDIT_BUCKET} Object Lock COMPLIANCE 730d aplicado"
 
 # =========================================================================
-# 2) SQS queues — layout, insureds-creation, pdf, email, reports
+# 2) SQS queues — layout, insureds-creation, pdf, email, reports + DLQs
 # =========================================================================
+#
+# C-09 / H-29 (Sprint 4): todas las colas son **standard** (NO FIFO). Cada
+# cola tiene su DLQ con redrive policy `maxReceiveCount=3`. Las URLs de
+# las colas se exportan vía env vars (`SQS_QUEUE_*`) — ningún worker debe
+# fabricar URLs vía `String.replace(...)` (eso falla en AWS real porque
+# el account-id es distinto).
+#
+# Nombres alineados con el módulo Terraform `modules/sqs-queue/` y con las
+# env vars en `src/config/env.schema.ts`.
 QUEUES=(
   "layout-validation-queue"
   "insureds-creation-queue"
@@ -143,13 +152,33 @@ QUEUES=(
 )
 
 for q in "${QUEUES[@]}"; do
+  dlq_name="${q}-dlq"
+
+  # 2.a) DLQ primero — la cola principal la referencia en el redrive policy.
+  if aws_local sqs get-queue-url --queue-name "${dlq_name}" >/dev/null 2>&1; then
+    echo "[sqs] ${dlq_name} ya existe"
+  else
+    echo "[sqs] creando ${dlq_name}"
+    aws_local sqs create-queue \
+      --queue-name "${dlq_name}" \
+      --attributes "MessageRetentionPeriod=1209600" >/dev/null
+  fi
+
+  dlq_url=$(aws_local sqs get-queue-url --queue-name "${dlq_name}" --query 'QueueUrl' --output text)
+  dlq_arn=$(aws_local sqs get-queue-attributes \
+    --queue-url "${dlq_url}" \
+    --attribute-names QueueArn \
+    --query 'Attributes.QueueArn' --output text)
+
+  # 2.b) Cola principal con redrive policy → DLQ tras 3 receives.
   if aws_local sqs get-queue-url --queue-name "${q}" >/dev/null 2>&1; then
     echo "[sqs] ${q} ya existe"
   else
-    echo "[sqs] creando ${q}"
+    echo "[sqs] creando ${q} (con redrive → ${dlq_name})"
+    redrive=$(printf '{"deadLetterTargetArn":"%s","maxReceiveCount":"3"}' "${dlq_arn}")
     aws_local sqs create-queue \
       --queue-name "${q}" \
-      --attributes "VisibilityTimeout=300,MessageRetentionPeriod=1209600" >/dev/null
+      --attributes "VisibilityTimeout=300,MessageRetentionPeriod=1209600,RedrivePolicy=${redrive}" >/dev/null
   fi
 done
 
@@ -178,6 +207,7 @@ echo "[localstack-bootstrap] OK"
 echo "  S3:               ${BUCKETS[*]}"
 echo "  S3 (Object Lock): ${AUDIT_BUCKET} (COMPLIANCE 730d)"
 echo "  SQS:              ${QUEUES[*]}"
+echo "  SQS DLQs:         ${QUEUES[*]/%/-dlq}"
 echo "  KMS:              ${ALIAS}"
 echo ""
 echo "  Recordá actualizar S3_BUCKET_AUDIT=${AUDIT_BUCKET} en .env si querés"

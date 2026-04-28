@@ -1,0 +1,12 @@
+{
+  "extends": "@segurasist/config/tsconfig.lib.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "rootDir": ".",
+    "outDir": "dist",
+    "noEmit": true,
+    "types": ["node", "vitest/globals"],
+    "paths": { "@/*": ["./src/*"] }
+  },
+  "include": ["src/**/*", "test/**/*", "vitest.config.ts"]
+}

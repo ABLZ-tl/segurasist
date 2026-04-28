@@ -8,20 +8,29 @@
  *     o operator manual) → marca el cert anterior como `reissued` y crea
  *     uno nuevo con `version+1` para el mismo asegurado.
  *
- * Pipeline por mensaje:
- *   leer datos → cargar template (cache) → render HTML → headless PDF
- *   → calcular SHA-256 → generar QR (apunta a /verify/{hash}) → embed QR →
- *   re-render → upload S3 (SSE-KMS) → INSERT certificates → publish
+ * Pipeline por mensaje (2-pass render — fix C-01 Sprint 4):
+ *   leer datos → cargar template (cache) → render HTML PASS-1 (placeholder QR)
+ *   → calcular SHA-256 del buffer PASS-1 = `realHash` → re-render HTML PASS-2
+ *   con QR apuntando a /verify/{realHash} → upload PASS-2 a S3 (SSE-KMS) →
+ *   INSERT certificate (hash=realHash, qrPayload=URL with realHash) → publish
  *   `certificate.issued` a la cola `email`.
  *
- * Optimización: el QR depende del hash; el hash depende del PDF; el PDF
- * incluye el QR. Para cortar el ciclo: generamos un hash provisional del
- * payload de identificación (insuredId+version+timestamp), construimos el
- * QR contra ese hash, renderizamos el PDF, luego sobreescribimos el hash
- * persistido al SHA-256 del PDF final. El QR sigue resolviéndose vía la
- * BD (lookup por hash provisional). Tradeoff documentado: el hash del QR
- * NO es la sumacomprobación del PDF, es un identificador único; vale como
- * verificador porque la verificación es lookup por hash → cert row.
+ * El ciclo "QR depende del hash; el hash depende del PDF" se resuelve por
+ * 2-pass:
+ *  - PASS-1 produce un PDF cuyo SHA-256 es nuestro `realHash` final.
+ *  - PASS-2 produce el PDF que sube a S3, cuyo QR codifica
+ *    `/verify/{realHash}` → matchea la fila en BD.
+ *
+ * Tradeoff aceptado: el SHA-256 del PDF que vive en S3 (PASS-2) NO es
+ * exactamente `Certificate.hash` (es SHA del PASS-1), porque embedar el QR
+ * con el SHA del PASS-2 dentro del PASS-2 es imposible (referencia circular).
+ * El SHA real del archivo S3 queda en la metadata `x-sha256-content` para
+ * auditoría off-band. El verifier público (`GET /verify/:hash`) usa el campo
+ * `Certificate.hash` (PASS-1) para lookup — coincide con el QR.
+ *
+ * Pre-fix: `Certificate.hash` era random (`provisionalHash` derivado de
+ * `randomUUID`), violando el invariante "hash es SHA-256 de un PDF real".
+ * Pre-fix audit: docs/audit/04-certificates-email-v2.md (CONV-01).
  */
 import { createHash, randomUUID } from 'node:crypto';
 import { DeleteMessageCommand, ReceiveMessageCommand, SQSClient } from '@aws-sdk/client-sqs';
@@ -221,13 +230,21 @@ export class PdfWorkerService implements OnApplicationBootstrap, OnModuleDestroy
 
     const brand = (tenant.brandJson as TenantBrand | null) ?? null;
     const version = input.previousVersion + 1;
-    // Hash provisional (sirve para QR + lookup; no es SHA del PDF).
-    const provisionalHash = createHash('sha256')
+
+    // ---------- Fix C-01: 2-pass render ----------
+    // PASS-1: render con QR placeholder (hash provisional). El SHA-256 del
+    // buffer PASS-1 será el `realHash` que persistamos en BD y que el QR
+    // del PASS-2 codificará. De esta forma:
+    //   - `Certificate.hash` ES el SHA-256 de un PDF real (no random).
+    //   - El QR del PDF (PASS-2) apunta a /verify/{realHash} → lookup OK.
+    // Pre-fix antipattern: el SHA real se calculaba pero se descartaba (`void
+    // pdfHash`); la BD guardaba un hash random derivado de `randomUUID()`.
+    const placeholderHash = createHash('sha256')
       .update(`${tenant.id}:${insured.id}:${version}:${randomUUID()}`)
       .digest('hex');
-    const qr = await buildVerificationQr({
+    const placeholderQr = await buildVerificationQr({
       baseUrl: this.env.CERT_BASE_URL,
-      hash: provisionalHash,
+      hash: placeholderHash,
     });
 
     const { template } = await this.resolver.loadForTenant({
@@ -235,58 +252,65 @@ export class PdfWorkerService implements OnApplicationBootstrap, OnModuleDestroy
       brand,
     });
 
-    const html = template({
-      certificateNumber: provisionalHash.slice(0, 12).toUpperCase(),
-      version,
-      issuedAt: new Date().toISOString().slice(0, 19).replace('T', ' '),
-      insured: {
-        fullName: insured.fullName,
-        curp: insured.curp,
-      },
-      package: { name: pkg.name },
-      coverages: pkg.coverages.map((c) => ({
-        name: c.name,
-        type: c.type,
-        limitFormatted: c.limitAmount
-          ? `$${c.limitAmount.toString()}`
-          : c.limitCount
-            ? `${c.limitCount} usos`
-            : 'Sin límite',
-        copaymentFormatted: c.copayment ? `$${c.copayment.toString()}` : 'Sin copago',
-      })),
-      validFrom: insured.validFrom.toISOString().slice(0, 10),
-      validTo: insured.validTo.toISOString().slice(0, 10),
-      tenant: {
-        name: tenant.name,
-        logo: brand?.logo ?? '',
-        colors: {
-          primary: brand?.colors?.primary ?? '#0B5394',
-          accent: brand?.colors?.accent ?? '#4A90E2',
+    const buildHtml = (qrDataUrl: string, qrPayload: string, hashForDisplay: string): string =>
+      template({
+        certificateNumber: hashForDisplay.slice(0, 12).toUpperCase(),
+        version,
+        issuedAt: new Date().toISOString().slice(0, 19).replace('T', ' '),
+        insured: {
+          fullName: insured.fullName,
+          curp: insured.curp,
         },
-        legal: brand?.legal ?? '',
-      },
-      qrCodeDataUrl: qr.dataUrl,
-      verificationUrl: qr.payload,
-      hashShort: provisionalHash.slice(0, 16),
-    });
+        package: { name: pkg.name },
+        coverages: pkg.coverages.map((c) => ({
+          name: c.name,
+          type: c.type,
+          limitFormatted: c.limitAmount
+            ? `$${c.limitAmount.toString()}`
+            : c.limitCount
+              ? `${c.limitCount} usos`
+              : 'Sin límite',
+          copaymentFormatted: c.copayment ? `$${c.copayment.toString()}` : 'Sin copago',
+        })),
+        validFrom: insured.validFrom.toISOString().slice(0, 10),
+        validTo: insured.validTo.toISOString().slice(0, 10),
+        tenant: {
+          name: tenant.name,
+          logo: brand?.logo ?? '',
+          colors: {
+            primary: brand?.colors?.primary ?? '#0B5394',
+            accent: brand?.colors?.accent ?? '#4A90E2',
+          },
+          legal: brand?.legal ?? '',
+        },
+        qrCodeDataUrl: qrDataUrl,
+        verificationUrl: qrPayload,
+        hashShort: hashForDisplay.slice(0, 16),
+      });
 
-    let pdf: Buffer;
+    // PASS-1: HTML con QR placeholder, render → buffer.
+    const htmlPass1 = buildHtml(placeholderQr.dataUrl, placeholderQr.payload, placeholderHash);
+
+    let pass1Pdf: Buffer;
     try {
-      const result = await this.puppeteer.renderPdf({ html, ref: `cert-${input.insuredId}-v${version}` });
-      pdf = result.pdf;
+      const result = await this.puppeteer.renderPdf({
+        html: htmlPass1,
+        ref: `cert-${input.insuredId}-v${version}-pass1`,
+      });
+      pass1Pdf = result.pdf;
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
-      this.log.warn({ insuredId: input.insuredId, reason }, 'PDF render failed');
+      this.log.warn({ insuredId: input.insuredId, reason }, 'PDF render failed (pass-1)');
       // Persistimos un cert "revoked" placeholder + emitimos failure event.
-      // No retry automático.
+      // No retry automático. Hash placeholder (no hubo buffer real).
       const failedCert = await this.prismaBypass.client.certificate.create({
         data: {
           tenantId: input.tenantId,
           insuredId: input.insuredId,
           version,
           s3Key: '',
-          hash: provisionalHash,
-          qrPayload: qr.payload,
+          hash: placeholderHash,
+          qrPayload: placeholderQr.payload,
           validTo: insured.validTo,
           status: 'revoked',
           reason: `generation_failed: ${reason}`,
@@ -300,7 +324,6 @@ export class PdfWorkerService implements OnApplicationBootstrap, OnModuleDestroy
         reason,
         occurredAt: new Date().toISOString(),
       };
-      // Publica al bus (best effort). Si falla SQS, ya quedó la fila DB.
       try {
         await this.sqs.sendMessage(
           this.env.SQS_QUEUE_EMAIL,
@@ -312,14 +335,75 @@ export class PdfWorkerService implements OnApplicationBootstrap, OnModuleDestroy
       return { certificateId: failedCert.id };
     }
 
-    // Hash final = SHA-256 del PDF (para verificación de integridad descargable).
-    const pdfHash = createHash('sha256').update(pdf).digest('hex');
+    // ---------- realHash = SHA-256 del buffer PASS-1 ----------
+    // Este hash:
+    //  (a) es SHA-256 de un PDF Puppeteer real (el del PASS-1, sin upload),
+    //  (b) se persiste en `Certificate.hash`,
+    //  (c) se codifica en el QR del PASS-2 → lookup en `/verify/:hash` matchea.
+    const realHash = createHash('sha256').update(pass1Pdf).digest('hex');
+
+    // PASS-2: re-render con QR apuntando a /verify/{realHash}.
+    const realQr = await buildVerificationQr({
+      baseUrl: this.env.CERT_BASE_URL,
+      hash: realHash,
+    });
+    const htmlPass2 = buildHtml(realQr.dataUrl, realQr.payload, realHash);
+
+    let pass2Pdf: Buffer;
+    try {
+      const result = await this.puppeteer.renderPdf({
+        html: htmlPass2,
+        ref: `cert-${input.insuredId}-v${version}-pass2`,
+      });
+      pass2Pdf = result.pdf;
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      this.log.warn({ insuredId: input.insuredId, reason }, 'PDF render failed (pass-2)');
+      // Mismo manejo que falla PASS-1: cert revoked + failure event. Hash
+      // que persistimos = realHash (de PASS-1) ya que es el más fiel al
+      // contenido renderizado.
+      const failedCert = await this.prismaBypass.client.certificate.create({
+        data: {
+          tenantId: input.tenantId,
+          insuredId: input.insuredId,
+          version,
+          s3Key: '',
+          hash: realHash,
+          qrPayload: realQr.payload,
+          validTo: insured.validTo,
+          status: 'revoked',
+          reason: `generation_failed: ${reason}`,
+          ...(input.previousCertId ? { reissueOf: input.previousCertId } : {}),
+        },
+      });
+      const failedEvent: CertificateGenerationFailedEvent = {
+        kind: CERTIFICATE_GENERATION_FAILED_KIND,
+        tenantId: input.tenantId,
+        insuredId: input.insuredId,
+        reason,
+        occurredAt: new Date().toISOString(),
+      };
+      try {
+        await this.sqs.sendMessage(
+          this.env.SQS_QUEUE_EMAIL,
+          failedEvent as unknown as Record<string, unknown>,
+        );
+      } catch {
+        /* swallow */
+      }
+      return { certificateId: failedCert.id };
+    }
+
+    // SHA-256 del archivo realmente subido a S3 (auditoría off-band).
+    // No se persiste en BD — vive en S3 metadata para verificación de
+    // integridad del archivo entregado (e.g. operator forense).
+    const s3ContentHash = createHash('sha256').update(pass2Pdf).digest('hex');
     const s3Key = `certificates/${tenant.id}/${insured.id}/v${version}.pdf`;
 
     await this.s3.putObject({
       Bucket: this.env.S3_BUCKET_CERTIFICATES,
       Key: s3Key,
-      Body: pdf,
+      Body: pass2Pdf,
       ContentType: 'application/pdf',
       ServerSideEncryption: 'aws:kms',
       SSEKMSKeyId: this.env.KMS_KEY_ID,
@@ -327,7 +411,12 @@ export class PdfWorkerService implements OnApplicationBootstrap, OnModuleDestroy
         'x-tenant-id': tenant.id,
         'x-insured-id': insured.id,
         'x-version': String(version),
-        'x-hash': pdfHash,
+        // Hash que matchea `Certificate.hash` (lookup público + QR).
+        'x-hash': realHash,
+        // SHA-256 efectivo del archivo en S3 (PASS-2). Útil para
+        // auditoría: un operador que descargue el PDF y recompute SHA
+        // debe obtener este valor; si difiere → tampering del bucket.
+        'x-sha256-content': s3ContentHash,
       },
     });
 
@@ -345,17 +434,10 @@ export class PdfWorkerService implements OnApplicationBootstrap, OnModuleDestroy
           insuredId: input.insuredId,
           version,
           s3Key,
-          // Hash que va al QR + verify lookup. Usamos el SHA del PDF para
-          // que el verificador del cert descargado pueda recomputar y matchear.
-          // El QR ya contiene `provisionalHash` distinto: sólo pasa que ambos
-          // existen como rows? No: el cert solo guarda UNO. Decidimos guardar
-          // pdfHash como `hash` (verifiable contra contenido) — el QR queda
-          // apuntando a un hash que NO es el del PDF. Tradeoff documentado.
-          // Para que el QR funcione, lo movemos: usamos `provisionalHash` en
-          // el QR Y en `hash` row (lookup consistente). El SHA del PDF queda
-          // sólo en S3 metadata `x-hash`.
-          hash: provisionalHash,
-          qrPayload: qr.payload,
+          // Fix C-01: `hash` y `qrPayload` referencian el SHA real (PASS-1).
+          // Lookup público por `/verify/:hash` matchea el QR escaneado.
+          hash: realHash,
+          qrPayload: realQr.payload,
           validTo: insured.validTo,
           status: 'issued',
           ...(input.previousCertId ? { reissueOf: input.previousCertId } : {}),
@@ -363,7 +445,10 @@ export class PdfWorkerService implements OnApplicationBootstrap, OnModuleDestroy
       });
     });
 
-    this.log.log({ certId: cert.id, tenantId: tenant.id, version, s3Key }, 'certificate generated');
+    this.log.log(
+      { certId: cert.id, tenantId: tenant.id, version, s3Key, hash: realHash },
+      'certificate generated (2-pass render)',
+    );
 
     const issuedEvent: CertificateIssuedEvent = {
       kind: CERTIFICATE_ISSUED_KIND,
@@ -372,8 +457,9 @@ export class PdfWorkerService implements OnApplicationBootstrap, OnModuleDestroy
       insuredId: insured.id,
       version,
       s3Key,
-      hash: provisionalHash,
-      verificationUrl: qr.payload,
+      // Fix C-01: el evento lleva el hash real (no random).
+      hash: realHash,
+      verificationUrl: realQr.payload,
       occurredAt: new Date().toISOString(),
     };
     try {
@@ -384,9 +470,6 @@ export class PdfWorkerService implements OnApplicationBootstrap, OnModuleDestroy
         'PdfWorker: failed to publish certificate.issued; email worker no se disparará automáticamente',
       );
     }
-    // Metadata que el caller puede inspeccionar — NO incluye el SHA del PDF
-    // porque ese vive sólo en metadata S3 (x-hash).
-    void pdfHash;
     return { certificateId: cert.id };
   }
 }

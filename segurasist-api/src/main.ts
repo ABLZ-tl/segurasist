@@ -6,6 +6,7 @@ import multipart from '@fastify/multipart';
 import { NestFactory } from '@nestjs/core';
 import type { NestFastifyApplication } from '@nestjs/platform-fastify';
 import { FastifyAdapter } from '@nestjs/platform-fastify';
+import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { Logger as PinoLogger } from 'nestjs-pino';
 import { AppModule } from './app.module';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
@@ -69,6 +70,37 @@ async function bootstrap(): Promise<void> {
 
   app.useGlobalFilters(new HttpExceptionFilter());
   app.useGlobalInterceptors(new TraceIdInterceptor(), new TimeoutInterceptor(15_000));
+
+  // C-12 — Swagger / OpenAPI 3 wiring.
+  //
+  // Antes de este fix, el módulo `SwaggerModule` jamás se cableaba: el job
+  // `api-dast` (`.github/workflows/ci.yml:367`) apunta ZAP a
+  // `http://localhost:3000/v1/openapi.json` y obtenía 404 → DAST fallaba en
+  // cada PR (bloqueando merge). Ahora exponemos:
+  //   - `/v1/openapi`       → Swagger UI (humans).
+  //   - `/v1/openapi.json`  → spec OpenAPI 3 (ZAP, Postman, codegen).
+  //
+  // `addBearerAuth()` declara el esquema "Authorization: Bearer <jwt>" como
+  // global; los DTOs Zod publican sus schemas a través de `nestjs-zod`
+  // (declarado en feed para F5). En entornos production se puede setear
+  // `SWAGGER_DISABLED=true` para servir solo el JSON (UI ya queda detrás
+  // de WAF + Cognito en App Runner).
+  const swaggerConfig = new DocumentBuilder()
+    .setTitle('SegurAsist API')
+    .setDescription('SegurAsist multi-tenant API (insureds, certificates, batches, audit).')
+    .setVersion('v1')
+    .addBearerAuth(
+      { type: 'http', scheme: 'bearer', bearerFormat: 'JWT' },
+      'cognito-jwt',
+    )
+    .addServer(`http://${env.HOST}:${env.PORT}`, 'local')
+    .build();
+  const swaggerDocument = SwaggerModule.createDocument(app, swaggerConfig);
+  SwaggerModule.setup('v1/openapi', app, swaggerDocument, {
+    jsonDocumentUrl: 'v1/openapi.json',
+    yamlDocumentUrl: 'v1/openapi.yaml',
+    swaggerOptions: { persistAuthorization: true },
+  });
 
   app.enableShutdownHooks();
 

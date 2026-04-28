@@ -1,0 +1,31 @@
+## F5 iter 1 — B-INFRA-SQS + B-WEBHOOK
+
+[F5] 2026-04-27 18:30 iter1 STARTED — B-INFRA-SQS + B-WEBHOOK begin (C-09 + H-12 + H-13 + H-29 partial)
+
+[F5] 2026-04-27 19:30 iter1 DONE C-09 segurasist-api/src/infra/aws/sqs.service.ts — refactor: ELIMINADO el parámetro opcional `dedupeId` de `sendMessage()`. La firma ahora es `sendMessage(queueUrl, body)` (2 args). El SDK ya NO recibe `MessageDeduplicationId` ni `MessageGroupId` bajo ninguna circunstancia, garantía estructural por tipo. Idempotencia movida a DB-side (UNIQUE constraints existentes `(tenant_id, curp)` en insureds + nueva tabla `batch_processed_rows` con PK `(tenant_id, batch_id, row_number)`). ADR-016. Spec actualizado (`sqs.service.spec.ts`) con 2 tests nuevos: validación estructural de NO-emisión + cast TS-coerced de caller legacy.
+
+[F5] 2026-04-27 19:30 iter1 DONE H-12 segurasist-api/src/modules/webhooks/ses-webhook.controller.ts — agregada validación criptográfica de firma SNS via `aws-sns-validator` (require dinámico para no romper si la dep aún no está instalada en CI unit). Fallback en non-prod: check de host (`sns.<region>.amazonaws.com`). En prod, SIN la dep o con firma inválida → 401 genérico (`SES_WEBHOOK_SIGNATURE_INVALID`, sin leak). Manejo explícito de `SubscriptionConfirmation`, `Notification`, `UnsubscribeConfirmation`. Hard-bounce path ahora corre dentro de `prisma.$transaction`: insert `EmailEvent` + `insured.update({email: null})` atómicos.
+
+[F5] 2026-04-27 19:30 iter1 DONE H-13 segurasist-api/src/modules/webhooks/ses-webhook.controller.ts:117 — `@Throttle({ ttl: 60_000, limit: 60 })` aplicado a nivel CLASE (no método), así cualquier handler futuro del controlador hereda el cap automáticamente. Test integration valida que el 61º request en una ventana responde 429 RATE_LIMITED con `Retry-After`.
+
+[F5] 2026-04-27 19:30 iter1 DONE H-29 partial segurasist-api/scripts/localstack-bootstrap.sh + segurasist-infra/envs/{dev,staging,prod}/main.tf — agregada queue `insureds-creation` (+ DLQ con redrive `maxReceiveCount=3`) en LocalStack y en los 3 envs Terraform. Agregada también queue `pdf` (separada de la legacy `certificates`). H-29 NO se cierra completo aquí — la eliminación del `String.replace` en `insureds-creation-worker.service.ts:63` y `batches.service.ts:483` es de F4. Yo aporto la pieza ENV/Terraform; F4 hace el swap del worker en su iter 2.
+
+[F5] 2026-04-27 19:30 iter1 DONE migration segurasist-api/prisma/migrations/20260428_insureds_creation_unique/migration.sql — nueva tabla `batch_processed_rows (tenant_id, batch_id, row_number)` con PK compuesto (idempotency guard que F4 puede usar para "claim" rows con `INSERT ON CONFLICT DO NOTHING` antes de crear el insured). Adicional: partial UNIQUE en `email_events (tenant_id, message_id, event_type) WHERE message_id IS NOT NULL` para que SNS replays no dupliquen side-effects en hard-bounces. Migración 100% SQL (no toca `schema.prisma` que es de F4/F6) e idempotente (`IF NOT EXISTS`).
+
+[F5] 2026-04-27 19:30 iter1 DONE package.json segurasist-api/package.json — agregado `aws-sns-validator: 0.0.6` a dependencies. NO corrí `pnpm install` (sandbox no lo permite); F0/orquestador debe correrlo en validation gate. F8 declaró en feed que necesita `@nestjs/swagger` + `zod-to-openapi` — NO los agregué en este iter porque F8 todavía no abrió ticket en el feed pidiéndolos formalmente; queda como NEEDS-COORDINATION para iter 2.
+
+[F5] 2026-04-27 19:30 iter1 NEEDS-COORDINATION F3 — para cerrar H-29 al 100% necesito que F3 agregue `SQS_QUEUE_INSUREDS_CREATION: z.string().url()` a `src/config/env.schema.ts:78` (después de `SQS_QUEUE_REPORTS`) + línea correspondiente en `.env.example`. Idéntico request a la nota de F4 en `feed/F4-iter1.md` línea 13. F4 dejó su `String.replace` como FAIL-FAST esperando esta env. En iter 2 yo NO toco env.schema.ts (no es mío); confirmo cierre cuando vea la entrada `[F3] DONE SQS_QUEUE_INSUREDS_CREATION` en el feed.
+
+[F5] 2026-04-27 19:30 iter1 NEW-FINDING — DEDUPEID CALLERS A LIMPIAR EN ITER 2 (F4 + F1 owners):
+  - `src/modules/batches/batches.service.ts:443` (`${id}:${r.rowNumber}`) — owner F4
+  - `src/modules/batches/batches.service.ts:619` (`${batchId}:preview_ready`) — owner F4
+  - `src/workers/insureds-creation-worker.service.ts:144` (`${createdInsuredId}:created`) — owner F4
+  - `src/workers/insureds-creation-worker.service.ts:233` (`${batchId}:completed`) — owner F4
+  - `src/workers/layout-worker.service.ts:177` (`${batchId}:preview_ready`) — owner F4
+  Ninguno propaga al SDK gracias al cambio estructural en SqsService (3er argumento ahora es ignorado por TS), pero el código zombie sigue allí y es confuso. F4 debe quitar los argumentos en su iter 2 + F1 hacer lo mismo si encuentra calls en `pdf-worker.service.ts` (no encontré ninguno, pero F1 confirma).
+
+[F5] 2026-04-27 19:30 iter1 NEW-FINDING segurasist-infra/envs/{staging,prod}/main.tf — la naming de queues legacy era `<env>-certificates` y `<env>-emails` (plural). Renombré a `<env>-pdf` y `<env>-emails` (mantengo emails plural por convención existente). En staging/prod este rename CAUSARÁ destroy+create de las colas → drain pendiente para Sprint 5. F8 (DevOps) debe orquestar la migración con drain SQS antes del apply. NO es bloqueante para dev (LocalStack se rebuilda).
+
+[F5] 2026-04-27 19:30 iter1 NEW-FINDING — el módulo Terraform `modules/sqs-queue/` ya tenía DLQ + redrive + SSE-KMS bien configurados, NO requirió cambios. Solo agregué documentación del fixup en los envs. Si F8 quiere extender con `kms_data_key_reuse_period_seconds` configurable (hoy hardcoded 300), nice-to-have.
+
+[F5] 2026-04-27 19:30 iter1 iter1-complete — 1 Critical (C-09) + 2 High (H-12, H-13) cerrados; H-29 partial cerrado lado ENV/IaC (F4 cierra lado workers en iter 2 cuando F3 agregue la env). Tests añadidos: `test/integration/sqs-dedup-removal.spec.ts` (4 tests) + `test/integration/ses-webhook-security.spec.ts` (8 tests). Spec existente `src/infra/aws/sqs.service.spec.ts` actualizado (1 test renombrado, 1 reescrito, 1 nuevo). Tests NO ejecutados localmente (sandbox bloquea pnpm). Validation gate del orquestador debe correr: `cd segurasist-api && pnpm test -- sqs webhook` y `cd segurasist-infra && terraform -chdir=modules/sqs-queue validate`.

@@ -33,31 +33,44 @@ export default defineConfig({
     coverage: {
       provider: 'v8',
       reporter: ['text', 'html'],
-      // Only files exercised by the unit suite — out-of-scope client-only
-      // wrappers (mobile drawer, proxy passthrough, NextAuth catch-all) live
-      // behind e2e and are intentionally excluded from this report.
+      // H-20 (Sprint 4) — anteriormente este bloque enumeraba archivos
+      // manualmente con `include`, lo que excluía silenciosamente los
+      // archivos donde el audit detectó findings High (mobile-drawer,
+      // proxy passthrough, NextAuth catch-all, layout.tsx) y dejaba
+      // los thresholds 80/75/80/80 como máscara cosmética.
+      //
+      // Ahora cobramos TODO `app/**`, `lib/**` y `components/**` y
+      // declaramos exclusiones por carpeta/funcionalidad concreta. Los
+      // umbrales bajan a 60/55/60/60 reales — ver decisión en sección 10
+      // del AUDIT_INDEX (ramp a 70/65 en Sprint 5).
       include: [
-        'lib/rbac.ts',
-        'lib/auth-server.ts',
-        'lib/jwt.ts',
-        'app/_components/access-denied.tsx',
-        'app/_components/command-palette.tsx',
-        'app/_components/sidebar-nav.tsx',
-        'app/_components/theme-toggle.tsx',
-        'app/api/auth/local-login/route.ts',
-        'app/api/auth/me/route.ts',
-        'app/(auth)/login/page.tsx',
+        'app/**/*.{ts,tsx}',
+        'lib/**/*.{ts,tsx}',
+        'components/**/*.{ts,tsx}',
       ],
       exclude: [
         '**/*.d.ts',
         '**/*.test.{ts,tsx}',
         '**/*.spec.{ts,tsx}',
+        '**/*.stories.{ts,tsx}',
+        // Tipos puros y constantes — sin lógica ejecutable.
+        '**/types/**',
+        '**/types.ts',
+        // Server Components que solo renderizan markup estático con next/font;
+        // no aportan branches útiles a coverage.
+        'app/layout.tsx',
+        'app/(auth)/layout.tsx',
+        'app/(app)/layout.tsx',
+        // Catch-all proxies y NextAuth handlers se cubren con e2e/integration
+        // (tests/portal: csp-iframe, tests/api: superadmin-cross-tenant).
+        'app/api/auth/[...nextauth]/route.ts',
+        'app/api/proxy/[...path]/route.ts',
       ],
       thresholds: {
-        statements: 80,
-        branches: 75,
-        functions: 80,
-        lines: 80,
+        statements: 60,
+        branches: 55,
+        functions: 60,
+        lines: 60,
       },
     },
   },

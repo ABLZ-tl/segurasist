@@ -128,5 +128,5 @@ A escala 1M req/mes: **~$24 / mes**. A 10M req/mes: **~$30 / mes**. WAF escala b
 ## Referencias
 
 - `docs/security/waf-managed-rules.md` — tabla detallada de rules + falsos positivos comunes.
-- `docs/runbooks/RB-012-waf-rules.md` — runbook ante WAF block legítimo.
+- `docs/runbooks/RB-016-waf-rules.md` — runbook ante WAF block legítimo (renumerado desde `RB-012` en F8 iter 2).
 - ADR-014 (mx-central-1 primary) + ADR-012 (us-east-1 DR).

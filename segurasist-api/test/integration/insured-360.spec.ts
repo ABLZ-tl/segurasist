@@ -10,7 +10,8 @@
  * Cobertura:
  *   1. Insured con package + 2 coverages + 1 claim + 1 cert + 3 audit rows
  *      → todas las secciones pobladas con counts esperados.
- *   2. AuditWriter recibe `record({action:'read', subAction:'viewed_360'})`.
+ *   2. AuditWriter recibe `record({action:'read_viewed', ...})` — F6 iter 2:
+ *      enum AuditAction extendido reemplaza el overload payloadDiff.subAction.
  *   3. Una sección que falle (timeout) NO derriba la respuesta — empty array.
  */
 import type { PrismaBypassRlsService } from '@common/prisma/prisma-bypass-rls.service';
@@ -162,17 +163,18 @@ describe('Insured 360 — integration shape', () => {
     expect(cov1?.used).toBe(1);
   });
 
-  it('persiste audit_log via AuditWriter con shape esperado', async () => {
+  it('persiste audit_log via AuditWriter con shape esperado (F6 iter 2: read_viewed)', async () => {
     const { svc, prisma, audit } = buildSvc();
     seedHappyPath(prisma);
     await svc.find360(INSURED, scope, { ip: '189.99.99.99', userAgent: 'jest-int', traceId: 'tr-1' });
     expect(audit.record).toHaveBeenCalledTimes(1);
+    // F6 iter 2 H-01: action='read_viewed' (enum extendido) reemplaza el
+    // overload payloadDiff.subAction='viewed_360'.
     expect(audit.record.mock.calls[0]?.[0]).toMatchObject({
       tenantId: TENANT,
-      action: 'read',
+      action: 'read_viewed',
       resourceType: 'insureds',
       resourceId: INSURED,
-      payloadDiff: { subAction: 'viewed_360' },
       ip: '189.99.99.99',
       userAgent: 'jest-int',
       traceId: 'tr-1',
