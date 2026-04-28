@@ -7,10 +7,21 @@ export const packagesKeys = {
   detail: (id: string) => ['packages', 'detail', id] as const,
 };
 
+// `/v1/packages` devuelve `{ items, nextCursor }` (cursor pagination Sprint 2).
+// Este hook normaliza a `InsurancePackage[]` para los callers (filter dropdowns,
+// listings) que sólo necesitan la lista. Si hay paginación real en el futuro,
+// agregar `usePackagesPaged` separado.
+type PackagesListResponse = { items: InsurancePackage[]; nextCursor?: string | null };
+
 export const usePackages = () =>
   useQuery({
     queryKey: packagesKeys.all,
-    queryFn: () => api<InsurancePackage[]>('/v1/packages'),
+    queryFn: async (): Promise<InsurancePackage[]> => {
+      const res = await api<InsurancePackage[] | PackagesListResponse>('/v1/packages');
+      // Backwards compat: API antigua devolvía array plano; nueva devuelve {items}.
+      if (Array.isArray(res)) return res;
+      return res?.items ?? [];
+    },
     staleTime: 5 * 60_000,
   });
 

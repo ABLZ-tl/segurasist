@@ -70,7 +70,7 @@ export default function InsuredsPage() {
       header: 'Nombre',
       cell: (r) => (
         <Link
-          href={{ pathname: '/insureds/[id]', query: { id: r.id } }}
+          href={`/insureds/${r.id}` as never}
           className="font-medium text-fg transition-colors hover:text-accent"
         >
           {r.fullName}
