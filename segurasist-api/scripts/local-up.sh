@@ -123,6 +123,22 @@ else
 fi
 
 # -------------------------------------------------------------------------
+# 3.b) Portal asegurado .env.local — el portal proxy default apunta a
+#      api.segurasist.app (prod) y falla con DNS ENOTFOUND si no hay
+#      .env.local local. Replicamos el patrón de admin.
+# -------------------------------------------------------------------------
+PORTAL_ENV_LOCAL="${API_DIR}/../segurasist-web/apps/portal/.env.local"
+if [[ ! -f "${PORTAL_ENV_LOCAL}" ]]; then
+  step "Creando portal .env.local"
+  cat > "${PORTAL_ENV_LOCAL}" <<EOF
+# Portal asegurado — env vars dev local. Generado por local-up.sh.
+API_BASE_URL=http://localhost:3000
+NEXT_PUBLIC_PORTAL_ORIGIN=http://localhost:3002
+EOF
+  ok "portal/.env.local creado"
+fi
+
+# -------------------------------------------------------------------------
 # 4) LocalStack bootstrap
 # -------------------------------------------------------------------------
 step "LocalStack bootstrap (S3 + SQS + KMS)"
