@@ -23,12 +23,9 @@
  * `handleEvent()` directo con mocks.
  */
 import { Module } from '@nestjs/common';
-import { ReportsModule } from '../reports.module';
 import { RealMonthlyReportGenerator } from '../monthly-report-generator.service';
-import {
-  MonthlyReportsHandlerService,
-  MONTHLY_REPORT_GENERATOR,
-} from './monthly-reports-handler.service';
+import { ReportsModule } from '../reports.module';
+import { MonthlyReportsHandlerService, MONTHLY_REPORT_GENERATOR } from './monthly-reports-handler.service';
 
 @Module({
   imports: [ReportsModule],

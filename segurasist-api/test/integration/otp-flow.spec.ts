@@ -92,10 +92,7 @@ describe('OTP flow integration — cognito_sub persistence (C-03)', () => {
 
     // Pre-cargamos la sesión OTP en el "Redis" mock con un codeHash que
     // matchea el `VALID_CODE` bajo el sessionId fijo.
-    const codeHash = crypto
-      .createHash('sha256')
-      .update(`${SESSION_ID}:${VALID_CODE}`)
-      .digest('hex');
+    const codeHash = crypto.createHash('sha256').update(`${SESSION_ID}:${VALID_CODE}`).digest('hex');
     const session: OtpSessionShape = {
       insuredId: INSURED_ID,
       tenantId: TENANT_ID,
@@ -147,10 +144,7 @@ describe('OTP flow integration — cognito_sub persistence (C-03)', () => {
     const result = await service.otpVerify({ session: SESSION_ID, code: VALID_CODE });
 
     expect(result).toEqual(tokens);
-    expect(cognito.loginInsuredWithSystemPassword).toHaveBeenCalledWith(
-      'maria@example.test',
-      'Demo123!',
-    );
+    expect(cognito.loginInsuredWithSystemPassword).toHaveBeenCalledWith('maria@example.test', 'Demo123!');
     expect(insuredUpdate).toHaveBeenCalledTimes(1);
     expect(insuredUpdate).toHaveBeenCalledWith({
       where: { id: INSURED_ID },
@@ -200,9 +194,7 @@ describe('OTP flow integration — cognito_sub persistence (C-03)', () => {
   });
 
   it('código inválido NO toca BD (no llega a la persistencia)', async () => {
-    await expect(
-      service.otpVerify({ session: SESSION_ID, code: '000000' }),
-    ).rejects.toThrow();
+    await expect(service.otpVerify({ session: SESSION_ID, code: '000000' })).rejects.toThrow();
     expect(insuredUpdate).not.toHaveBeenCalled();
     expect(cognito.loginInsuredWithSystemPassword).not.toHaveBeenCalled();
   });

@@ -21,8 +21,8 @@ import type { PuppeteerService } from '@modules/certificates/puppeteer.service';
 import ExcelJS from 'exceljs';
 import { mockDeep, type DeepMockProxy } from 'jest-mock-extended';
 import { ReportsPdfRendererService } from '../../src/modules/reports/reports-pdf-renderer.service';
-import { ReportsService } from '../../src/modules/reports/reports.service';
 import { ReportsXlsxRendererService } from '../../src/modules/reports/reports-xlsx-renderer.service';
+import { ReportsService } from '../../src/modules/reports/reports.service';
 import { mockPrismaService } from '../mocks/prisma.mock';
 
 const TENANT = '11111111-1111-1111-1111-111111111111';

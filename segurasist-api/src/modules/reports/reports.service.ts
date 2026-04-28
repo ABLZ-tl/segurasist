@@ -119,11 +119,7 @@ export class ReportsService {
    * en pasado). Para período "open" (`to` futuro o hoy), el cache podría
    * estar stale hasta 5 min — aceptable para reporting mensual.
    */
-  async getConciliacionReport(
-    from: string,
-    to: string,
-    scope: ReportsScope,
-  ): Promise<ConciliacionData> {
+  async getConciliacionReport(from: string, to: string, scope: ReportsScope): Promise<ConciliacionData> {
     const cacheKey = `report:conciliacion:${this.cacheTenantKey(scope)}:${from}:${to}`;
     return this.cached(
       cacheKey,
@@ -204,7 +200,7 @@ export class ReportsService {
         return {
           from,
           to,
-          tenantId: scope.platformAdmin && !scope.tenantId ? null : scope.tenantId ?? null,
+          tenantId: scope.platformAdmin && !scope.tenantId ? null : (scope.tenantId ?? null),
           activosInicio,
           activosCierre,
           altas,
@@ -238,12 +234,16 @@ export class ReportsService {
     return this.cached(cacheKey, async () => {
       const client = this.clientFor(scope);
       const now = new Date();
-      const toDate = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 23, 59, 59, 999));
+      const toDate = new Date(
+        Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 23, 59, 59, 999),
+      );
       const fromDate = new Date(toDate.getTime() - (days - 1) * 24 * 60 * 60 * 1000);
       fromDate.setUTCHours(0, 0, 0, 0);
 
       const tenantFilter =
-        scope.platformAdmin && scope.tenantId ? Prisma.sql`AND tenant_id = ${scope.tenantId}::uuid ` : Prisma.sql``;
+        scope.platformAdmin && scope.tenantId
+          ? Prisma.sql`AND tenant_id = ${scope.tenantId}::uuid `
+          : Prisma.sql``;
       const fromIso = fromDate.toISOString();
       const toIso = toDate.toISOString();
 
@@ -698,7 +698,11 @@ export class ReportsService {
   }
 
   /** Cache wrapper Redis con TTL configurable (default 60s). */
-  private async cached<T>(key: string, compute: () => Promise<T>, ttlSeconds = CACHE_TTL_SECONDS): Promise<T> {
+  private async cached<T>(
+    key: string,
+    compute: () => Promise<T>,
+    ttlSeconds = CACHE_TTL_SECONDS,
+  ): Promise<T> {
     try {
       const hit = await this.redis.get(key);
       if (hit) {

@@ -7,9 +7,9 @@
  *   - exceljs puede abrir el buffer y leer las celdas esperadas.
  */
 import ExcelJS from 'exceljs';
-import { ReportsXlsxRendererService } from '../../../../src/modules/reports/reports-xlsx-renderer.service';
 import type { ConciliacionData } from '../../../../src/modules/reports/dto/conciliacion-report.dto';
 import type { UtilizacionData } from '../../../../src/modules/reports/dto/utilizacion-report.dto';
+import { ReportsXlsxRendererService } from '../../../../src/modules/reports/reports-xlsx-renderer.service';
 
 const ZIP_MAGIC = Buffer.from([0x50, 0x4b, 0x03, 0x04]);
 
@@ -75,7 +75,9 @@ describe('ReportsXlsxRendererService', () => {
 
     const wb = new ExcelJS.Workbook();
     await wb.xlsx.load(buf);
-    expect(wb.worksheets.map((w) => w.name)).toEqual(expect.arrayContaining(['Top-3', 'Por paquete', 'Meta']));
+    expect(wb.worksheets.map((w) => w.name)).toEqual(
+      expect.arrayContaining(['Top-3', 'Por paquete', 'Meta']),
+    );
   });
 
   it('renderUtilizacionXlsx con rows=[] sigue produciendo buffer válido', async () => {

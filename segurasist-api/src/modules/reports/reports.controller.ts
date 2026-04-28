@@ -22,21 +22,12 @@ import {
 } from '@nestjs/common';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
-import {
-  ConciliacionQuerySchema,
-  type ConciliacionQuery,
-} from './dto/conciliacion-report.dto';
-import {
-  UtilizacionQuerySchema,
-  type UtilizacionQuery,
-} from './dto/utilizacion-report.dto';
-import {
-  VolumetriaQuerySchema,
-  type VolumetriaQuery,
-} from './dto/volumetria-report.dto';
+import { ConciliacionQuerySchema, type ConciliacionQuery } from './dto/conciliacion-report.dto';
+import { UtilizacionQuerySchema, type UtilizacionQuery } from './dto/utilizacion-report.dto';
+import { VolumetriaQuerySchema, type VolumetriaQuery } from './dto/volumetria-report.dto';
 import { ReportsPdfRendererService } from './reports-pdf-renderer.service';
-import { ReportsService, type ReportsScope } from './reports.service';
 import { ReportsXlsxRendererService } from './reports-xlsx-renderer.service';
+import { ReportsService, type ReportsScope } from './reports.service';
 
 const DashboardQuerySchema = z.object({
   /** M2 — Sólo respetado para admin_segurasist; ignorado para roles tenant-scoped. */
@@ -119,10 +110,7 @@ export class ReportsController {
     if (q.format === 'xlsx') {
       const xlsx = await this.xlsxRenderer.renderConciliacionXlsx(data);
       const filename = `conciliacion-${q.from}-${q.to}.xlsx`;
-      res.header(
-        'Content-Type',
-        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      );
+      res.header('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
       res.header('Content-Disposition', `attachment; filename="${filename}"`);
       res.header('Content-Length', String(xlsx.length));
       return xlsx;
@@ -189,10 +177,7 @@ export class ReportsController {
     if (format === 'xlsx') {
       const xlsx = await this.xlsxRenderer.renderUtilizacionXlsx(data);
       const filename = `utilizacion-${q.from}-${q.to}.xlsx`;
-      res.header(
-        'Content-Type',
-        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      );
+      res.header('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
       res.header('Content-Disposition', `attachment; filename="${filename}"`);
       res.header('Content-Length', String(xlsx.length));
       return xlsx;
@@ -234,6 +219,9 @@ export class ReportsController {
   @Post('schedule')
   @Roles('admin_segurasist', 'admin_mac', 'supervisor')
   schedule() {
-    throw new HttpException('Schedule no implementado en S4 (owner S3 EventBridge cron)', HttpStatus.NOT_IMPLEMENTED);
+    throw new HttpException(
+      'Schedule no implementado en S4 (owner S3 EventBridge cron)',
+      HttpStatus.NOT_IMPLEMENTED,
+    );
   }
 }

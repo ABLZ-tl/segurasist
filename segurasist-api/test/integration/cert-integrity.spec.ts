@@ -19,14 +19,14 @@
  */
 import { createHash } from 'node:crypto';
 import type { AuthUser } from '../../src/common/decorators/current-user.decorator';
-import { CertificatesService } from '../../src/modules/certificates/certificates.service';
-import { PdfWorkerService } from '../../src/workers/pdf-worker.service';
 import type { PrismaBypassRlsService } from '../../src/common/prisma/prisma-bypass-rls.service';
 import type { PrismaService } from '../../src/common/prisma/prisma.service';
 import type { Env } from '../../src/config/env.schema';
 import type { S3Service } from '../../src/infra/aws/s3.service';
 import type { SqsService } from '../../src/infra/aws/sqs.service';
+import { CertificatesService } from '../../src/modules/certificates/certificates.service';
 import type { PuppeteerService } from '../../src/modules/certificates/puppeteer.service';
+import { PdfWorkerService } from '../../src/workers/pdf-worker.service';
 
 function makeEnv(): Env {
   return {
@@ -121,9 +121,7 @@ describe('Certificate integrity (Fix C-01) — F1 B-PDF', () => {
       seedHappyPath(mockClient);
 
       // Buffer determinista para que el SHA sea reproducible.
-      const fixedBuffer = Buffer.from(
-        '%PDF-1.4 deterministic-bytes-for-cert-integrity-spec',
-      );
+      const fixedBuffer = Buffer.from('%PDF-1.4 deterministic-bytes-for-cert-integrity-spec');
       const expectedSha = createHash('sha256').update(fixedBuffer).digest('hex');
 
       (puppeteer.renderPdf as jest.Mock).mockResolvedValue({
@@ -131,13 +129,11 @@ describe('Certificate integrity (Fix C-01) — F1 B-PDF', () => {
         durationMs: 42,
       });
 
-      mockClient.certificate.create.mockImplementation(
-        async (args: { data: Record<string, unknown> }) => ({
-          id: 'cert-real-hash-1',
-          ...args.data,
-          issuedAt: new Date('2026-04-27'),
-        }),
-      );
+      mockClient.certificate.create.mockImplementation(async (args: { data: Record<string, unknown> }) => ({
+        id: 'cert-real-hash-1',
+        ...args.data,
+        issuedAt: new Date('2026-04-27'),
+      }));
 
       const worker = new PdfWorkerService(prismaBypass, s3, sqs, puppeteer, makeEnv());
       const out = await worker.handleEvent({
@@ -155,9 +151,7 @@ describe('Certificate integrity (Fix C-01) — F1 B-PDF', () => {
       const data = mockClient.certificate.create.mock.calls[0][0].data;
       expect(data.hash).toBe(expectedSha);
       expect(data.hash).toMatch(/^[a-f0-9]{64}$/);
-      expect(data.qrPayload).toBe(
-        `http://localhost:3000/v1/certificates/verify/${expectedSha}`,
-      );
+      expect(data.qrPayload).toBe(`http://localhost:3000/v1/certificates/verify/${expectedSha}`);
 
       // S3 metadata refleja el mismo SHA en x-hash y x-sha256-content
       // (cuando PASS-1 y PASS-2 producen idéntico buffer en mock).
@@ -253,13 +247,11 @@ describe('Certificate integrity (Fix C-01) — F1 B-PDF', () => {
         pdf: fixedBuffer,
         durationMs: 33,
       });
-      mockClient.certificate.create.mockImplementation(
-        async (args: { data: Record<string, unknown> }) => ({
-          id: 'cert-verify-1',
-          ...args.data,
-          issuedAt: new Date('2026-04-27T10:00:00Z'),
-        }),
-      );
+      mockClient.certificate.create.mockImplementation(async (args: { data: Record<string, unknown> }) => ({
+        id: 'cert-verify-1',
+        ...args.data,
+        issuedAt: new Date('2026-04-27T10:00:00Z'),
+      }));
 
       const worker = new PdfWorkerService(prismaBypass, s3, sqs, puppeteer, makeEnv());
       await worker.handleEvent({
@@ -274,25 +266,23 @@ describe('Certificate integrity (Fix C-01) — F1 B-PDF', () => {
       // Simular que el verify endpoint encuentra el cert recién emitido.
       // findFirst se invoca con el hash provisto → el mock compara contra
       // el último create.
-      mockClient.certificate.findFirst.mockImplementation(
-        async (args: { where: { hash?: string } }) => {
-          const created = mockClient.certificate.create.mock.calls[0][0].data as {
-            hash: string;
-            insuredId: string;
-            tenantId: string;
-            validTo: Date;
+      mockClient.certificate.findFirst.mockImplementation(async (args: { where: { hash?: string } }) => {
+        const created = mockClient.certificate.create.mock.calls[0][0].data as {
+          hash: string;
+          insuredId: string;
+          tenantId: string;
+          validTo: Date;
+        };
+        if (args.where.hash === created.hash) {
+          return {
+            tenantId: created.tenantId,
+            insuredId: created.insuredId,
+            validTo: created.validTo,
+            issuedAt: new Date('2026-04-27T10:00:00Z'),
           };
-          if (args.where.hash === created.hash) {
-            return {
-              tenantId: created.tenantId,
-              insuredId: created.insuredId,
-              validTo: created.validTo,
-              issuedAt: new Date('2026-04-27T10:00:00Z'),
-            };
-          }
-          return null;
-        },
-      );
+        }
+        return null;
+      });
       mockClient.insured.findFirst.mockResolvedValue({
         fullName: 'María García',
         validFrom: new Date('2026-01-01'),
@@ -404,9 +394,7 @@ describe('Certificate integrity (Fix C-01) — F1 B-PDF', () => {
       });
       // Mock de Prisma que respeta filtros: si pides status='issued' y solo
       // hay revoked en "BD", devuelve null.
-      const fakeRows = [
-        { id: 'cert-revoked', status: 'revoked', insuredId: 'ins-rev-2', deletedAt: null },
-      ];
+      const fakeRows = [{ id: 'cert-revoked', status: 'revoked', insuredId: 'ins-rev-2', deletedAt: null }];
       mockClient.certificate.findFirst.mockImplementation(
         async (args: { where: Record<string, unknown> }) => {
           const matched = fakeRows.find((r) => {
@@ -420,9 +408,7 @@ describe('Certificate integrity (Fix C-01) — F1 B-PDF', () => {
       );
 
       const certs = new CertificatesService(prisma, prismaBypass, s3, sqs, makeEnv());
-      await expect(certs.urlForSelf(insuredUser)).rejects.toThrow(
-        /Aún no se ha emitido tu certificado/,
-      );
+      await expect(certs.urlForSelf(insuredUser)).rejects.toThrow(/Aún no se ha emitido tu certificado/);
       // Pre-fix: el mismo mock con where sin status devolvería el revoked
       // y el service generaría presigned URL. Post-fix: el filtro impide eso.
     });

@@ -13,13 +13,13 @@
  * El path BD real lo cubre el e2e cuando exista (Sprint 5+).
  */
 import type { PrismaService } from '@common/prisma/prisma.service';
-import type { AuditWriterService } from '@modules/audit/audit-writer.service';
 import type { AuditContextFactory } from '@modules/audit/audit-context.factory';
+import type { AuditWriterService } from '@modules/audit/audit-writer.service';
 import { mockDeep, type DeepMockProxy } from 'jest-mock-extended';
+import type { EscalationService } from '../../src/modules/chatbot/escalation.service';
 import { KbMatcherService, type KbEntryForMatcher } from '../../src/modules/chatbot/kb-matcher.service';
 import { KbService } from '../../src/modules/chatbot/kb.service';
 import type { PersonalizationService } from '../../src/modules/chatbot/personalization.service';
-import type { EscalationService } from '../../src/modules/chatbot/escalation.service';
 import { mockPrismaService } from '../mocks/prisma.mock';
 
 const TENANT = '11111111-1111-1111-1111-111111111111';
@@ -74,9 +74,7 @@ describe('KbMatcherService', () => {
     });
 
     it('matchea por keyword directa (sin acentos)', () => {
-      const entries = [
-        buildEntry({ id: 'e-pol', keywords: ['poliza', 'vencimiento'] }),
-      ];
+      const entries = [buildEntry({ id: 'e-pol', keywords: ['poliza', 'vencimiento'] })];
       const m = matcher.findBestMatch('¿hasta cuándo vence mi póliza?', entries);
       expect(m?.entry.id).toBe('e-pol');
       expect(m?.matchedKeywords).toEqual(expect.arrayContaining(['poliza']));
@@ -425,7 +423,9 @@ describe('KbService', () => {
       // (esto es lo que hace la policy en runtime contra el cliente
       // request-scoped — el service NO filtra explícitamente por tenantId).
       prisma.client.chatKb.findMany.mockResolvedValue([KB_A] as never);
-      personalization.fillPlaceholders.mockResolvedValue('TENANT_A — Tu póliza vence el 31 de marzo de 2027.');
+      personalization.fillPlaceholders.mockResolvedValue(
+        'TENANT_A — Tu póliza vence el 31 de marzo de 2027.',
+      );
 
       const out = await svc.processMessage({
         tenantId: TENANT_A,
@@ -455,7 +455,9 @@ describe('KbService', () => {
       prisma.client.chatMessage.create.mockResolvedValue({ id: 'm-b' } as never);
       // RLS context = B → findMany devuelve solo KB-B.
       prisma.client.chatKb.findMany.mockResolvedValue([KB_B] as never);
-      personalization.fillPlaceholders.mockResolvedValue('TENANT_B — Tu póliza vence el 31 de marzo de 2027.');
+      personalization.fillPlaceholders.mockResolvedValue(
+        'TENANT_B — Tu póliza vence el 31 de marzo de 2027.',
+      );
 
       const out = await svc.processMessage({
         tenantId: TENANT_B,

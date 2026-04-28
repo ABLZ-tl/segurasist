@@ -77,13 +77,17 @@ export class AuditContextFactory {
     const userAgent = this.req.headers?.['user-agent'] ?? undefined;
     const headerTrace = this.req.headers?.['x-trace-id'];
     const traceId =
-      (typeof headerTrace === 'string' ? headerTrace : Array.isArray(headerTrace) ? headerTrace[0] : undefined) ??
-      (typeof this.req.id === 'string' ? this.req.id : undefined);
+      (typeof headerTrace === 'string'
+        ? headerTrace
+        : Array.isArray(headerTrace)
+          ? headerTrace[0]
+          : undefined) ?? (typeof this.req.id === 'string' ? this.req.id : undefined);
     return {
       actorId: this.req.user?.id,
       tenantId: this.req.tenant?.id,
       ip,
-      userAgent: typeof userAgent === 'string' ? userAgent : Array.isArray(userAgent) ? userAgent[0] : undefined,
+      userAgent:
+        typeof userAgent === 'string' ? userAgent : Array.isArray(userAgent) ? userAgent[0] : undefined,
       traceId,
     };
   }

@@ -341,7 +341,7 @@ describe('C-10 — audit chain tampering detection (full SHA recompute)', () => 
       expect(res.totalRows).toBe(4);
     }, 30_000);
 
-    it("tampering coordinado payloadDiff+rowHash post-mirror → both detecta vía cross-check DB↔S3", async () => {
+    it('tampering coordinado payloadDiff+rowHash post-mirror → both detecta vía cross-check DB↔S3', async () => {
       if (skip) return;
       // El atacante con BYPASSRLS modifica una fila YA mirroreada:
       //   - Recomputa rowHash matching el nuevo payload (consistencia local DB).

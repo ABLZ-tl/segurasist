@@ -435,9 +435,7 @@ export interface AuditChainVerifiableRow {
  * Exportada para que `AuditChainVerifierService` la use en lugar del
  * "light path" que solo encadenaba `prev_hash` (C-10 fix).
  */
-export function runVerification(
-  rows: Array<AuditChainVerifiableRow>,
-): AuditChainVerification {
+export function runVerification(rows: Array<AuditChainVerifiableRow>): AuditChainVerification {
   let prevExpected = GENESIS_HASH;
   for (const row of rows) {
     // 1) prev_hash debe matchear el row_hash de la fila previa (o GENESIS).

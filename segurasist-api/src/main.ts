@@ -89,10 +89,7 @@ async function bootstrap(): Promise<void> {
     .setTitle('SegurAsist API')
     .setDescription('SegurAsist multi-tenant API (insureds, certificates, batches, audit).')
     .setVersion('v1')
-    .addBearerAuth(
-      { type: 'http', scheme: 'bearer', bearerFormat: 'JWT' },
-      'cognito-jwt',
-    )
+    .addBearerAuth({ type: 'http', scheme: 'bearer', bearerFormat: 'JWT' }, 'cognito-jwt')
     .addServer(`http://${env.HOST}:${env.PORT}`, 'local')
     .build();
   const swaggerDocument = SwaggerModule.createDocument(app, swaggerConfig);

@@ -58,10 +58,7 @@ export class RealMonthlyReportGenerator implements MonthlyReportGenerator {
     const pdf = await this.pdfRenderer.renderConciliacionPdf(data);
     const lineCount = data.altas + data.bajas + data.certificadosEmitidos;
 
-    this.log.log(
-      { tenantId, period, from, to, bytes: pdf.length, lineCount },
-      'monthly report PDF rendered',
-    );
+    this.log.log({ tenantId, period, from, to, bytes: pdf.length, lineCount }, 'monthly report PDF rendered');
 
     return { pdf, summary: { lineCount } };
   }

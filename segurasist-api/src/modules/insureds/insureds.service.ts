@@ -409,11 +409,7 @@ export class InsuredsService {
    * tenant-scoped, RLS filtra automáticamente; el `where.tenantId` adicional
    * es defense-in-depth para platformAdmin.
    */
-  async find360(
-    id: string,
-    scope: InsuredsScope,
-    auditCtx?: AuditContext,
-  ): Promise<Insured360> {
+  async find360(id: string, scope: InsuredsScope, auditCtx?: AuditContext): Promise<Insured360> {
     const client = this.clientFor(scope);
     const baseWhere: Prisma.InsuredWhereInput = { id, deletedAt: null };
     if (scope.platformAdmin && scope.tenantId) baseWhere.tenantId = scope.tenantId;
@@ -864,17 +860,14 @@ export class InsuredsService {
     );
 
     try {
-      await this.sqs.sendMessage(
-        this.env.SQS_QUEUE_REPORTS,
-        {
-          kind: EXPORT_EVENT_KIND,
-          exportId,
-          tenantId: tenant.id,
-          insuredKind: EXPORT_KIND,
-          format,
-          filters,
-        },
-      );
+      await this.sqs.sendMessage(this.env.SQS_QUEUE_REPORTS, {
+        kind: EXPORT_EVENT_KIND,
+        exportId,
+        tenantId: tenant.id,
+        insuredKind: EXPORT_KIND,
+        format,
+        filters,
+      });
     } catch (err) {
       this.log.error(
         { err: err instanceof Error ? err.message : String(err), exportId },

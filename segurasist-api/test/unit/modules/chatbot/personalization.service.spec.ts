@@ -13,8 +13,8 @@
  *   - NotFound propaga si insured no existe.
  *   - Determinismo (idempotencia del replace).
  */
-import type { PrismaService } from '../../../../src/common/prisma/prisma.service';
 import { NotFoundException } from '@nestjs/common';
+import type { PrismaService } from '../../../../src/common/prisma/prisma.service';
 import {
   type InsuredContext,
   PersonalizationService,
@@ -74,10 +74,7 @@ describe('PersonalizationService.applyTemplate', () => {
   });
 
   it('packageName null → "—"', () => {
-    const out = svc.applyTemplate(
-      '{{packageName}}',
-      makeCtx({ packageName: null }),
-    );
+    const out = svc.applyTemplate('{{packageName}}', makeCtx({ packageName: null }));
     expect(out).toBe('—');
   });
 
@@ -158,7 +155,10 @@ describe('PersonalizationService.fillPlaceholders (con Prisma mock)', () => {
       package: null,
       claims: [],
     });
-    const out = await svc.fillPlaceholders('{{packageName}} / {{coveragesList}} / claims={{claimsCount}}', 'i2');
+    const out = await svc.fillPlaceholders(
+      '{{packageName}} / {{coveragesList}} / claims={{claimsCount}}',
+      'i2',
+    );
     expect(out).toBe('— / — / claims=0');
   });
 

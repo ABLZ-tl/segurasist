@@ -37,7 +37,6 @@
 import * as crypto from 'node:crypto';
 import { CurrentUser } from '@common/decorators/current-user.decorator';
 import { PrismaBypassRlsService } from '@common/prisma/prisma-bypass-rls.service';
-import { decodeJwt } from 'jose';
 import { ENV_TOKEN } from '@config/config.module';
 import { Env } from '@config/env.schema';
 import { CognitoService, AuthTokens } from '@infra/aws/cognito.service';
@@ -51,6 +50,7 @@ import {
   UnauthorizedException,
   Inject,
 } from '@nestjs/common';
+import { decodeJwt } from 'jose';
 import type { AuditContext } from '../audit/audit-context.factory';
 import { AuditWriterService } from '../audit/audit-writer.service';
 import { EmailTemplateResolver } from '../email/email-template-resolver';

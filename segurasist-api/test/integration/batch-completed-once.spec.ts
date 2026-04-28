@@ -23,7 +23,7 @@ import type { PrismaBypassRlsService } from '@common/prisma/prisma-bypass-rls.se
 import type { Env } from '@config/env.schema';
 import type { SqsService } from '@infra/aws/sqs.service';
 import type { CreateInsuredDto } from '@modules/insureds/dto/insured.dto';
-import { Prisma } from '@prisma/client';
+import type { Prisma } from '@prisma/client';
 import { mock, mockDeep } from 'jest-mock-extended';
 import { InsuredsCreationWorkerService } from '../../src/workers/insureds-creation-worker.service';
 

@@ -150,19 +150,28 @@ describe('AuthService', () => {
      * Construye un service nuevo por test con el `prismaBypass.client.insured`
      * cableado para que los flows OTP encuentren al asegurado.
      */
-    async function buildService(opts: {
-      insured?: {
-        id: string;
-        tenantId: string;
-        email: string | null;
-        fullName: string;
-        curp?: string;
-      } | null;
-      bypassEnabled?: boolean;
-    } = {}) {
-      const insured = opts.insured === undefined
-        ? { id: INSURED_ID, tenantId: TENANT_ID, email: 'maria@example.test', fullName: 'María H.', curp: CURP }
-        : opts.insured;
+    async function buildService(
+      opts: {
+        insured?: {
+          id: string;
+          tenantId: string;
+          email: string | null;
+          fullName: string;
+          curp?: string;
+        } | null;
+        bypassEnabled?: boolean;
+      } = {},
+    ) {
+      const insured =
+        opts.insured === undefined
+          ? {
+              id: INSURED_ID,
+              tenantId: TENANT_ID,
+              email: 'maria@example.test',
+              fullName: 'María H.',
+              curp: CURP,
+            }
+          : opts.insured;
 
       cognito = mock<CognitoService>();
       cognito.loginInsuredWithSystemPassword.mockResolvedValue({
@@ -244,11 +253,7 @@ describe('AuthService', () => {
         expect(result.expiresIn).toBe(300);
         // Redis: rate-limit incr + lockout get + persistir sesión.
         expect(redisMock.raw.incr).toHaveBeenCalled();
-        expect(redisMock.set).toHaveBeenCalledWith(
-          expect.stringContaining('otp:'),
-          expect.any(String),
-          300,
-        );
+        expect(redisMock.set).toHaveBeenCalledWith(expect.stringContaining('otp:'), expect.any(String), 300);
         // Email enviado con tags + from configurado.
         expect(ses.send).toHaveBeenCalledTimes(1);
         const sendArgs = ses.send.mock.calls[0]![0] as unknown as Record<string, unknown>;
@@ -336,11 +341,7 @@ describe('AuthService', () => {
         expect(result.session).toHaveLength(64);
         // Sesión OTP fue persistida ANTES del send (aunque el send falle,
         // permitimos al usuario reintentar).
-        expect(redisMock.set).toHaveBeenCalledWith(
-          expect.stringContaining('otp:'),
-          expect.any(String),
-          300,
-        );
+        expect(redisMock.set).toHaveBeenCalledWith(expect.stringContaining('otp:'), expect.any(String), 300);
       });
 
       it('CURP normalization: lowercase input se persiste/lookup uppercase', async () => {
@@ -384,12 +385,12 @@ describe('AuthService', () => {
       it('OTP expirado / sesión inexistente → 401 con mensaje accionable', async () => {
         await buildService();
         redisMock.get.mockResolvedValueOnce(null);
-        await expect(
-          service.otpVerify({ session: SESSION_ID, code: VALID_CODE }),
-        ).rejects.toThrow(UnauthorizedException);
-        await expect(
-          service.otpVerify({ session: SESSION_ID, code: VALID_CODE }),
-        ).rejects.toThrow(/Código expirado o inválido/);
+        await expect(service.otpVerify({ session: SESSION_ID, code: VALID_CODE })).rejects.toThrow(
+          UnauthorizedException,
+        );
+        await expect(service.otpVerify({ session: SESSION_ID, code: VALID_CODE })).rejects.toThrow(
+          /Código expirado o inválido/,
+        );
         // Cognito NO se llama → no se emiten tokens en path expirado.
         expect(cognito.loginInsuredWithSystemPassword).not.toHaveBeenCalled();
       });
@@ -397,15 +398,11 @@ describe('AuthService', () => {
       it('OTP inválido con attempts restantes → 401 informativo + decrement KEEPTTL', async () => {
         await buildService();
         preloadSession({ attemptsLeft: 3 });
-        await expect(
-          service.otpVerify({ session: SESSION_ID, code: '000000' }),
-        ).rejects.toThrow(/Te quedan 2 intentos/);
-        // El decrement persiste con KEEPTTL (no resetea TTL existente).
-        expect(redisMock.raw.set).toHaveBeenCalledWith(
-          `otp:${SESSION_ID}`,
-          expect.any(String),
-          'KEEPTTL',
+        await expect(service.otpVerify({ session: SESSION_ID, code: '000000' })).rejects.toThrow(
+          /Te quedan 2 intentos/,
         );
+        // El decrement persiste con KEEPTTL (no resetea TTL existente).
+        expect(redisMock.raw.set).toHaveBeenCalledWith(`otp:${SESSION_ID}`, expect.any(String), 'KEEPTTL');
         // Sesión NO borrada — el usuario puede reintentar.
         expect(redisMock.del).not.toHaveBeenCalledWith(`otp:${SESSION_ID}`);
       });
@@ -413,24 +410,22 @@ describe('AuthService', () => {
       it('OTP inválido en último intento → quema sesión + bump rondas fallidas + 401 final', async () => {
         await buildService();
         preloadSession({ attemptsLeft: 1 });
-        await expect(
-          service.otpVerify({ session: SESSION_ID, code: '000000' }),
-        ).rejects.toThrow(/Demasiados intentos/);
+        await expect(service.otpVerify({ session: SESSION_ID, code: '000000' })).rejects.toThrow(
+          /Demasiados intentos/,
+        );
         // Sesión borrada (quemada).
         expect(redisMock.del).toHaveBeenCalledWith(`otp:${SESSION_ID}`);
         // Contador de rondas fallidas incrementado por insuredId.
-        expect(redisMock.raw.incr).toHaveBeenCalledWith(
-          `otp:rounds:curp:${INSURED_ID}`,
-        );
+        expect(redisMock.raw.incr).toHaveBeenCalledWith(`otp:rounds:curp:${INSURED_ID}`);
       });
 
       it('throttle por sesión: 6º verify sobre la misma sesión → 401 sin tocar Redis OTP', async () => {
         await buildService();
         // El primer raw.incr es el rate-limit por sesión.
         redisMock.raw.incr.mockResolvedValueOnce(6);
-        await expect(
-          service.otpVerify({ session: SESSION_ID, code: VALID_CODE }),
-        ).rejects.toThrow(/Demasiados intentos en poco tiempo/);
+        await expect(service.otpVerify({ session: SESSION_ID, code: VALID_CODE })).rejects.toThrow(
+          /Demasiados intentos en poco tiempo/,
+        );
         // No se llegó a leer la sesión OTP.
         expect(redisMock.get).not.toHaveBeenCalledWith(`otp:${SESSION_ID}`);
       });
@@ -438,9 +433,9 @@ describe('AuthService', () => {
       it('sesión corrupta en Redis (JSON inválido) → 401 + auto-clean del bucket', async () => {
         await buildService();
         redisMock.get.mockResolvedValueOnce('{not-json');
-        await expect(
-          service.otpVerify({ session: SESSION_ID, code: VALID_CODE }),
-        ).rejects.toThrow(UnauthorizedException);
+        await expect(service.otpVerify({ session: SESSION_ID, code: VALID_CODE })).rejects.toThrow(
+          UnauthorizedException,
+        );
         expect(redisMock.del).toHaveBeenCalledWith(`otp:${SESSION_ID}`);
       });
 

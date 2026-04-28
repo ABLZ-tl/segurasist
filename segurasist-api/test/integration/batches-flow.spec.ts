@@ -30,9 +30,9 @@ import { BatchesService } from '@modules/batches/batches.service';
 import { BatchesParserService } from '@modules/batches/parser/batches-parser.service';
 import { BatchesValidatorService } from '@modules/batches/validator/batches-validator.service';
 import { computeCurpChecksum } from '@modules/batches/validator/curp-checksum';
-import { LayoutWorkerService } from '../../src/workers/layout-worker.service';
 import ExcelJS from 'exceljs';
 import { mock, mockDeep } from 'jest-mock-extended';
+import { LayoutWorkerService } from '../../src/workers/layout-worker.service';
 
 const TENANT = { id: '11111111-1111-1111-1111-111111111111' };
 const ENV: Env = {
@@ -334,9 +334,7 @@ describe('Batches integration — sync path', () => {
 
     // Mocks de infra para el LayoutWorker.
     const prismaBypass = mockDeep<PrismaBypassRlsService>();
-    prismaBypass.client.package.findMany.mockResolvedValue([
-      { id: 'p-prem', name: 'Premium' },
-    ] as never);
+    prismaBypass.client.package.findMany.mockResolvedValue([{ id: 'p-prem', name: 'Premium' }] as never);
     prismaBypass.client.insured.findMany.mockResolvedValue([] as never);
     prismaBypass.client.batchError.deleteMany.mockResolvedValue({ count: 0 } as never);
     // Capturamos los rows insertados en cada chunk para inspección.
@@ -451,9 +449,13 @@ describe('Batches integration — sync path', () => {
     expect(transitionToProcessing!.completedEventEmittedAt).toBeNull();
 
     // Y se enviaron exactamente 3 mensajes a la cola insureds-creation.
-    const creationCalls = sqs.sendMessage.mock.calls.filter((c) => (c[1] as { kind?: string }).kind === 'insured.create');
+    const creationCalls = sqs.sendMessage.mock.calls.filter(
+      (c) => (c[1] as { kind?: string }).kind === 'insured.create',
+    );
     expect(creationCalls.length).toBe(3);
-    const includedRowNumbers = creationCalls.map((c) => (c[1] as { rowNumber: number }).rowNumber).sort((a: number, b: number) => a - b);
+    const includedRowNumbers = creationCalls
+      .map((c) => (c[1] as { rowNumber: number }).rowNumber)
+      .sort((a: number, b: number) => a - b);
     expect(includedRowNumbers).toEqual([1, 2, 3]);
   }, 90_000);
 

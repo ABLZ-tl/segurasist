@@ -32,8 +32,8 @@
  * para que el caller (S5) detecte templates con typos vía un test de
  * "no debe contener `{{`" después de la resolución.
  */
-import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '@common/prisma/prisma.service';
+import { Injectable, NotFoundException } from '@nestjs/common';
 
 /**
  * Datos resueltos del insured listos para sustituir en un template.

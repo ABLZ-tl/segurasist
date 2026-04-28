@@ -34,6 +34,15 @@ PGURL="${PGURL:-postgresql://segurasist:segurasist@localhost:5432/segurasist}"
 ADMIN_EMAIL="${ADMIN_EMAIL:-admin@mac.local}"
 ADMIN_PASSWORD="${ADMIN_PASSWORD:-Admin123!}"
 DEMO_PASSWORD="${DEMO_PASSWORD:-Demo123!}"
+
+# C-04 — INSURED_DEFAULT_PASSWORD vive en .env y la API lo usa después de
+# OTP para emitir tokens contra el pool insured. El env validator (Zod
+# superRefine) bloquea valores en blocklist (e.g. "Demo123!"). Por eso el
+# password del usuario insured se setea por separado: si .env lo define
+# (carga vía `set -a; source .env; set +a` antes de correr este script o
+# pasándolo explícito), lo usamos; si no, fallback a un default fuerte que
+# pasa el validator.
+INSURED_SYS_PASSWORD="${INSURED_DEFAULT_PASSWORD:-Insured-Sys-Auth-2026!@SecureLocal}"
 POOL_ADMIN="${POOL_ADMIN:-local_admin}"
 POOL_INSURED="${POOL_INSURED:-local_insured}"
 CLIENT_ADMIN="${CLIENT_ADMIN:-local-admin-client}"
@@ -241,7 +250,7 @@ ensure_user "${ADMIN_POOL_ID}" "supervisor@mac.local"          "supervisor"     
 # muestre el saludo personalizado ("Hola, María") en lugar de caer al fallback
 # derivado del email local-part ("insured.demo"). Coincide con el seed.ts del
 # insured demo (Hernández García María).
-ensure_user "${INSURED_POOL_ID}" "insured.demo@mac.local"      "insured"          "${TENANT_ID}" "${DEMO_PASSWORD}" "María" "Hernández"
+ensure_user "${INSURED_POOL_ID}" "insured.demo@mac.local"      "insured"          "${TENANT_ID}" "${INSURED_SYS_PASSWORD}" "María" "Hernández"
 
 # =========================================================================
 # 4) Sincronizar cognito_sub real

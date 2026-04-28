@@ -125,10 +125,7 @@ export class MonthlyReportsHandlerService implements OnApplicationBootstrap, OnM
       return;
     }
     void this.runPollLoop();
-    this.log.log(
-      { queue: this.env.SQS_QUEUE_MONTHLY_REPORTS },
-      'MonthlyReportsHandler poll loop started',
-    );
+    this.log.log({ queue: this.env.SQS_QUEUE_MONTHLY_REPORTS }, 'MonthlyReportsHandler poll loop started');
   }
 
   async onModuleDestroy(): Promise<void> {
@@ -311,7 +308,10 @@ export class MonthlyReportsHandlerService implements OnApplicationBootstrap, OnM
         data: { status: 'processing' },
       });
 
-      const { pdf } = await this.generator.generate({ tenantId, period: { year: period.year, month: period.month } });
+      const { pdf } = await this.generator.generate({
+        tenantId,
+        period: { year: period.year, month: period.month },
+      });
       const monthStr = String(period.month).padStart(2, '0');
       const s3Key = `monthly-reports/${tenantId}/${period.year}-${monthStr}.pdf`;
 
@@ -378,7 +378,10 @@ export class MonthlyReportsHandlerService implements OnApplicationBootstrap, OnM
         },
       });
 
-      this.log.log({ tenantId, period, runId, recipients: recipients.length }, 'MonthlyReports: tenant completado');
+      this.log.log(
+        { tenantId, period, runId, recipients: recipients.length },
+        'MonthlyReports: tenant completado',
+      );
       return 'completed';
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);

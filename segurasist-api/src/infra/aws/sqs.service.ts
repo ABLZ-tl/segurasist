@@ -31,10 +31,7 @@ export class SqsService {
     });
   }
 
-  async sendMessage(
-    queueUrl: string,
-    body: Record<string, unknown>,
-  ): Promise<string | undefined> {
+  async sendMessage(queueUrl: string, body: Record<string, unknown>): Promise<string | undefined> {
     const out = await this.client.send(
       new SendMessageCommand({
         QueueUrl: queueUrl,

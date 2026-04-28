@@ -36,30 +36,18 @@
  *     migración `20260429_audit_action_sprint4_extend` agregó el enum value.
  *   - CRUD de KB usa el AuditInterceptor estándar (mutaciones tracked).
  */
-import {
-  ForbiddenException,
-  Injectable,
-  Logger,
-  NotFoundException,
-  Optional,
-} from '@nestjs/common';
 import { PrismaService } from '@common/prisma/prisma.service';
 import { AuditContextFactory } from '@modules/audit/audit-context.factory';
 import { AuditWriterService } from '@modules/audit/audit-writer.service';
+import { ForbiddenException, Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
 import type { ChatMessageResponse } from './dto/chat-message.dto';
-import type {
-  CreateKbEntryDto,
-  KbEntryView,
-  ListKbEntriesQuery,
-  UpdateKbEntryDto,
-} from './dto/kb-entry.dto';
+import type { CreateKbEntryDto, KbEntryView, ListKbEntriesQuery, UpdateKbEntryDto } from './dto/kb-entry.dto';
 import { EscalationService } from './escalation.service';
 import { KbMatcherService, type KbEntryForMatcher } from './kb-matcher.service';
 import { PersonalizationService } from './personalization.service';
 
 /** Mensaje devuelto al insured cuando no hay match. UX neutro. */
-const FALLBACK_RESPONSE =
-  'No tengo una respuesta exacta para tu pregunta. Te conecto con un asesor humano.';
+const FALLBACK_RESPONSE = 'No tengo una respuesta exacta para tu pregunta. Te conecto con un asesor humano.';
 
 @Injectable()
 export class KbService {
@@ -279,7 +267,10 @@ export class KbService {
    * `tenantId` en query NO se soporta en este endpoint (los superadmins
    * gestionan KB del tenant via override S3-08 si se requiere).
    */
-  async listEntries(tenantId: string, q: ListKbEntriesQuery): Promise<{
+  async listEntries(
+    tenantId: string,
+    q: ListKbEntriesQuery,
+  ): Promise<{
     items: KbEntryView[];
     total: number;
   }> {
@@ -336,11 +327,7 @@ export class KbService {
     return this.mapEntry(created);
   }
 
-  async updateEntry(
-    tenantId: string,
-    id: string,
-    dto: UpdateKbEntryDto,
-  ): Promise<KbEntryView> {
+  async updateEntry(tenantId: string, id: string, dto: UpdateKbEntryDto): Promise<KbEntryView> {
     void tenantId;
     // findFirst antes de update para devolver 404 si la entry está deletada
     // o pertenece a otro tenant (RLS bloquea pero queremos shape consistente).

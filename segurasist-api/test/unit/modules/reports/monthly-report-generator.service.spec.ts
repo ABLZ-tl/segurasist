@@ -13,8 +13,8 @@
 import { mockDeep, type DeepMockProxy } from 'jest-mock-extended';
 import type { ConciliacionData } from '../../../../src/modules/reports/dto/conciliacion-report.dto';
 import { RealMonthlyReportGenerator } from '../../../../src/modules/reports/monthly-report-generator.service';
-import { ReportsPdfRendererService } from '../../../../src/modules/reports/reports-pdf-renderer.service';
-import { ReportsService } from '../../../../src/modules/reports/reports.service';
+import type { ReportsPdfRendererService } from '../../../../src/modules/reports/reports-pdf-renderer.service';
+import type { ReportsService } from '../../../../src/modules/reports/reports.service';
 
 const TENANT = '11111111-1111-1111-1111-111111111111';
 

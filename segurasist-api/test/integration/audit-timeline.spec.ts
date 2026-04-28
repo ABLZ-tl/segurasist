@@ -73,9 +73,7 @@ describe('AuditTimelineService — pagination', () => {
     const allRows = Array.from({ length: 50 }, (_, i) => makeRow(i));
     // Service llama findMany con take=21; devolvemos las primeras 21 ordenadas DESC.
     prisma.client.auditLog.findMany.mockResolvedValueOnce(allRows.slice(0, 21) as never);
-    prisma.client.user.findMany.mockResolvedValue([
-      { id: ACTOR, email: 'op@mac.local' },
-    ] as never);
+    prisma.client.user.findMany.mockResolvedValue([{ id: ACTOR, email: 'op@mac.local' }] as never);
 
     const out = await svc.getTimeline({ tenantId: TENANT_A }, { insuredId: INSURED, limit: 20 });
 
@@ -85,9 +83,7 @@ describe('AuditTimelineService — pagination', () => {
     // IP enmascarada en el item.
     expect(out.items[0]?.ipMasked).toBe('189.10.20.*');
     // Confirma findMany llamado con take=limit+1.
-    expect(prisma.client.auditLog.findMany).toHaveBeenCalledWith(
-      expect.objectContaining({ take: 21 }),
-    );
+    expect(prisma.client.auditLog.findMany).toHaveBeenCalledWith(expect.objectContaining({ take: 21 }));
   });
 
   it('second page con cursor: skipea la primera página', async () => {
@@ -101,10 +97,7 @@ describe('AuditTimelineService — pagination', () => {
       'utf8',
     ).toString('base64url');
 
-    const out = await svc.getTimeline(
-      { tenantId: TENANT_A },
-      { insuredId: INSURED, limit: 20, cursor },
-    );
+    const out = await svc.getTimeline({ tenantId: TENANT_A }, { insuredId: INSURED, limit: 20, cursor });
     expect(out.items).toHaveLength(20);
     expect(out.nextCursor).not.toBeNull();
     // El where debe incluir cláusula AND con OR-cursor (occurredAt lt o (eq + id lt)).
@@ -125,10 +118,7 @@ describe('AuditTimelineService — pagination', () => {
       'utf8',
     ).toString('base64url');
 
-    const out = await svc.getTimeline(
-      { tenantId: TENANT_A },
-      { insuredId: INSURED, limit: 20, cursor },
-    );
+    const out = await svc.getTimeline({ tenantId: TENANT_A }, { insuredId: INSURED, limit: 20, cursor });
     expect(out.items).toHaveLength(10);
     expect(out.nextCursor).toBeNull();
   });
@@ -184,10 +174,7 @@ describe('AuditTimelineService — actionFilter', () => {
     prisma.client.auditLog.findMany.mockResolvedValue([] as never);
     prisma.client.user.findMany.mockResolvedValue([] as never);
 
-    await svc.getTimeline(
-      { tenantId: TENANT_A },
-      { insuredId: INSURED, limit: 20, actionFilter: 'update' },
-    );
+    await svc.getTimeline({ tenantId: TENANT_A }, { insuredId: INSURED, limit: 20, actionFilter: 'update' });
     const callArgs = prisma.client.auditLog.findMany.mock.calls[0]?.[0];
     expect((callArgs as { where: { action?: string } }).where.action).toBe('update');
   });
@@ -203,10 +190,10 @@ describe('AuditTimelineService — CSV export', () => {
       }),
     );
     // streamCsv pagina de a 500; 50 filas caben en una sola page.
-    prisma.client.auditLog.findMany.mockResolvedValueOnce(allRows as never).mockResolvedValueOnce([] as never);
-    prisma.client.user.findMany.mockResolvedValue([
-      { id: ACTOR, email: 'op@mac.local' },
-    ] as never);
+    prisma.client.auditLog.findMany
+      .mockResolvedValueOnce(allRows as never)
+      .mockResolvedValueOnce([] as never);
+    prisma.client.user.findMany.mockResolvedValue([{ id: ACTOR, email: 'op@mac.local' }] as never);
 
     const lines: string[] = [];
     for await (const line of svc.streamCsv({ tenantId: TENANT_A }, INSURED)) {

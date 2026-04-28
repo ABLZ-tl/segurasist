@@ -37,11 +37,13 @@ describe('SqsService', () => {
     // El siguiente cast simula un call-site legacy que aún tiene el dedupeId
     // TS ignorará el 3er argumento; lo importante es validar que SqsService
     // físicamente NO lo propaga al SDK.
-    await (svc.sendMessage as unknown as (
-      url: string,
-      body: Record<string, unknown>,
-      dedupe?: string,
-    ) => Promise<string | undefined>)('http://q', { x: 1 }, 'should-be-ignored');
+    await (
+      svc.sendMessage as unknown as (
+        url: string,
+        body: Record<string, unknown>,
+        dedupe?: string,
+      ) => Promise<string | undefined>
+    )('http://q', { x: 1 }, 'should-be-ignored');
 
     const cmd = sendMock.mock.calls[0]?.[0] as SendMessageCommand;
     expect(cmd.input.MessageDeduplicationId).toBeUndefined();

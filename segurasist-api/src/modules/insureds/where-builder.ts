@@ -34,7 +34,7 @@
  * intervención adicional**. Tests del módulo `where-builder.spec.ts` cubren
  * cada filtro independientemente.
  */
-import { Prisma } from '@prisma/client';
+import type { Prisma } from '@prisma/client';
 
 /**
  * Subconjunto laxo del filtro shared entre `ListInsuredsQuery` y

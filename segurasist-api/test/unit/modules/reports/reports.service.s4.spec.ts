@@ -12,8 +12,8 @@
  */
 import type { PrismaBypassRlsService } from '@common/prisma/prisma-bypass-rls.service';
 import { mockDeep, type DeepMockProxy } from 'jest-mock-extended';
-import { mockPrismaService } from '../../../mocks/prisma.mock';
 import { ReportsService } from '../../../../src/modules/reports/reports.service';
+import { mockPrismaService } from '../../../mocks/prisma.mock';
 
 function build(): {
   svc: ReportsService;
@@ -282,12 +282,7 @@ describe('ReportsService — S4-03 utilizacion top-N', () => {
     // Misma query sin packageId usa key con sufijo `_all_`.
     redis.set.mockClear();
     redis.get.mockResolvedValue(null);
-    await svc.getUtilizacion(
-      '2026-04-01',
-      '2026-04-30',
-      10,
-      { platformAdmin: false, tenantId: TENANT },
-    );
+    await svc.getUtilizacion('2026-04-01', '2026-04-30', 10, { platformAdmin: false, tenantId: TENANT });
     const setKey2 = (redis.set.mock.calls[0]?.[0] ?? '') as string;
     expect(setKey2).toContain(':_all_');
     expect(setKey).not.toBe(setKey2);

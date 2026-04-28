@@ -28,15 +28,7 @@
 import { Public } from '@common/decorators/roles.decorator';
 import { PrismaBypassRlsService } from '@common/prisma/prisma-bypass-rls.service';
 import { Throttle } from '@common/throttler/throttler.decorators';
-import {
-  Body,
-  Controller,
-  HttpCode,
-  HttpStatus,
-  Logger,
-  Post,
-  UnauthorizedException,
-} from '@nestjs/common';
+import { Body, Controller, HttpCode, HttpStatus, Logger, Post, UnauthorizedException } from '@nestjs/common';
 import { type EmailEventType } from '@prisma/client';
 
 interface SnsEnvelope {
@@ -244,7 +236,7 @@ export class SesWebhookController {
     if (validatorCtor) {
       try {
         await new Promise<void>((resolve, reject) => {
-          const v = new validatorCtor!();
+          const v = new validatorCtor();
           v.validate(body, (err: Error | null) => {
             if (err) reject(err);
             else resolve();
@@ -264,9 +256,7 @@ export class SesWebhookController {
     //    silenciosamente la postura de seguridad. En no-prod confiamos en el
     //    check de host de arriba (Sprint 5 instalará la dep).
     if (isProd) {
-      this.log.error(
-        'aws-sns-validator no instalado en NODE_ENV=production — rechazando webhook',
-      );
+      this.log.error('aws-sns-validator no instalado en NODE_ENV=production — rechazando webhook');
       throw new UnauthorizedException('SES_WEBHOOK_SIGNATURE_INVALID');
     }
   }

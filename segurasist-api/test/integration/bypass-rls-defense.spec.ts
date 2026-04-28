@@ -29,9 +29,9 @@
  * Si Postgres no está disponible o los roles RLS no fueron aplicados, el
  * suite skipea con warn (mismo patrón que `cross-tenant.spec.ts`).
  */
+import { randomUUID } from 'node:crypto';
 import { ForbiddenException, Logger } from '@nestjs/common';
 import { PrismaClient } from '@prisma/client';
-import { randomUUID } from 'node:crypto';
 import { PrismaService } from '../../src/common/prisma/prisma.service';
 
 Logger.overrideLogger(false);

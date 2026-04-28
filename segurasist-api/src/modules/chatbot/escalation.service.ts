@@ -24,13 +24,13 @@
  * (`action='update'` + `payloadDiff.subAction='escalated'`). Ver feed
  * `S6-iter2.md` NEW-FINDING.
  */
-import { Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { PrismaService } from '@common/prisma/prisma.service';
 import { ENV_TOKEN } from '@config/config.module';
 import type { Env } from '@config/env.schema';
-import { PrismaService } from '@common/prisma/prisma.service';
+import { SesService } from '@infra/aws/ses.service';
 import { AuditContextFactory } from '@modules/audit/audit-context.factory';
 import { AuditWriterService } from '@modules/audit/audit-writer.service';
-import { SesService } from '@infra/aws/ses.service';
+import { Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import type { EscalateResult } from './dto/escalation.dto';
 
 /**
@@ -110,7 +110,10 @@ export class EscalationService {
       data: { status: 'escalated' },
     });
     if (transition.count === 0) {
-      this.log.log({ insuredId, conversationId }, 'Escalation race detected — another caller already escalated');
+      this.log.log(
+        { insuredId, conversationId },
+        'Escalation race detected — another caller already escalated',
+      );
       return {
         conversationId,
         alreadyEscalated: true,
@@ -152,7 +155,10 @@ export class EscalationService {
       });
       emailSentToMac = true;
     } catch (err) {
-      this.log.warn({ err: err instanceof Error ? err.message : String(err), insuredId }, 'Escalation email to MAC failed');
+      this.log.warn(
+        { err: err instanceof Error ? err.message : String(err), insuredId },
+        'Escalation email to MAC failed',
+      );
     }
 
     // 7) Acuse al asegurado. Si no tiene email, lo skipeamos silenciosamente —
@@ -173,7 +179,10 @@ export class EscalationService {
         });
         acknowledgementSentToInsured = true;
       } catch (err) {
-        this.log.warn({ err: err instanceof Error ? err.message : String(err), insuredId }, 'Acknowledgement email to insured failed');
+        this.log.warn(
+          { err: err instanceof Error ? err.message : String(err), insuredId },
+          'Acknowledgement email to insured failed',
+        );
       }
     }
 

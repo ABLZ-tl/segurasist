@@ -135,10 +135,7 @@ export class AuditTimelineController {
 
     reply
       .header('content-type', 'text/csv; charset=utf-8')
-      .header(
-        'content-disposition',
-        `attachment; filename="audit-timeline-${q.insuredId}.csv"`,
-      )
+      .header('content-disposition', `attachment; filename="audit-timeline-${q.insuredId}.csv"`)
       // No-cache: CSV puede contener PII; cache intermedios out-of-scope.
       .header('cache-control', 'no-store');
 

@@ -45,16 +45,8 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
-import {
-  ChatMessageSchema,
-  type ChatMessageDto,
-  type ChatMessageResponse,
-} from './dto/chat-message.dto';
-import {
-  EscalateRequestSchema,
-  type EscalateRequestDto,
-  type EscalateResult,
-} from './dto/escalation.dto';
+import { ChatMessageSchema, type ChatMessageDto, type ChatMessageResponse } from './dto/chat-message.dto';
+import { EscalateRequestSchema, type EscalateRequestDto, type EscalateResult } from './dto/escalation.dto';
 import {
   CreateKbEntrySchema,
   ListKbEntriesQuerySchema,
@@ -190,10 +182,7 @@ export class AdminChatbotKbController {
   @Delete(':id')
   @HttpCode(HttpStatus.NO_CONTENT)
   @Roles('admin_mac', 'admin_segurasist')
-  async remove(
-    @Param('id', new ParseUUIDPipe()) id: string,
-    @Tenant() tenant: TenantCtx,
-  ): Promise<void> {
+  async remove(@Param('id', new ParseUUIDPipe()) id: string, @Tenant() tenant: TenantCtx): Promise<void> {
     await this.kb.deleteEntry(tenant.id, id);
   }
 }

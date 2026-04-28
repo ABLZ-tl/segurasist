@@ -179,10 +179,7 @@ function computeMirrorLagSeconds(
   s3Rows: Array<{ occurredAt: string }>,
 ): number | null {
   if (dbRows.length === 0) return null;
-  const lastDb = dbRows.reduce(
-    (max, r) => (r.occurredAt.getTime() > max ? r.occurredAt.getTime() : max),
-    0,
-  );
+  const lastDb = dbRows.reduce((max, r) => (r.occurredAt.getTime() > max ? r.occurredAt.getTime() : max), 0);
   if (s3Rows.length === 0) {
     // Sin mirror: lag desde la fila DB más reciente hasta ahora.
     return Math.max(0, (Date.now() - lastDb) / 1000);

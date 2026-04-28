@@ -14,10 +14,7 @@
  * patrón que `throttler.spec.ts`).
  */
 import type { Server } from 'node:http';
-import {
-  Module,
-  Logger,
-} from '@nestjs/common';
+import { Module, Logger } from '@nestjs/common';
 import type { INestApplication } from '@nestjs/common';
 import { APP_FILTER, APP_GUARD } from '@nestjs/core';
 import type { NestFastifyApplication } from '@nestjs/platform-fastify';
@@ -133,14 +130,12 @@ describe('SesWebhookController security (H-12 / H-13)', () => {
     Logger.overrideLogger(false);
 
     const moduleRef = await Test.createTestingModule({ imports: [TestWebhookModule] }).compile();
-    app = moduleRef.createNestApplication<NestFastifyApplication>(
-      new FastifyAdapter({ trustProxy: true }),
-    );
+    app = moduleRef.createNestApplication<NestFastifyApplication>(new FastifyAdapter({ trustProxy: true }));
     app.enableVersioning();
     await app.init();
     await app.getHttpAdapter().getInstance().ready();
     server = app.getHttpServer() as Server;
-    bypass = moduleRef.get(PrismaBypassRlsService) as unknown as FakePrismaBypass;
+    bypass = moduleRef.get(PrismaBypassRlsService);
   });
 
   afterAll(async () => {
@@ -153,15 +148,12 @@ describe('SesWebhookController security (H-12 / H-13)', () => {
   // ---------------------------------------------------------------------
 
   it('H-12: SigningCertURL fuera de amazonaws.com → 401', async () => {
-    const res = await request(server)
-      .post('/v1/webhooks/ses')
-      .set('Content-Type', 'application/json')
-      .send({
-        Type: 'Notification',
-        Message: '{}',
-        Signature: 'AAAA',
-        SigningCertURL: 'https://attacker.example.com/cert.pem',
-      });
+    const res = await request(server).post('/v1/webhooks/ses').set('Content-Type', 'application/json').send({
+      Type: 'Notification',
+      Message: '{}',
+      Signature: 'AAAA',
+      SigningCertURL: 'https://attacker.example.com/cert.pem',
+    });
     expect(res.status).toBe(401);
   });
 
@@ -172,35 +164,32 @@ describe('SesWebhookController security (H-12 / H-13)', () => {
       .set('Content-Type', 'application/json')
       .send({
         Type: 'Notification',
-        Message: JSON.stringify({ eventType: 'Open', mail: { tags: { cert: ['cert-1'] }, destination: ['x@y'] } }),
+        Message: JSON.stringify({
+          eventType: 'Open',
+          mail: { tags: { cert: ['cert-1'] }, destination: ['x@y'] },
+        }),
       });
     expect(res.status).toBe(204);
   });
 
   it('H-12: SubscriptionConfirmation con cert host válido → 204 (no auto-confirm porque fetch falla, pero no rompe)', async () => {
-    const res = await request(server)
-      .post('/v1/webhooks/ses')
-      .set('Content-Type', 'application/json')
-      .send({
-        Type: 'SubscriptionConfirmation',
-        Signature: 'AAAA',
-        SigningCertURL: 'https://sns.us-east-1.amazonaws.com/cert.pem',
-        TopicArn: 'arn:aws:sns:us-east-1:123:test',
-        SubscribeURL: 'https://sns.us-east-1.amazonaws.com/?Action=ConfirmSubscription&Token=abc',
-      });
+    const res = await request(server).post('/v1/webhooks/ses').set('Content-Type', 'application/json').send({
+      Type: 'SubscriptionConfirmation',
+      Signature: 'AAAA',
+      SigningCertURL: 'https://sns.us-east-1.amazonaws.com/cert.pem',
+      TopicArn: 'arn:aws:sns:us-east-1:123:test',
+      SubscribeURL: 'https://sns.us-east-1.amazonaws.com/?Action=ConfirmSubscription&Token=abc',
+    });
     expect(res.status).toBe(204);
   });
 
   it('H-12: UnsubscribeConfirmation con cert host válido → 204', async () => {
-    const res = await request(server)
-      .post('/v1/webhooks/ses')
-      .set('Content-Type', 'application/json')
-      .send({
-        Type: 'UnsubscribeConfirmation',
-        Signature: 'AAAA',
-        SigningCertURL: 'https://sns.eu-west-1.amazonaws.com/cert.pem',
-        TopicArn: 'arn:aws:sns:eu-west-1:123:test',
-      });
+    const res = await request(server).post('/v1/webhooks/ses').set('Content-Type', 'application/json').send({
+      Type: 'UnsubscribeConfirmation',
+      Signature: 'AAAA',
+      SigningCertURL: 'https://sns.eu-west-1.amazonaws.com/cert.pem',
+      TopicArn: 'arn:aws:sns:eu-west-1:123:test',
+    });
     expect(res.status).toBe(204);
   });
 

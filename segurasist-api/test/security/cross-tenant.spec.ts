@@ -362,9 +362,24 @@ const HTTP_MATRIX: ReadonlyArray<{
   description: string;
 }> = [
   // insureds (5 variantes — GET list, GET detail, GET 360, PATCH, DELETE)
-  { method: 'GET', pathTemplate: '/v1/insureds', expectedStatus: 404, description: 'GET /v1/insureds — list (validamos que no leak items de B)' },
-  { method: 'GET', pathTemplate: '/v1/insureds/:id', expectedStatus: 404, description: 'GET /v1/insureds/:id (id de B)' },
-  { method: 'GET', pathTemplate: '/v1/insureds/:id/360', expectedStatus: 404, description: 'GET /v1/insureds/:id/360 (id de B) — S3-06' },
+  {
+    method: 'GET',
+    pathTemplate: '/v1/insureds',
+    expectedStatus: 404,
+    description: 'GET /v1/insureds — list (validamos que no leak items de B)',
+  },
+  {
+    method: 'GET',
+    pathTemplate: '/v1/insureds/:id',
+    expectedStatus: 404,
+    description: 'GET /v1/insureds/:id (id de B)',
+  },
+  {
+    method: 'GET',
+    pathTemplate: '/v1/insureds/:id/360',
+    expectedStatus: 404,
+    description: 'GET /v1/insureds/:id/360 (id de B) — S3-06',
+  },
   {
     method: 'PATCH',
     pathTemplate: '/v1/insureds/:id',
@@ -372,10 +387,25 @@ const HTTP_MATRIX: ReadonlyArray<{
     body: () => ({ fullName: 'attacker-rename' }),
     description: 'PATCH /v1/insureds/:id (id de B)',
   },
-  { method: 'DELETE', pathTemplate: '/v1/insureds/:id', expectedStatus: 404, description: 'DELETE /v1/insureds/:id (id de B)' },
+  {
+    method: 'DELETE',
+    pathTemplate: '/v1/insureds/:id',
+    expectedStatus: 404,
+    description: 'DELETE /v1/insureds/:id (id de B)',
+  },
   // batches (3)
-  { method: 'GET', pathTemplate: '/v1/batches/:id', expectedStatus: 404, description: 'GET /v1/batches/:id (id de B)' },
-  { method: 'GET', pathTemplate: '/v1/batches/:id/errors', expectedStatus: 404, description: 'GET /v1/batches/:id/errors (id de B)' },
+  {
+    method: 'GET',
+    pathTemplate: '/v1/batches/:id',
+    expectedStatus: 404,
+    description: 'GET /v1/batches/:id (id de B)',
+  },
+  {
+    method: 'GET',
+    pathTemplate: '/v1/batches/:id/errors',
+    expectedStatus: 404,
+    description: 'GET /v1/batches/:id/errors (id de B)',
+  },
   {
     method: 'POST',
     pathTemplate: '/v1/batches/:id/confirm',
@@ -384,8 +414,18 @@ const HTTP_MATRIX: ReadonlyArray<{
     description: 'POST /v1/batches/:id/confirm (id de B)',
   },
   // certificates (3)
-  { method: 'GET', pathTemplate: '/v1/certificates/:id', expectedStatus: 404, description: 'GET /v1/certificates/:id (id de B)' },
-  { method: 'GET', pathTemplate: '/v1/certificates/:id/url', expectedStatus: 404, description: 'GET /v1/certificates/:id/url (id de B)' },
+  {
+    method: 'GET',
+    pathTemplate: '/v1/certificates/:id',
+    expectedStatus: 404,
+    description: 'GET /v1/certificates/:id (id de B)',
+  },
+  {
+    method: 'GET',
+    pathTemplate: '/v1/certificates/:id/url',
+    expectedStatus: 404,
+    description: 'GET /v1/certificates/:id/url (id de B)',
+  },
   {
     method: 'POST',
     pathTemplate: '/v1/insureds/:id/certificates/reissue',
@@ -394,7 +434,12 @@ const HTTP_MATRIX: ReadonlyArray<{
     description: 'POST /v1/insureds/:id/certificates/reissue (id de B)',
   },
   // claims (2)
-  { method: 'GET', pathTemplate: '/v1/claims/:id', expectedStatus: 404, description: 'GET /v1/claims/:id (id de B)' },
+  {
+    method: 'GET',
+    pathTemplate: '/v1/claims/:id',
+    expectedStatus: 404,
+    description: 'GET /v1/claims/:id (id de B)',
+  },
   {
     method: 'PATCH',
     pathTemplate: '/v1/claims/:id',
@@ -403,7 +448,12 @@ const HTTP_MATRIX: ReadonlyArray<{
     description: 'PATCH /v1/claims/:id (id de B)',
   },
   // packages / coverages (2)
-  { method: 'GET', pathTemplate: '/v1/packages/:id', expectedStatus: 404, description: 'GET /v1/packages/:id (id de B)' },
+  {
+    method: 'GET',
+    pathTemplate: '/v1/packages/:id',
+    expectedStatus: 404,
+    description: 'GET /v1/packages/:id (id de B)',
+  },
   {
     method: 'PATCH',
     pathTemplate: '/v1/coverages/:id',
@@ -412,16 +462,41 @@ const HTTP_MATRIX: ReadonlyArray<{
     description: 'PATCH /v1/coverages/:id (id de B)',
   },
   // audit (1)
-  { method: 'GET', pathTemplate: '/v1/audit/log?tenantId=:id', expectedStatus: 403, description: 'GET /v1/audit/log?tenantId=B (admin_mac no puede leer log de B)' },
+  {
+    method: 'GET',
+    pathTemplate: '/v1/audit/log?tenantId=:id',
+    expectedStatus: 403,
+    description: 'GET /v1/audit/log?tenantId=B (admin_mac no puede leer log de B)',
+  },
   // chat (2)
-  { method: 'GET', pathTemplate: '/v1/chat/history?tenantId=:id', expectedStatus: 403, description: 'GET /v1/chat/history (tenant B forzado)' },
-  { method: 'GET', pathTemplate: '/v1/chat/kb?tenantId=:id', expectedStatus: 403, description: 'GET /v1/chat/kb (tenant B forzado)' },
+  {
+    method: 'GET',
+    pathTemplate: '/v1/chat/history?tenantId=:id',
+    expectedStatus: 403,
+    description: 'GET /v1/chat/history (tenant B forzado)',
+  },
+  {
+    method: 'GET',
+    pathTemplate: '/v1/chat/kb?tenantId=:id',
+    expectedStatus: 403,
+    description: 'GET /v1/chat/kb (tenant B forzado)',
+  },
   // S4-06 chatbot (3) — admin de tenant A intentando leer/mutar KB de tenant B.
   // El admin_mac no tiene el insured role, así que POST /v1/chatbot/message
   // viene con 403/404 (RBAC + RLS combo). El listado admin es 404 (la entry
   // de B no existe para el contexto RLS de A, no leak).
-  { method: 'GET', pathTemplate: '/v1/admin/chatbot/kb', expectedStatus: 404, description: 'S4-06 GET /v1/admin/chatbot/kb (no leak entries de B)' },
-  { method: 'GET', pathTemplate: '/v1/admin/chatbot/kb/:id', expectedStatus: 404, description: 'S4-06 GET /v1/admin/chatbot/kb/:id (id de B)' },
+  {
+    method: 'GET',
+    pathTemplate: '/v1/admin/chatbot/kb',
+    expectedStatus: 404,
+    description: 'S4-06 GET /v1/admin/chatbot/kb (no leak entries de B)',
+  },
+  {
+    method: 'GET',
+    pathTemplate: '/v1/admin/chatbot/kb/:id',
+    expectedStatus: 404,
+    description: 'S4-06 GET /v1/admin/chatbot/kb/:id (id de B)',
+  },
   {
     method: 'PATCH',
     pathTemplate: '/v1/admin/chatbot/kb/:id',
@@ -430,9 +505,19 @@ const HTTP_MATRIX: ReadonlyArray<{
     description: 'S4-06 PATCH /v1/admin/chatbot/kb/:id (id de B)',
   },
   // reports (1)
-  { method: 'GET', pathTemplate: '/v1/reports/dashboard?tenantId=:id', expectedStatus: 403, description: 'GET /v1/reports/dashboard?tenantId=B (admin_mac forzando override → 403)' },
+  {
+    method: 'GET',
+    pathTemplate: '/v1/reports/dashboard?tenantId=:id',
+    expectedStatus: 403,
+    description: 'GET /v1/reports/dashboard?tenantId=B (admin_mac forzando override → 403)',
+  },
   // tenant-override S3-08 (4)
-  { method: 'GET', pathTemplate: '/v1/insureds', expectedStatus: 403, description: 'admin_mac + X-Tenant-Override=:id (no superadmin → 403)' },
+  {
+    method: 'GET',
+    pathTemplate: '/v1/insureds',
+    expectedStatus: 403,
+    description: 'admin_mac + X-Tenant-Override=:id (no superadmin → 403)',
+  },
 ];
 
 const HTTP_TENANT_B_FAKE_UUID = '99999999-9999-4999-8999-999999999999';

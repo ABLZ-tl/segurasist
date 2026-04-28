@@ -15,12 +15,12 @@
  * Mocks: PrismaService.client.{chatConversation,insured,chatMessage}, SesService.send,
  * AuditWriterService.record, AuditContextFactory.fromRequest. Env stub.
  */
+import { NotFoundException } from '@nestjs/common';
 import type { PrismaService } from '../../../../src/common/prisma/prisma.service';
 import type { Env } from '../../../../src/config/env.schema';
 import type { SesService } from '../../../../src/infra/aws/ses.service';
 import type { AuditContextFactory } from '../../../../src/modules/audit/audit-context.factory';
 import type { AuditWriterService } from '../../../../src/modules/audit/audit-writer.service';
-import { NotFoundException } from '@nestjs/common';
 import { EscalationService } from '../../../../src/modules/chatbot/escalation.service';
 
 const TENANT_ID = '11111111-1111-1111-1111-111111111111';
@@ -180,9 +180,7 @@ describe('EscalationService.escalate', () => {
 
   it('idempotencia: status="escalated" desde el SELECT → NO envía emails ni audit', async () => {
     const h = makeHarness();
-    h.prismaConversationFindUnique.mockResolvedValueOnce(
-      activeConversation({ status: 'escalated' }),
-    );
+    h.prismaConversationFindUnique.mockResolvedValueOnce(activeConversation({ status: 'escalated' }));
 
     const out = await h.svc.escalate(INSURED_ID, CONVERSATION_ID, 'razón irrelevante');
 

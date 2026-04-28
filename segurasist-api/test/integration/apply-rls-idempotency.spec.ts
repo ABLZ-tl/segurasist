@@ -29,8 +29,7 @@ const POLICIES_SQL = resolve(ROOT, 'prisma/rls/policies.sql');
 const SCHEMA_PRISMA = resolve(ROOT, 'prisma/schema.prisma');
 
 const RLS_E2E = process.env.RLS_E2E === '1';
-const PGURL =
-  process.env.PGURL ?? 'postgresql://segurasist:segurasist@localhost:5432/segurasist';
+const PGURL = process.env.PGURL ?? 'postgresql://segurasist:segurasist@localhost:5432/segurasist';
 
 /**
  * Parseo defensivo: extrae los nombres de tabla del array TEXT[] en

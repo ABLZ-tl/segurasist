@@ -1,9 +1,9 @@
 import { CertificatesModule } from '@modules/certificates/certificates.module';
 import { Module } from '@nestjs/common';
 import { ReportsPdfRendererService } from './reports-pdf-renderer.service';
+import { ReportsXlsxRendererService } from './reports-xlsx-renderer.service';
 import { ReportsController } from './reports.controller';
 import { ReportsService } from './reports.service';
-import { ReportsXlsxRendererService } from './reports-xlsx-renderer.service';
 
 /**
  * S2-05 (dashboard) + S4-01/02/03 (conciliación + volumetría + utilización).

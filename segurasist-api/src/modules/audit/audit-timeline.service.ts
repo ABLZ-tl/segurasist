@@ -149,7 +149,7 @@ export class AuditTimelineService {
       resourceType: r.resourceType,
       resourceId: r.resourceId,
       actorId: r.actorId,
-      actorEmail: r.actorId ? actorEmails.get(r.actorId) ?? null : null,
+      actorEmail: r.actorId ? (actorEmails.get(r.actorId) ?? null) : null,
       ipMasked: maskIp(r.ip),
       userAgent: r.userAgent,
       payloadDiff: r.payloadDiff,
@@ -216,7 +216,7 @@ export class AuditTimelineService {
           r.resourceType,
           r.resourceId,
           r.actorId,
-          r.actorId ? actorEmails.get(r.actorId) ?? '' : '',
+          r.actorId ? (actorEmails.get(r.actorId) ?? '') : '',
           maskIp(r.ip),
           // Truncamos UA a 200 chars: scrubbing + tamaño CSV.
           r.userAgent ? r.userAgent.slice(0, 200) : '',
@@ -265,10 +265,7 @@ export class AuditTimelineService {
             },
           ],
         };
-        where.AND = [
-          ...(Array.isArray(where.AND) ? where.AND : where.AND ? [where.AND] : []),
-          cursorClause,
-        ];
+        where.AND = [...(Array.isArray(where.AND) ? where.AND : where.AND ? [where.AND] : []), cursorClause];
       }
     }
 

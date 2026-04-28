@@ -6,9 +6,9 @@
  *   - Se invoca con HTML que incluye los datos del reporte.
  *   - Los buffers devueltos vienen del mock.
  */
-import { ReportsPdfRendererService } from '../../../../src/modules/reports/reports-pdf-renderer.service';
 import type { ConciliacionData } from '../../../../src/modules/reports/dto/conciliacion-report.dto';
 import type { UtilizacionData } from '../../../../src/modules/reports/dto/utilizacion-report.dto';
+import { ReportsPdfRendererService } from '../../../../src/modules/reports/reports-pdf-renderer.service';
 
 describe('ReportsPdfRendererService', () => {
   const sampleConciliacion: ConciliacionData = {
@@ -43,7 +43,9 @@ describe('ReportsPdfRendererService', () => {
         usageAmount: 1000,
       },
     ],
-    byPackage: [{ packageId: 'p1', packageName: 'Plan Premium', totalUsageCount: 50, totalUsageAmount: 1000 }],
+    byPackage: [
+      { packageId: 'p1', packageName: 'Plan Premium', totalUsageCount: 50, totalUsageAmount: 1000 },
+    ],
     generatedAt: '2026-04-27T12:00:00.000Z',
   };
 

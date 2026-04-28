@@ -133,9 +133,26 @@ export class CognitoService {
         err instanceof UserNotFoundException ||
         err instanceof InvalidPasswordException
       ) {
-        // No filtramos: el caller (AuthService.otpVerify) ya validó el OTP,
-        // un fallo aquí es config drift, NO credencial inválida del usuario.
-        this.log.error({ err: err.name }, 'loginInsuredWithSystemPassword falló pese a OTP válido');
+        // No filtramos al usuario: el caller (AuthService.otpVerify) ya validó
+        // el OTP, un fallo aquí es config drift (típico: INSURED_DEFAULT_PASSWORD
+        // del .env no coincide con el password del usuario en el pool insured
+        // de Cognito), NO credencial inválida del usuario.
+        // Logueamos email mascarado para correlacionar con soporte sin
+        // exponer PII completa en logs.
+        const safeEmail = email.includes('@')
+          ? `${email.slice(0, 4)}***@${email.split('@')[1] ?? ''}`
+          : '***';
+        this.log.error(
+          {
+            err: err.name,
+            errMessage: err.message,
+            safeEmail,
+            userPoolId: this.env.COGNITO_USER_POOL_ID_INSURED,
+            clientId: this.env.COGNITO_CLIENT_ID_INSURED,
+            hint: 'config drift: verifica INSURED_DEFAULT_PASSWORD vs cognito user pwd. Re-run cognito-local-bootstrap.sh con el env actual si discrepa.',
+          },
+          'loginInsuredWithSystemPassword falló pese a OTP válido',
+        );
         throw new UnauthorizedException('No se pudo emitir el token. Contacta a soporte.');
       }
       this.log.error({ err }, 'loginInsuredWithSystemPassword upstream error');

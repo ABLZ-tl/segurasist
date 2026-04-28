@@ -19,22 +19,22 @@
  *      año anterior.
  *   6. shape DTO inválido (mensaje SQS corrupto) → no procesa.
  */
+import { Logger } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
+import { mockDeep, type DeepMockProxy } from 'jest-mock-extended';
 import type { PrismaBypassRlsService } from '../../src/common/prisma/prisma-bypass-rls.service';
 import type { Env } from '../../src/config/env.schema';
 import type { S3Service } from '../../src/infra/aws/s3.service';
 import type { SesService } from '../../src/infra/aws/ses.service';
 import type { AuditWriterService } from '../../src/modules/audit/audit-writer.service';
-import { Logger } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
-import { mockDeep, type DeepMockProxy } from 'jest-mock-extended';
-import {
-  MonthlyReportsHandlerService,
-  type MonthlyReportGenerator,
-} from '../../src/modules/reports/cron/monthly-reports-handler.service';
 import {
   MonthlyReportCronEventSchema,
   resolveReportedPeriod,
 } from '../../src/modules/reports/cron/dto/monthly-report-event.dto';
+import {
+  MonthlyReportsHandlerService,
+  type MonthlyReportGenerator,
+} from '../../src/modules/reports/cron/monthly-reports-handler.service';
 
 Logger.overrideLogger(false);
 
@@ -72,14 +72,7 @@ function build(): Deps {
   s3.getPresignedGetUrl.mockResolvedValue('https://s3-presigned/url');
   // SES devuelve messageId default.
   ses.sendEmail.mockResolvedValue('ses-msg-001');
-  const handler = new MonthlyReportsHandlerService(
-    prismaBypass,
-    s3,
-    ses,
-    audit,
-    generator,
-    ENV,
-  );
+  const handler = new MonthlyReportsHandlerService(prismaBypass, s3, ses, audit, generator, ENV);
   return { handler, prismaBypass, s3, ses, audit, generator };
 }
 
@@ -122,9 +115,10 @@ describe('resolveReportedPeriod', () => {
   });
 
   it('overridePeriod gana siempre', () => {
-    expect(
-      resolveReportedPeriod(new Date('2026-05-01T14:00:00Z'), { year: 2024, month: 7 }),
-    ).toEqual({ year: 2024, month: 7 });
+    expect(resolveReportedPeriod(new Date('2026-05-01T14:00:00Z'), { year: 2024, month: 7 })).toEqual({
+      year: 2024,
+      month: 7,
+    });
   });
 });
 
@@ -252,7 +246,10 @@ describe('MonthlyReportsHandlerService.handleEvent', () => {
     expect(audit.record).toHaveBeenCalledWith(
       expect.objectContaining({
         tenantId: TENANT_A,
-        payloadDiff: expect.objectContaining({ subAction: 'failed', error: expect.stringContaining('PDF_RENDER_FAILED') }),
+        payloadDiff: expect.objectContaining({
+          subAction: 'failed',
+          error: expect.stringContaining('PDF_RENDER_FAILED'),
+        }),
       }),
     );
     // Update final del A con failed; del B con completed.
@@ -380,14 +377,7 @@ describe('MonthlyReportsHandlerService — integración con RealMonthlyReportGen
     prismaBypass.client.monthlyReportRun.create.mockResolvedValue({ id: 'run-real' } as never);
     prismaBypass.client.monthlyReportRun.update.mockResolvedValue({} as never);
 
-    const handler = new MonthlyReportsHandlerService(
-      prismaBypass,
-      s3,
-      ses,
-      audit,
-      realGenerator,
-      ENV,
-    );
+    const handler = new MonthlyReportsHandlerService(prismaBypass, s3, ses, audit, realGenerator, ENV);
 
     const result = await handler.handleEvent({
       kind: 'cron.monthly_reports',

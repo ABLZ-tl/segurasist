@@ -119,9 +119,7 @@ describe('SesService', () => {
       const cmd = sendMock.mock.calls[0]?.[0] as SendEmailCommand;
       const tags = cmd.input.Tags ?? [];
       // Names sanitizados.
-      expect(tags.map((t) => t.Name)).toEqual(
-        expect.arrayContaining(['with_colon', 'spaced_name']),
-      );
+      expect(tags.map((t) => t.Name)).toEqual(expect.arrayContaining(['with_colon', 'spaced_name']));
       // Values sanitizados.
       const tagValues = tags.map((t) => t.Value);
       expect(tagValues).toEqual(expect.arrayContaining(['foo_bar', 'val_ue']));

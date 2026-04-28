@@ -322,9 +322,7 @@ describe('PdfWorkerService', () => {
     expect(certData.hash).toBe(expectedSha);
 
     // qrPayload codifica el realHash en la URL de verificación.
-    expect(certData.qrPayload).toBe(
-      `http://localhost:3000/v1/certificates/verify/${expectedSha}`,
-    );
+    expect(certData.qrPayload).toBe(`http://localhost:3000/v1/certificates/verify/${expectedSha}`);
 
     // S3 metadata: x-hash matchea Certificate.hash (lookup); además
     // x-sha256-content guarda el SHA del archivo real subido.

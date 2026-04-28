@@ -149,6 +149,10 @@ QUEUES=(
   "pdf-queue"
   "email-queue"
   "reports-queue"
+  # Sprint 4 — naming sin sufijo `-queue` (el .env.example los declara así).
+  # Ver SQS_QUEUE_INSUREDS_CREATION + SQS_QUEUE_MONTHLY_REPORTS.
+  "insureds-creation"
+  "monthly-reports"
 )
 
 for q in "${QUEUES[@]}"; do

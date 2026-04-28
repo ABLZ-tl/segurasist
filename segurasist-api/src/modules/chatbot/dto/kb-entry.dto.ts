@@ -21,13 +21,7 @@ import { z } from 'zod';
  * Catálogo cerrado MVP. La seed inicial cubre las 5: coverages, claims,
  * certificates, billing, general.
  */
-export const KB_CATEGORIES = [
-  'coverages',
-  'claims',
-  'certificates',
-  'billing',
-  'general',
-] as const;
+export const KB_CATEGORIES = ['coverages', 'claims', 'certificates', 'billing', 'general'] as const;
 
 const SynonymsRecordSchema = z
   .record(z.string().min(1).max(80), z.array(z.string().min(1).max(80)).max(10))

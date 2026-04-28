@@ -114,6 +114,11 @@ export interface UtilizacionData {
   to: string;
   topN: number;
   rows: UtilizacionRow[];
-  byPackage: Array<{ packageId: string; packageName: string; totalUsageCount: number; totalUsageAmount: number }>;
+  byPackage: Array<{
+    packageId: string;
+    packageName: string;
+    totalUsageCount: number;
+    totalUsageAmount: number;
+  }>;
   generatedAt: string;
 }

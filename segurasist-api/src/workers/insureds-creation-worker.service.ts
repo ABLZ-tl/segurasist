@@ -310,10 +310,7 @@ export class InsuredsCreationWorkerService implements OnModuleInit, OnModuleDest
     // otro worker ganó la carrera). MessageDeduplicationId era redundante y
     // se ignoraba en cola standard.
     await this.sqs.sendMessage(this.env.SQS_QUEUE_LAYOUT, event as unknown as Record<string, unknown>);
-    this.log.log(
-      { batchId, processed: batch.processed_rows, target },
-      'batch completado (exactly-once)',
-    );
+    this.log.log({ batchId, processed: batch.processed_rows, target }, 'batch completado (exactly-once)');
   }
 }
 

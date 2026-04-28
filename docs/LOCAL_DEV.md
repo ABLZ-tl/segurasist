@@ -107,6 +107,26 @@ Usuario semilla (creado por `cognito-local-bootstrap.sh`, email alineado con `pr
 
 Para portal asegurado (Sprint 3) los OTPs aparecen en consola de cognito-local y en Mailpit.
 
+### C-04 — `INSURED_DEFAULT_PASSWORD` blocklist
+
+A partir de Sprint 4 (audit C-04), el env validator rechaza valores de
+`INSURED_DEFAULT_PASSWORD` que estén en una blocklist de passwords débiles
+conocidos (e.g. `Demo123!`, `Password1!`, `admin`). El check corre **también
+en dev**, no solo en prod.
+
+`cognito-local-bootstrap.sh` toma el valor del `.env` (si está exportado al
+shell) y lo aplica como password del usuario `insured.demo` para que la API
+pueda autenticarse después del OTP. Si modificas el valor:
+
+1. Edita `INSURED_DEFAULT_PASSWORD` en `.env` (≥14 chars, símbolos, fuera de
+   la blocklist — `Insured-Sys-Auth-2026!@SecureLocal` cumple).
+2. Re-corre `./scripts/cognito-local-bootstrap.sh` para que sincronice
+   cognito-local con el nuevo valor.
+3. Reinicia `npm run dev`.
+
+El default que provee `.env.example` (`DevLocal-PleaseChange-9!`) ya pasa el
+validator y funciona out-of-the-box con `./scripts/local-up.sh`.
+
 ## Diferencias deliberadas vs producción
 
 | Punto | Local | Producción | Mitigación |

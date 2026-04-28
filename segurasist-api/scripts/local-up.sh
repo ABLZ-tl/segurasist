@@ -97,8 +97,28 @@ else
   if grep -q '^AWS_REGION=mx-central-1' .env; then
     sed -i.bak 's/^AWS_REGION=mx-central-1/AWS_REGION=us-east-1/' .env && rm -f .env.bak
     ok ".env: AWS_REGION mx-central-1 → us-east-1 (LocalStack no soporta mx-central-1)"
+  fi
+
+  # Sprint 4 — append vars introducidas por S4 si falta alguna en .env legacy.
+  # Nombre por nombre (no append blob) para evitar duplicar si solo falta una.
+  S4_VARS=(
+    "SQS_QUEUE_INSUREDS_CREATION=http://localhost:4566/000000000000/insureds-creation"
+    "SQS_QUEUE_MONTHLY_REPORTS=http://localhost:4566/000000000000/monthly-reports"
+    "MONTHLY_REPORT_RECIPIENTS=ops@segurasist.local,admin-mac@hospitalesmac.local"
+    "INSURED_DEFAULT_PASSWORD=DevLocal-PleaseChange-9!"
+  )
+  added=0
+  for kv in "${S4_VARS[@]}"; do
+    key="${kv%%=*}"
+    if ! grep -q "^${key}=" .env; then
+      printf '\n%s\n' "${kv}" >> .env
+      added=$((added+1))
+    fi
+  done
+  if [[ $added -gt 0 ]]; then
+    ok ".env: ${added} var(s) S4 agregadas"
   else
-    ok ".env ya existe (no lo toco)"
+    ok ".env ya tiene S4 vars"
   fi
 fi
 
