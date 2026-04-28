@@ -19,6 +19,6 @@ import { ReportsXlsxRendererService } from './reports-xlsx-renderer.service';
   imports: [CertificatesModule],
   controllers: [ReportsController],
   providers: [ReportsService, ReportsPdfRendererService, ReportsXlsxRendererService],
-  exports: [ReportsService],
+  exports: [ReportsService, ReportsPdfRendererService],
 })
 export class ReportsModule {}
