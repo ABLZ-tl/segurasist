@@ -45,8 +45,17 @@ async function handle(req: NextRequest, path: string[]) {
   const upstream = await fetch(url, init);
   const respHeaders = new Headers();
   upstream.headers.forEach((v, k) => {
-    // Strip hop-by-hop headers; let Next set its own.
-    if (!['transfer-encoding', 'connection'].includes(k.toLowerCase())) {
+    // Strip hop-by-hop headers + content-encoding/length: Node's fetch
+    // transparently decompresses gzip/deflate/br al consumir `upstream.body`,
+    // pero forwardear esos headers hace al browser intentar decode de nuevo
+    // sobre un body ya en plain → "incorrect header check" → Next dev
+    // upgrade-ea ese fail a 503. Dejar a Next setear su propio encoding/length
+    // evita el double-decode.
+    if (
+      !['transfer-encoding', 'connection', 'content-encoding', 'content-length'].includes(
+        k.toLowerCase(),
+      )
+    ) {
       respHeaders.set(k, v);
     }
   });

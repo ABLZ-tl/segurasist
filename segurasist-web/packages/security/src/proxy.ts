@@ -39,9 +39,17 @@ export interface ProxyHandlerContext {
   params: { path: string[] };
 }
 
+// Headers que NO se forwardean del upstream al cliente:
+//  - hop-by-hop: rules HTTP, no significan nada cross-hop
+//  - content-encoding/content-length: Node fetch decomprime gzip/deflate/br
+//    transparentemente al consumir `upstream.body`. Forwardear esos headers
+//    hace al browser intentar decode de nuevo sobre body ya en plain →
+//    "incorrect header check" → Next dev convierte en 503.
 const HOP_BY_HOP_HEADERS: ReadonlySet<string> = new Set([
   'transfer-encoding',
   'connection',
+  'content-encoding',
+  'content-length',
 ]);
 
 /**
