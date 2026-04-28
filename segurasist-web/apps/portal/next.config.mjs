@@ -23,13 +23,26 @@ const nextConfig = {
     // prod. Permitimos S3 mx-central-1 y CloudFront — ambos proyectados por
     // la infra. `frame-ancestors 'none'` sigue protegiendo al portal de ser
     // embebido por terceros (clickjacking) — son directivas ortogonales.
+    //
+    // Dev — `'unsafe-eval'` en script-src + localhost en connect-src son
+    // necesarios para que Next.js dev runtime (React Refresh / HMR) funcione.
+    // Sin esto el bundle main-app.js falla a evaluar, React no hidrata y la
+    // página queda blanca. En prod NO se incluyen — el bundle ya está pre-built.
+    const isDev = process.env.NODE_ENV !== 'production';
+    const scriptSrc = isDev
+      ? "script-src 'self' 'unsafe-inline' 'unsafe-eval'"
+      : "script-src 'self' 'unsafe-inline'";
+    const connectSrc = isDev
+      ? "connect-src 'self' http://localhost:3000 ws://localhost:3002 https://api.segurasist.app https://cognito-idp.mx-central-1.amazonaws.com"
+      : "connect-src 'self' https://api.segurasist.app https://cognito-idp.mx-central-1.amazonaws.com";
+
     const csp = [
       "default-src 'self'",
-      "script-src 'self' 'unsafe-inline'",
+      scriptSrc,
       "style-src 'self' 'unsafe-inline'",
       "img-src 'self' data: https://*.amazonaws.com",
       "font-src 'self' data:",
-      "connect-src 'self' https://api.segurasist.app https://cognito-idp.mx-central-1.amazonaws.com",
+      connectSrc,
       "frame-src 'self' https://*.s3.mx-central-1.amazonaws.com https://*.cloudfront.net",
       "frame-ancestors 'none'",
       "base-uri 'self'",
