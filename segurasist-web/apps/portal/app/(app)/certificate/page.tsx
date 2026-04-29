@@ -3,10 +3,13 @@
 /**
  * Portal asegurado — Mi certificado.
  *
- * Renderiza preview del PDF en `<iframe sandbox>` (sin `allow-scripts` para
- * defensa en profundidad — solo necesitamos same-origin para el embed). El
- * botón principal abre el PDF en una pestaña nueva (`window.open` con
+ * Botón principal abre el PDF en una pestaña nueva (`window.open` con
  * `noopener`), el secundario arma `mailto:` con la URL pre-firmada.
+ *
+ * Preview embed retirado: el iframe sandbox dependía del PDF estando en S3
+ * más CSP frame-src consistente con el bucket runtime — combinación frágil
+ * en dev (LocalStack) y prod (CloudFront vs S3 directo). El usuario abre
+ * el PDF on-demand en pestaña separada, mismo flow que un email link real.
  *
  * Nota seguridad: la URL pre-firmada expira en `expiresAt`. El hook tiene
  * `staleTime: 60s` para que un click después de inactividad re-fetche.
@@ -15,13 +18,7 @@
 import * as React from 'react';
 import { motion } from 'framer-motion';
 import { Download, FileText, Mail, XCircle } from 'lucide-react';
-import {
-  Button,
-  Card,
-  CardContent,
-  EmptyState,
-  Skeleton,
-} from '@segurasist/ui';
+import { Button, EmptyState, Skeleton } from '@segurasist/ui';
 import { useCertificateMine } from '@segurasist/api-client/hooks/certificates';
 import type { CertificateMine } from '@segurasist/api-client/hooks/certificates';
 import { ProblemDetailsError } from '@segurasist/api-client';
@@ -76,24 +73,10 @@ function CertificateContent({ data }: { data: CertificateMine }) {
         </p>
       </header>
 
-      <Card>
-        <CardContent className="p-0">
-          <div className="relative aspect-[3/4] w-full overflow-hidden rounded-md bg-surface">
-            <iframe
-              title="Vista previa de tu certificado"
-              src={data.url}
-              sandbox="allow-same-origin"
-              className="absolute inset-0 h-full w-full"
-              data-testid="certificate-preview"
-            />
-            {/* Texto fallback debajo del iframe — solo visible si el iframe
-                no carga (z-0). La accesibilidad la maneja el `title` del iframe. */}
-            <p className="absolute inset-x-0 bottom-2 z-0 px-4 text-center text-xs text-fg-muted">
-              Si la vista previa no carga, descarga el PDF.
-            </p>
-          </div>
-        </CardContent>
-      </Card>
+      {/* Preview del PDF retirado intencionalmente: el iframe sandbox dependía
+          del PDF en S3 más CSP frame-src + cross-origin policies, y producía
+          UX inconsistente cuando alguno de esos pisos fallaba. El usuario
+          descarga directo con el botón abajo. */}
 
       <div className="space-y-3">
         <Button
@@ -130,7 +113,6 @@ function CertificateSkeleton() {
     >
       <Skeleton className="h-8 w-48" />
       <Skeleton className="h-4 w-3/4" />
-      <Skeleton className="aspect-[3/4] w-full" />
       <Skeleton className="h-14 w-full" />
       <Skeleton className="h-14 w-full" />
     </div>
