@@ -35,15 +35,24 @@ const nextConfig = {
     const connectSrc = isDev
       ? "connect-src 'self' http://localhost:3000 ws://localhost:3002 https://api.segurasist.app https://cognito-idp.mx-central-1.amazonaws.com"
       : "connect-src 'self' https://api.segurasist.app https://cognito-idp.mx-central-1.amazonaws.com";
+    // Dev — preview de certificado se sirve desde LocalStack S3 (localhost:4566).
+    // Sin este allowlist el iframe queda bloqueado por CSP frame-src.
+    const frameSrc = isDev
+      ? "frame-src 'self' http://localhost:4566 https://*.s3.mx-central-1.amazonaws.com https://*.cloudfront.net"
+      : "frame-src 'self' https://*.s3.mx-central-1.amazonaws.com https://*.cloudfront.net";
+    // Dev — img-src también necesita LocalStack para assets adicionales del PDF.
+    const imgSrc = isDev
+      ? "img-src 'self' data: http://localhost:4566 https://*.amazonaws.com"
+      : "img-src 'self' data: https://*.amazonaws.com";
 
     const csp = [
       "default-src 'self'",
       scriptSrc,
       "style-src 'self' 'unsafe-inline'",
-      "img-src 'self' data: https://*.amazonaws.com",
+      imgSrc,
       "font-src 'self' data:",
       connectSrc,
-      "frame-src 'self' https://*.s3.mx-central-1.amazonaws.com https://*.cloudfront.net",
+      frameSrc,
       "frame-ancestors 'none'",
       "base-uri 'self'",
       "form-action 'self' https://*.amazoncognito.com",
