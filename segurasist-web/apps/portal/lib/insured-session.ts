@@ -1,6 +1,10 @@
 import 'server-only';
 import { cookies } from 'next/headers';
-import { readFirstNameFromToken } from './jwt';
+import {
+  readEmailFromToken,
+  readFirstNameFromToken,
+  readFullNameFromToken,
+} from './jwt';
 import { PORTAL_SESSION_COOKIE } from './cookie-names';
 
 /**
@@ -15,4 +19,18 @@ export function getInsuredFirstName(): string | null {
   const token = cookies().get(PORTAL_SESSION_COOKIE)?.value;
   if (!token) return null;
   return readFirstNameFromToken(token);
+}
+
+/**
+ * `{ fullName, email }` derivado del JWT en cookie. Usado por el menú de
+ * usuario del header — el server lee la cookie y le pasa los datos al
+ * cliente para evitar decodear el JWT en browser.
+ */
+export function getInsuredIdentity(): { fullName: string | null; email: string | null } {
+  const token = cookies().get(PORTAL_SESSION_COOKIE)?.value;
+  if (!token) return { fullName: null, email: null };
+  return {
+    fullName: readFullNameFromToken(token),
+    email: readEmailFromToken(token),
+  };
 }

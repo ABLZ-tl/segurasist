@@ -50,6 +50,36 @@ export function readFirstNameFromToken(token: string): string | null {
 }
 
 /**
+ * Extract full display name. Si el JWT trae `given_name` + `family_name`
+ * los junta; si solo `name`, lo usa; fallback a email-local-part. Usado
+ * por el menú de usuario del header (más completo que `readFirstName`
+ * que se queda con el primer token solo para el saludo).
+ */
+export function readFullNameFromToken(token: string): string | null {
+  const payload = decodeJwtPayload(token);
+  if (!payload) return null;
+  const given = typeof payload['given_name'] === 'string' ? payload['given_name'].trim() : '';
+  const family = typeof payload['family_name'] === 'string' ? payload['family_name'].trim() : '';
+  if (given && family) return `${given} ${family}`;
+  if (given) return given;
+  const name = payload['name'];
+  if (typeof name === 'string' && name.trim().length > 0) return name.trim();
+  const email = payload['email'];
+  if (typeof email === 'string' && email.includes('@')) {
+    return email.split('@', 1)[0] ?? null;
+  }
+  return null;
+}
+
+/** Extract email claim para mostrar como subtítulo del menú. */
+export function readEmailFromToken(token: string): string | null {
+  const payload = decodeJwtPayload(token);
+  if (!payload) return null;
+  const email = payload['email'];
+  return typeof email === 'string' && email.includes('@') ? email : null;
+}
+
+/**
  * Returns true when the token is missing, malformed, or past its `exp`.
  *
  * Preserves the portal-historic positional signature (`(token, nowSeconds?)`)

@@ -3,10 +3,15 @@
 import * as React from 'react';
 import Link from 'next/link';
 import { ThemeToggle } from './theme-toggle';
+import { UserMenu } from './user-menu';
 
 export interface PortalHeaderProps {
   /** Friendly first name for the greeting. Falls back to "Hola" if absent. */
   firstName?: string | null;
+  /** Full name for the avatar/menu (no se trunca como el greeting). */
+  fullName?: string | null;
+  /** Email del insured para mostrar en el menú. */
+  email?: string | null;
 }
 
 /**
@@ -20,7 +25,7 @@ export interface PortalHeaderProps {
  * The greeting only renders when `firstName` is non-empty so we never show
  * an awkward "Hola, " comma stub for users with no name claim.
  */
-export function PortalHeader({ firstName }: PortalHeaderProps): JSX.Element {
+export function PortalHeader({ firstName, fullName, email }: PortalHeaderProps): JSX.Element {
   const trimmed = (firstName ?? '').trim();
   const hasName = trimmed.length > 0;
 
@@ -60,7 +65,10 @@ export function PortalHeader({ firstName }: PortalHeaderProps): JSX.Element {
         </span>
       </Link>
 
-      <ThemeToggle />
+      <div className="flex items-center gap-1">
+        <ThemeToggle />
+        <UserMenu fullName={fullName ?? trimmed} email={email} />
+      </div>
     </header>
   );
 }

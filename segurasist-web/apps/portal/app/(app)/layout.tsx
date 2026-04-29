@@ -1,7 +1,7 @@
 import { PortalHeader } from '../../components/layout/header';
 import { PortalBottomNav } from '../../components/layout/bottom-nav';
 import { ChatbotWidget } from '../../components/chatbot';
-import { getInsuredFirstName } from '../../lib/insured-session';
+import { getInsuredFirstName, getInsuredIdentity } from '../../lib/insured-session';
 
 /**
  * Portal asegurado app shell — mobile-first.
@@ -28,13 +28,14 @@ export default function PortalAppLayout({
   children: React.ReactNode;
 }): JSX.Element {
   const firstName = getInsuredFirstName();
+  const { fullName, email } = getInsuredIdentity();
 
   return (
     <div
       className="flex min-h-screen flex-col bg-bg text-fg"
       style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
     >
-      <PortalHeader firstName={firstName} />
+      <PortalHeader firstName={firstName} fullName={fullName} email={email} />
 
       <main id="main" className="flex-1 px-4 pt-4 pb-24">
         {children}
