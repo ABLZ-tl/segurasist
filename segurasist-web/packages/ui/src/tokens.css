@@ -84,6 +84,15 @@
 
   /* Focus ring */
   --focus-ring: 0 0 0 2px hsl(var(--ring));
+
+  /* Tenant brandable tokens (Sprint 5 — DS-1).
+     Defaults match the SegurAsist house palette. Overridden at runtime by
+     packages/ui/src/theme/brandable-tokens.ts when a tenant logs in. */
+  --tenant-primary: #16a34a;
+  --tenant-primary-fg: #ffffff;
+  --tenant-accent: #2e6ff2;
+  --tenant-accent-fg: #ffffff;
+  /* --tenant-bg-image: <unset by default>; set via applyBrandableTheme. */
 }
 
 .dark {

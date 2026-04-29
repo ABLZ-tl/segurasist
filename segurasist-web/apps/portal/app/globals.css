@@ -1,1 +1,28 @@
 @import '@segurasist/ui/globals.css';
+
+/**
+ * Portal asegurado — overrides + multi-tenant CSS variables (Sprint 5/MT-3).
+ *
+ * Las CSS vars `--tenant-*` se inicializan con los defaults SegurAsist
+ * (verde + violeta) y el `<TenantProvider>` las sobreescribe en runtime
+ * con `document.documentElement.style.setProperty(...)` — esto NO es
+ * "inline style" desde el punto de vista de CSP (no hay `<style>` tag
+ * generado ni atributo `style=""` en el HTML inicial), por lo que no
+ * requiere `'unsafe-inline'` ni nonce.
+ *
+ * Triple expresión por color:
+ *   --tenant-primary-hex: para `color: var(...)` directo
+ *   --tenant-primary-rgb: para `rgb(var(...) / <alpha-value>)` en Tailwind
+ *
+ * Consumo:
+ *   - Tailwind: `bg-tenant-primary` / `text-tenant-accent` (ver tailwind.config.ts)
+ *   - CSS raw: `background: var(--tenant-primary-hex)`
+ */
+:root {
+  --tenant-primary-hex: #16a34a;
+  --tenant-primary-rgb: 22 163 74;
+  --tenant-accent-hex: #7c3aed;
+  --tenant-accent-rgb: 124 58 237;
+  --tenant-bg-image: none;
+  --tenant-logo-url: none;
+}

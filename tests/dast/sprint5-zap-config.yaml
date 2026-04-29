@@ -1,0 +1,163 @@
+# Sprint 5 — S5/G-2 — DAST scope para OWASP ZAP
+#
+# Owner: G-2 (QA Performance + DAST). File Ownership: tests/dast/sprint5-zap-config.yaml
+#
+# Uso (Automation Framework v0.21+):
+#   docker run --rm -v $(pwd):/zap/wrk:rw \
+#     -t ghcr.io/zaproxy/zaproxy:stable \
+#     zap.sh -cmd -autorun /zap/wrk/tests/dast/sprint5-zap-config.yaml
+#
+# Salida:
+#   tests/dast/results/sprint5-report.html
+#   tests/dast/results/sprint5-report.json
+#
+# NOTA: este archivo es declarativo. El equivalente en CI (action-baseline) usa
+# directamente el openapi.json (ver ci.yml:api-dast). Este YAML es para correrlo
+# en local + futuro `dast.yml` workflow.
+
+env:
+  contexts:
+    - name: segurasist-api-public
+      urls:
+        - http://localhost:3000/health
+        - http://localhost:3000/v1/openapi.json
+        - http://localhost:3000/v1/auth/login
+        - http://localhost:3000/v1/auth/saml/acs
+        - http://localhost:3000/v1/auth/saml/metadata
+        - http://localhost:3000/v1/chatbot/message
+        - http://localhost:3000/v1/proxy/v1/insureds
+      includePaths:
+        - 'http://localhost:3000/v1/.*'
+        - 'http://localhost:3000/health.*'
+      # Reglas duras: NO active scan en endpoints destructivos.
+      excludePaths:
+        - '.*\\(DELETE\\).*'
+        - 'http://localhost:3000/v1/admin/tenants/.*/branding/logo'  # multipart upload — no fuzzear
+        - 'http://localhost:3000/v1/exports'                          # async write
+        - 'http://localhost:3000/v1/insureds/.*/(delete|archive)'
+        - 'http://localhost:3000/v1/admin/.*/purge'
+        # CC-13 (G-2 iter 2): SAML endpoints excluidos del active scan.
+        # Motivo: `/v1/auth/saml/acs` consume `SAMLResponse` base64 firmado por
+        # un IdP real (Okta/Azure AD). ZAP no puede orquestar el flow SAML
+        # completo (AuthnRequest → IdP login → assertion firmada) y un fuzz
+        # ciego sobre el ACS:
+        #   1) genera ruido de auditoría (cada parse fallido emite log + métrica),
+        #   2) puede crear miles de session attempts inválidos en cognito-local,
+        #   3) NO encuentra vulnerabilidades reales porque el parser falla en
+        #      la verificación de firma antes de llegar a la lógica.
+        # SAML se valida vía tests unitarios (S5-1: 22 tests + fixtures mock
+        # IdP) y en UAT manual con IdP real (RB-019). El metadata endpoint
+        # (GET) sí queda en scope: es read-only y públicamente expuesto.
+        - 'http://localhost:3000/v1/auth/saml/acs'
+        - 'http://localhost:3000/v1/auth/saml/login'
+      authentication:
+        method: 'json'
+        # Credenciales dev — leer de env, NO commitear.
+        # `softpiratas@gmail.com` documentado como contacto dev en CLAUDE.md.
+        parameters:
+          loginPageUrl: 'http://localhost:3000/v1/auth/login'
+          loginRequestUrl: 'http://localhost:3000/v1/auth/login'
+          loginRequestBody: '{"email":"${ZAP_USER}","password":"${ZAP_PASS}"}'
+        verification:
+          method: 'response'
+          loggedInRegex: '"accessToken":"[A-Za-z0-9._-]+"'
+          loggedOutRegex: '"statusCode":401'
+      sessionManagement:
+        method: 'headers'
+        parameters:
+          headers:
+            - name: 'Authorization'
+              value: 'Bearer ${ACCESS_TOKEN}'
+            - name: 'X-Tenant'
+              value: 'hospitales-mac'
+      users:
+        - name: dev-admin
+          credentials:
+            username: '${ZAP_USER}'
+            password: '${ZAP_PASS}'
+  parameters:
+    failOnError: true
+    failOnWarning: false
+    progressToStdout: true
+
+jobs:
+  # 1. Spider tradicional limitado al openapi.json (descubre endpoints).
+  - type: spider
+    parameters:
+      context: segurasist-api-public
+      url: 'http://localhost:3000/v1/openapi.json'
+      maxDuration: 5
+      maxDepth: 5
+      maxChildren: 10
+
+  # 2. Importar OpenAPI spec → ZAP enumera endpoints declarados.
+  - type: openapi
+    parameters:
+      apiUrl: 'http://localhost:3000/v1/openapi.json'
+      targetUrl: 'http://localhost:3000'
+      context: segurasist-api-public
+
+  # 3. Passive scan (siempre).
+  - type: passiveScan-wait
+    parameters:
+      maxDuration: 5
+
+  # 4. Active scan SOLO en endpoints públicos / auth — excluye destructivos.
+  - type: activeScan
+    parameters:
+      context: segurasist-api-public
+      maxRuleDurationInMins: 3
+      maxScanDurationInMins: 20
+      addQueryParam: false
+      defaultPolicy: 'API-Minimal'
+    policyDefinition:
+      defaultStrength: 'medium'
+      defaultThreshold: 'medium'
+      rules:
+        - id: 40018  # SQL Injection
+          strength: 'high'
+          threshold: 'low'
+        - id: 40012  # XSS Reflected
+          strength: 'high'
+          threshold: 'low'
+        - id: 90020  # OS Command Injection
+          strength: 'high'
+          threshold: 'low'
+        - id: 6      # Path Traversal
+          strength: 'high'
+          threshold: 'low'
+        - id: 40023  # Possible Username Enumeration
+          strength: 'medium'
+          threshold: 'medium'
+
+  # 5. Reporte HTML + JSON.
+  - type: report
+    parameters:
+      template: 'traditional-html'
+      reportDir: 'tests/dast/results'
+      reportFile: 'sprint5-report'
+      reportTitle: 'SegurAsist Sprint 5 DAST'
+      reportDescription: 'OWASP ZAP active+passive sobre Swagger + endpoints públicos.'
+  - type: report
+    parameters:
+      template: 'traditional-json'
+      reportDir: 'tests/dast/results'
+      reportFile: 'sprint5-report'
+
+# Endpoints específicos a forzar (S5-1 SAML + chatbot + admin proxy)
+# que ZAP debe atacar aunque el spider los haya pasado por alto.
+forceUrls:
+  - method: POST
+    url: http://localhost:3000/v1/auth/login
+    body: '{"email":"a@b.com","password":"x"}'
+  # CC-13: NO se forza /v1/auth/saml/acs — requiere flow IdP completo
+  # (ver excludePaths arriba). Sólo metadata (read-only) queda en scope.
+  - method: GET
+    url: http://localhost:3000/v1/auth/saml/metadata
+  - method: POST
+    url: http://localhost:3000/v1/chatbot/message
+    body: '{"sessionId":"00000000-0000-0000-0000-000000000000","message":"test"}'
+  - method: GET
+    url: http://localhost:3000/v1/proxy/v1/insureds?page=1&pageSize=20
+  - method: GET
+    url: http://localhost:3000/health

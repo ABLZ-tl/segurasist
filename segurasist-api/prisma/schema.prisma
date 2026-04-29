@@ -215,6 +215,8 @@ enum AuditAction {
   report_generated
   report_downloaded
   monthly_report_sent
+  // Sprint 5 — MT-1 tenant branding admin endpoints.
+  tenant_branding_updated
 
   @@map("audit_action")
 }
@@ -259,6 +261,21 @@ model Tenant {
   createdAt DateTime     @default(now()) @map("created_at")
   updatedAt DateTime     @updatedAt @map("updated_at")
   deletedAt DateTime?    @map("deleted_at")
+
+  /// Sprint 5 MT-1 — branding multi-tenant gestionable desde admin.
+  /// `displayName`: nombre comercial visible en portal del asegurado
+  /// (fallback `name` si null). `brandingLogoUrl` apunta a CloudFront del
+  /// bucket `segurasist-tenant-branding-{env}`. Hex validados con regex
+  /// `^#[0-9a-fA-F]{6}$` en Zod (frontend valida WCAG AA contraste). El
+  /// campo `brandingUpdatedAt` lo bumpean los endpoints PUT/POST/DELETE
+  /// (no `@updatedAt` global del Tenant que cambia con cualquier write).
+  displayName          String?   @map("display_name") @db.VarChar(80)
+  tagline              String?   @db.VarChar(160)
+  brandingLogoUrl      String?   @map("branding_logo_url") @db.VarChar(512)
+  brandingPrimaryHex   String?   @map("branding_primary_hex") @db.VarChar(7)
+  brandingAccentHex    String?   @map("branding_accent_hex") @db.VarChar(7)
+  brandingBgImageUrl   String?   @map("branding_bg_image_url") @db.VarChar(512)
+  brandingUpdatedAt    DateTime? @map("branding_updated_at")
 
   users         User[]
   packages      Package[]
@@ -576,12 +593,20 @@ model ChatConversation {
   status    ChatConversationStatus @default(active)
   createdAt DateTime               @default(now()) @map("created_at")
   updatedAt DateTime               @updatedAt @map("updated_at")
+  /// Sprint 5 — S5-3 retención 30 días. Default `now() + 30d` aplicado en BD
+  /// (DEFAULT NOW() + INTERVAL '30 days') para que las filas sembradas Sprint
+  /// 4 reciban un valor a través del backfill de la migración. El cron diario
+  /// `ConversationsRetentionService` borra (cascade messages) cuando
+  /// `expiresAt < NOW()`.
+  expiresAt DateTime               @default(now()) @map("expires_at")
 
   tenant   Tenant        @relation(fields: [tenantId], references: [id])
   messages ChatMessage[]
 
   @@index([tenantId, insuredId, status])
   @@index([tenantId, updatedAt(sort: Desc)])
+  /// Sprint 5 — index para el barrido del cron de retención.
+  @@index([expiresAt])
   @@map("chat_conversations")
 }
 

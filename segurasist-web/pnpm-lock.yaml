@@ -60,6 +60,9 @@ importers:
       '@tanstack/react-table':
         specifier: 8.19.3
         version: 8.19.3(react-dom@18.3.1)(react@18.3.1)
+      date-fns:
+        specifier: 3.6.0
+        version: 3.6.0
       framer-motion:
         specifier: ^12.38.0
         version: 12.38.0(react-dom@18.3.1)(react@18.3.1)
@@ -395,6 +398,9 @@ importers:
       '@hookform/resolvers':
         specifier: 3.9.0
         version: 3.9.0(react-hook-form@7.52.1)
+      '@lordicon/react':
+        specifier: 1.10.1
+        version: 1.10.1(lottie-web@5.12.2)(react@18.3.1)
       '@radix-ui/react-accordion':
         specifier: 1.2.0
         version: 1.2.0(@types/react-dom@18.3.0)(@types/react@18.3.3)(react-dom@18.3.1)(react@18.3.1)
@@ -425,6 +431,9 @@ importers:
       '@radix-ui/react-slot':
         specifier: 1.1.0
         version: 1.1.0(@types/react@18.3.3)(react@18.3.1)
+      '@radix-ui/react-switch':
+        specifier: 1.1.0
+        version: 1.1.0(@types/react-dom@18.3.0)(@types/react@18.3.3)(react-dom@18.3.1)(react@18.3.1)
       '@radix-ui/react-tabs':
         specifier: 1.1.0
         version: 1.1.0(@types/react-dom@18.3.0)(@types/react@18.3.3)(react-dom@18.3.1)(react@18.3.1)
@@ -446,6 +455,15 @@ importers:
       date-fns:
         specifier: 3.6.0
         version: 3.6.0
+      gsap:
+        specifier: 3.12.5
+        version: 3.12.5
+      lord-icon-element:
+        specifier: 4.1.2
+        version: 4.1.2
+      lottie-web:
+        specifier: 5.12.2
+        version: 5.12.2
       lucide-react:
         specifier: 0.408.0
         version: 0.408.0(react@18.3.1)
@@ -2340,6 +2358,30 @@ packages:
       - utf-8-validate
     dev: true
 
+  /@lordicon/helpers@1.11.0:
+    resolution: {integrity: sha512-ambh76d15jAdGaKYXBCjR9AlTJUB6aGx4H8vlradyfT37GbLlwiG+HfC8MTq9RTM08pBHRKFPWnWOxa34NUIAw==}
+    dev: false
+
+  /@lordicon/react@1.10.1(lottie-web@5.12.2)(react@18.3.1):
+    resolution: {integrity: sha512-Dv1Cwhpt0Ut/bIZVVSqkE2rCC+C8Yg/QDj+aM3brAahKgNl/Eivh/iZ8Ik4yUbjTutODTREPQV/BwWb08VjNFg==}
+    peerDependencies:
+      lottie-react-native: '*'
+      lottie-web: '*'
+      react: 18.3.1
+      react-native: '*'
+    peerDependenciesMeta:
+      lottie-react-native:
+        optional: true
+      lottie-web:
+        optional: true
+      react-native:
+        optional: true
+    dependencies:
+      '@lordicon/helpers': 1.11.0
+      lottie-web: 5.12.2
+      react: 18.3.1
+    dev: false
+
   /@mdx-js/react@3.1.1(@types/react@18.3.3)(react@18.3.1):
     resolution: {integrity: sha512-f++rKLQgUVYDAtECQ6fn/is15GkEH9+nZPM3MS0RcxVqoTfawHvDlSCH7JbMhAM6uJ32v3eXLvLmLvjGu7PTQw==}
     peerDependencies:
@@ -3364,6 +3406,32 @@ packages:
       '@radix-ui/react-compose-refs': 1.1.0(@types/react@18.3.3)(react@18.3.1)
       '@types/react': 18.3.3
       react: 18.3.1
+    dev: false
+
+  /@radix-ui/react-switch@1.1.0(@types/react-dom@18.3.0)(@types/react@18.3.3)(react-dom@18.3.1)(react@18.3.1):
+    resolution: {integrity: sha512-OBzy5WAj641k0AOSpKQtreDMe+isX0MQJ1IVyF03ucdF3DunOnROVrjWs8zsXUxC3zfZ6JL9HFVCUlMghz9dJw==}
+    peerDependencies:
+      '@types/react': '*'
+      '@types/react-dom': '*'
+      react: 18.3.1
+      react-dom: 18.3.1
+    peerDependenciesMeta:
+      '@types/react':
+        optional: true
+      '@types/react-dom':
+        optional: true
+    dependencies:
+      '@radix-ui/primitive': 1.1.0
+      '@radix-ui/react-compose-refs': 1.1.0(@types/react@18.3.3)(react@18.3.1)
+      '@radix-ui/react-context': 1.1.0(@types/react@18.3.3)(react@18.3.1)
+      '@radix-ui/react-primitive': 2.0.0(@types/react-dom@18.3.0)(@types/react@18.3.3)(react-dom@18.3.1)(react@18.3.1)
+      '@radix-ui/react-use-controllable-state': 1.1.0(@types/react@18.3.3)(react@18.3.1)
+      '@radix-ui/react-use-previous': 1.1.0(@types/react@18.3.3)(react@18.3.1)
+      '@radix-ui/react-use-size': 1.1.0(@types/react@18.3.3)(react@18.3.1)
+      '@types/react': 18.3.3
+      '@types/react-dom': 18.3.0
+      react: 18.3.1
+      react-dom: 18.3.1(react@18.3.1)
     dev: false
 
   /@radix-ui/react-tabs@1.1.0(@types/react-dom@18.3.0)(@types/react@18.3.3)(react-dom@18.3.1)(react@18.3.1):
@@ -7920,6 +7988,10 @@ packages:
     engines: {node: ^12.22.0 || ^14.16.0 || ^16.0.0 || >=17.0.0}
     dev: true
 
+  /gsap@3.12.5:
+    resolution: {integrity: sha512-srBfnk4n+Oe/ZnMIOXt3gT605BX9x5+rh/prT2F1SsNJsU1XuMiP0E2aptW481OnonOGACZWBqseH5Z7csHxhQ==}
+    dev: false
+
   /has-bigints@1.1.0:
     resolution: {integrity: sha512-R3pbpkcIqv2Pm3dUwgjclDRVmWpTJW2DcMzcIhEXEx1oh/CEMObMm3KLmRJOdvhM7o4uQBnwr8pzRK2sJWIqfg==}
     engines: {node: '>= 0.4'}
@@ -8869,6 +8941,16 @@ packages:
     hasBin: true
     dependencies:
       js-tokens: 4.0.0
+
+  /lord-icon-element@4.1.2:
+    resolution: {integrity: sha512-h9wnAn8DHouWerICgZxZnzCsoUic+1dfQznMtLNIMm8j7goqxS4INGNjo7+Wv/54ixlmO4rfJPPkCwaF5jOlGQ==}
+    engines: {node: '>=16.0.0'}
+    deprecated: Package no longer supported. Contact Support at https://www.npmjs.com/support for more info.
+    dev: false
+
+  /lottie-web@5.12.2:
+    resolution: {integrity: sha512-uvhvYPC8kGPjXT3MyKMrL3JitEAmDMp30lVkuq/590Mw9ok6pWcFCwXJveo0t5uqYw1UREQHofD+jVpdjBv8wg==}
+    dev: false
 
   /loupe@2.3.7:
     resolution: {integrity: sha512-zSMINGVYkdpYSOBmLi0D1Uo7JU9nVdQKrHxC8eYlV+9YKK9WePqAlL7lSlorG/U2Fw1w0hTBmaa/jrQ3UbPHtA==}

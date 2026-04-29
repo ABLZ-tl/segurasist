@@ -1,0 +1,9 @@
+## Keys generated at first test run by `keys/generate-keys.mjs`.
+## They are RSA 2048 keypairs used ONLY by the mock IdP fixture; never
+## ship to production, never commit to git.
+##
+## Naming: `*.local.pem` is gitignored on purpose (per S5-1 iter 2 rule).
+## CI generates the pair fresh per run.
+*.local.pem
+idp-private.pem
+idp-public.pem

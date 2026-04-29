@@ -70,6 +70,25 @@ export const EnvSchema = z
     S3_BUCKET_AUDIT: z.string().min(1),
     S3_BUCKET_EXPORTS: z.string().min(1),
 
+    /**
+     * Sprint 5 — MT-1. Bucket dedicado a logos/bg images de branding por
+     * tenant. Servidor a través de CloudFront (TTL 1h). En boot puede estar
+     * ausente: el `BrandingUploadService` lanza al primer intento de upload
+     * y el controller responde 503 — el GET branding sigue funcionando con
+     * los defaults. Una vez aplicado `segurasist-infra/modules/s3-tenant-branding`,
+     * el env var queda obligatorio en staging/prod (Terraform output).
+     */
+    S3_BUCKET_TENANT_BRANDING: z.string().min(1).optional(),
+
+    /**
+     * Sprint 5 — MT-1. Dominio CloudFront de branding (e.g. `branding-cdn.segurasist.app`
+     * o `dxxxxxx.cloudfront.net`). Si está set, las URLs públicas devueltas
+     * apuntan acá; si no, el service usa el endpoint S3 virtual-hosted o
+     * LocalStack según corresponda (dev). Se publica también al frontend
+     * vía CSP (`img-src` allow-list) — coord con MT-3.
+     */
+    CLOUDFRONT_TENANT_BRANDING_DOMAIN: z.string().min(1).optional(),
+
     // SQS
     SQS_QUEUE_LAYOUT: z.string().url(),
     SQS_QUEUE_PDF: z.string().url(),

@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" Destination="https://api.segurasist.local/v1/auth/saml/acs" Version="2.0">
+  <saml:Assertion xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" Version="2.0" IssueInstant="{{notBefore}}">
+    <saml:Issuer>{{issuer}}</saml:Issuer>
+    <saml:Subject>
+      <saml:NameID Format="urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress">{{nameId}}</saml:NameID>
+      <saml:SubjectConfirmation Method="urn:oasis:names:tc:SAML:2.0:cm:bearer">
+        <saml:SubjectConfirmationData InResponseTo="{{inResponseTo}}" NotOnOrAfter="{{notOnOrAfter}}" Recipient="https://api.segurasist.local/v1/auth/saml/acs"/>
+      </saml:SubjectConfirmation>
+    </saml:Subject>
+    <saml:Conditions NotBefore="{{notBefore}}" NotOnOrAfter="{{notOnOrAfter}}">
+      <saml:AudienceRestriction>
+        <saml:Audience>https://api.segurasist.local/saml/sp</saml:Audience>
+      </saml:AudienceRestriction>
+    </saml:Conditions>
+    <saml:AuthnStatement AuthnInstant="{{notBefore}}" SessionIndex="_session-{{inResponseTo}}">
+      <saml:AuthnContext>
+        <saml:AuthnContextClassRef>urn:oasis:names:tc:SAML:2.0:ac:classes:PasswordProtectedTransport</saml:AuthnContextClassRef>
+      </saml:AuthnContext>
+    </saml:AuthnStatement>
+    <saml:AttributeStatement>
+      <saml:Attribute Name="email">
+        <saml:AttributeValue>{{email}}</saml:AttributeValue>
+      </saml:Attribute>
+      <saml:Attribute Name="custom:tenant_id">
+        <saml:AttributeValue>{{tenantId}}</saml:AttributeValue>
+      </saml:Attribute>
+      <saml:Attribute Name="custom:role">
+        <saml:AttributeValue>{{role}}</saml:AttributeValue>
+      </saml:Attribute>
+    </saml:AttributeStatement>
+  </saml:Assertion>
+  <ds:Signature xmlns:ds="http://www.w3.org/2000/09/xmldsig#"><ds:SignatureValue>{{signatureValue}}</ds:SignatureValue></ds:Signature>
+</samlp:Response>

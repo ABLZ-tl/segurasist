@@ -29,6 +29,12 @@ const nextConfig = {
     // Sin esto el bundle main-app.js falla a evaluar, React no hidrata y la
     // página queda blanca. En prod NO se incluyen — el bundle ya está pre-built.
     const isDev = process.env.NODE_ENV !== 'production';
+    // Sprint 5 / MT-3: tenant branding logos viajan por CloudFront. El
+    // dominio exacto lo confirma MT-1 cuando publique la infra módulo
+    // `s3-tenant-branding`; mientras tanto permitimos `*.cloudfront.net`
+    // (igual que frame-src). Si el cliente exige dominio dedicado se
+    // override vía env `NEXT_PUBLIC_BRANDING_CDN`.
+    const brandingCdn = process.env.NEXT_PUBLIC_BRANDING_CDN ?? 'https://*.cloudfront.net';
     const scriptSrc = isDev
       ? "script-src 'self' 'unsafe-inline' 'unsafe-eval'"
       : "script-src 'self' 'unsafe-inline'";
@@ -40,10 +46,12 @@ const nextConfig = {
     const frameSrc = isDev
       ? "frame-src 'self' http://localhost:4566 https://*.s3.mx-central-1.amazonaws.com https://*.cloudfront.net"
       : "frame-src 'self' https://*.s3.mx-central-1.amazonaws.com https://*.cloudfront.net";
-    // Dev — img-src también necesita LocalStack para assets adicionales del PDF.
+    // Sprint 5 — `img-src` ahora incluye el CDN de branding tenant para que
+    // `<img src={logoUrl}>` y `background-image: var(--tenant-logo-url)`
+    // del `<TenantProvider>` carguen sin bloqueo CSP.
     const imgSrc = isDev
-      ? "img-src 'self' data: http://localhost:4566 https://*.amazonaws.com"
-      : "img-src 'self' data: https://*.amazonaws.com";
+      ? `img-src 'self' data: http://localhost:4566 https://*.amazonaws.com ${brandingCdn}`
+      : `img-src 'self' data: https://*.amazonaws.com ${brandingCdn}`;
 
     const csp = [
       "default-src 'self'",

@@ -1,0 +1,15 @@
+{
+  "name": "security-slack-forwarder",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Forwards GuardDuty + SecurityHub alerts from SNS to Slack webhook (S5-2 iter 2).",
+  "main": "index.mjs",
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@aws-sdk/client-secrets-manager": "^3.654.0",
+    "@aws-sdk/client-cloudwatch-logs": "^3.654.0"
+  }
+}

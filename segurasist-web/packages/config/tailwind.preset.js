@@ -77,6 +77,17 @@ module.exports = {
           DEFAULT: 'hsl(var(--bg-elevated) / <alpha-value>)',
           foreground: 'hsl(var(--fg) / <alpha-value>)',
         },
+
+        // Tenant brandable tokens (Sprint 5 — DS-1).
+        // These map to plain hex CSS vars set at runtime by
+        // applyBrandableTheme. We deliberately do NOT use <alpha-value>
+        // because the source vars are full hex (not space-separated triplets).
+        tenant: {
+          primary: 'var(--tenant-primary)',
+          'primary-fg': 'var(--tenant-primary-fg)',
+          accent: 'var(--tenant-accent)',
+          'accent-fg': 'var(--tenant-accent-fg)',
+        },
       },
       borderRadius: {
         sm: 'var(--radius-sm)',

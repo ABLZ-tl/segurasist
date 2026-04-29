@@ -53,3 +53,23 @@ output "audit_bucket_name" {
   description = "Audit S3 bucket name"
   value       = module.s3_audit.bucket_id
 }
+
+output "guardduty_detector_id" {
+  description = "GuardDuty detector ID"
+  value       = module.guardduty.detector_id
+}
+
+output "security_findings_bucket_name" {
+  description = "S3 bucket for GuardDuty findings"
+  value       = module.guardduty.findings_bucket_name
+}
+
+output "security_alerts_topic_arn" {
+  description = "SNS topic for HIGH/CRITICAL security findings"
+  value       = module.security_alarms.sns_topic_arn
+}
+
+output "dr_drill_runner_role_arn" {
+  description = "ARN del rol OIDC `segurasist-dr-runner-staging` (RB-018 / ADR-0011). Lo consume `.github/workflows/dr-drill-monthly.yml`."
+  value       = module.dr_drill_iam.role_arn
+}

@@ -569,3 +569,133 @@ module "dns_api" {
   ttl     = 300
   records = [module.apprunner_api.service_url]
 }
+
+############################################
+# S5-2 — GuardDuty + Security Hub + security-alarms (staging)
+#
+# Staging hereda config dev pero activa multi-AZ Lambda quarantine
+# (canary previo a prod). Ver ADR-0010 para auto-suppression list.
+############################################
+
+module "guardduty" {
+  source = "../../modules/guardduty"
+
+  environment     = var.environment
+  name_prefix     = local.name_prefix
+  create_detector = false
+  kms_key_arn     = module.kms_general.key_arn
+
+  enable_s3_protection      = true
+  enable_eks_protection     = false
+  enable_malware_protection = true
+  enable_rds_protection     = true
+  enable_lambda_protection  = true
+
+  finding_publishing_frequency   = "FIFTEEN_MINUTES"
+  findings_retention_days        = 90
+  findings_glacier_after_days    = 90
+  findings_total_expiration_days = 730
+
+  tags = merge(local.common_tags, { Component = "guardduty" })
+}
+
+module "security_hub" {
+  source = "../../modules/security-hub"
+
+  environment                 = var.environment
+  name_prefix                 = local.name_prefix
+  create_account_subscription = false
+
+  enable_aws_foundational = true
+  enable_cis_v1_4_0       = true
+  enable_pci_dss          = false
+  enable_nist_800_53      = false
+  enable_aggregator       = false
+
+  auto_disabled_controls = [
+    { standard = "aws-foundational", control_id = "EKS.1", reason = "SegurAsist no usa EKS." },
+    { standard = "aws-foundational", control_id = "EKS.2", reason = "Ver EKS.1." },
+    { standard = "aws-foundational", control_id = "ECS.1", reason = "App Runner managed; ECS no aplica." },
+    { standard = "cis-v1.4.0",       control_id = "1.13",  reason = "MFA root: gestionado en master account." },
+    { standard = "cis-v1.4.0",       control_id = "3.10",  reason = "VPC flow logs ya enabled en módulo vpc." },
+  ]
+
+  tags = merge(local.common_tags, { Component = "security-hub" })
+}
+
+module "security_alarms" {
+  source = "../../modules/security-alarms"
+
+  environment = var.environment
+  name_prefix = local.name_prefix
+  kms_key_arn = module.kms_general.key_arn
+
+  slack_webhook_secret_arn = var.slack_security_webhook_secret_arn
+
+  severity_alert_threshold     = 7.0
+  securityhub_failed_threshold = 5
+
+  enable_auto_quarantine       = true # canary in staging
+  quarantine_security_group_id = module.vpc.sg_apprunner_id
+  vpc_subnet_ids               = module.vpc.private_app_subnet_id_list
+  vpc_security_group_ids       = [module.vpc.sg_lambda_vpc_id]
+
+  tags = merge(local.common_tags, { Component = "security-alarms" })
+}
+
+############################################
+# G-1 Sprint 5 iter 1 + iter 2 — DR drill freshness alarm.
+#
+# RB-018 / ADR-0011. Sprint 5 iter 2: el orquestador
+# `scripts/dr-drill/99-runbook-helper.sh` publica la métrica
+# `SegurAsist/DR.DrillFreshnessDays` al cierre de cada drill exitoso
+# (`VALIDATION_STATUS=PASS`). El primer real drill resetea la alarma a 0;
+# después de 30d sin nuevo PASS, `treat_missing_data="breaching"` dispara
+# SNS → Slack #ops.
+############################################
+
+module "dr_drill_alarm" {
+  source = "../../modules/dr-drill-alarm"
+
+  name_prefix       = local.name_prefix
+  environment       = var.environment
+  kms_key_arn       = module.kms_general.key_arn
+  threshold_days    = 30
+  slack_webhook_url = var.slack_ops_webhook_url
+
+  tags = merge(local.common_tags, { Component = "dr-drill" })
+}
+
+############################################
+# G-1 Sprint 5 iter 2 — DR drill OIDC IAM role.
+#
+# Provisiona `segurasist-dr-runner-staging` con permisos mínimos
+# (rds:Restore/Describe/Delete-by-tag, s3:GetObjectVersion,
+# cloudwatch:PutMetricData con namespace SegurAsist/DR). Lo asume el
+# workflow `.github/workflows/dr-drill-monthly.yml` vía OIDC. Ver
+# ADR-0011 §iter 1 status + RB-018 §pre-requisitos.
+#
+# Prod NO está wireado en iter 2 — esperando primer drill exitoso en
+# staging antes de promover el rol a prod.
+############################################
+
+module "dr_drill_iam" {
+  source = "../../modules/dr-drill-iam"
+
+  environment       = var.environment
+  github_org        = var.github_org
+  github_repo       = var.github_repo
+  oidc_provider_arn = var.github_oidc_provider_arn
+
+  allowed_branches     = ["main"]
+  allowed_environments = ["${var.environment}-dr"]
+
+  # Workflow `dr-drill-monthly.yml` step "Resolve RESTORED_DB_PASSWORD"
+  # invoca `secretsmanager:GetSecretValue` sobre el master user secret
+  # del RDS staging. Decryption requires kms:Decrypt sobre el secrets
+  # CMK.
+  rds_master_secret_arns         = [module.rds_main.master_user_secret_arn]
+  rds_master_secret_kms_key_arns = [module.kms_secrets.key_arn]
+
+  tags = merge(local.common_tags, { Component = "dr-drill" })
+}

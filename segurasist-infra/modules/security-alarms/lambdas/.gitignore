@@ -1,0 +1,5 @@
+# S5-2 iter 2 — build artifacts.
+node_modules/
+dist/
+package-lock.json
+*.log

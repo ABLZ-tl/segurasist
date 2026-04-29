@@ -53,3 +53,18 @@ output "audit_bucket_name" {
   description = "S3 audit bucket name (Object Lock 24m)"
   value       = module.s3_audit.bucket_id
 }
+
+output "guardduty_detector_id" {
+  description = "GuardDuty detector ID (org-managed; surfaced for runbook commands)"
+  value       = module.guardduty.detector_id
+}
+
+output "security_findings_bucket_name" {
+  description = "S3 bucket receiving GuardDuty findings export"
+  value       = module.guardduty.findings_bucket_name
+}
+
+output "security_alerts_topic_arn" {
+  description = "SNS topic ARN for HIGH/CRITICAL security findings"
+  value       = module.security_alarms.sns_topic_arn
+}

@@ -19,7 +19,10 @@
     "./hooks/exports": "./src/hooks/exports.ts",
     "./hooks/claims": "./src/hooks/claims.ts",
     "./hooks/chatbot": "./src/hooks/chatbot.ts",
-    "./hooks/audit-timeline": "./src/hooks/audit-timeline.ts"
+    "./hooks/audit-timeline": "./src/hooks/audit-timeline.ts",
+    "./hooks/admin-tenants": "./src/hooks/admin-tenants.ts",
+    "./hooks/admin-chatbot-kb": "./src/hooks/admin-chatbot-kb.ts",
+    "./hooks/chatbot-history": "./src/hooks/chatbot-history.ts"
   },
   "files": ["src"],
   "scripts": {

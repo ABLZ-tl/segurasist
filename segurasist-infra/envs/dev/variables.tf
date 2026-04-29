@@ -43,3 +43,14 @@ variable "image_tag_api" {
   type        = string
   default     = "bootstrap-placeholder"
 }
+
+variable "slack_security_webhook_secret_arn" {
+  description = <<-EOT
+    SecretsManager ARN with Slack incoming webhook URL for security
+    alerts (S5-2). JSON shape: {"webhook_url":"https://hooks.slack.com/..."}.
+    Seedear manualmente fuera de Terraform (admin one-time setup).
+    Set null para deshabilitar la suscripción Slack.
+  EOT
+  type        = string
+  default     = null
+}

@@ -3,8 +3,9 @@
 import * as React from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { LogOut, User as UserIcon } from 'lucide-react';
+import { LogOut, MessageCircle, User as UserIcon } from 'lucide-react';
 import { Avatar, AvatarFallback } from '@segurasist/ui';
+import { useTenantBrandingActions } from '../../lib/hooks/use-tenant-branding';
 
 export interface UserMenuProps {
   fullName?: string | null;
@@ -27,6 +28,7 @@ function initialsOf(name: string): string {
  */
 export function UserMenu({ fullName, email }: UserMenuProps): JSX.Element {
   const router = useRouter();
+  const { resetBranding } = useTenantBrandingActions();
   const [open, setOpen] = React.useState(false);
   const [signingOut, setSigningOut] = React.useState(false);
   const triggerRef = React.useRef<HTMLButtonElement>(null);
@@ -65,9 +67,13 @@ export function UserMenu({ fullName, email }: UserMenuProps): JSX.Element {
       // No bloquea la salida UX-wise: cookies son httpOnly, si la req
       // upstream falla el middleware igual va a redirigir.
     }
+    // CC-08: limpiar CSS vars del tenant + cache react-query ANTES del
+    // redirect a /login, así la pantalla pública no hereda los colores/logo
+    // del tenant anterior (FOUC) en navegaciones cliente.
+    resetBranding();
     router.replace('/login' as never);
     router.refresh();
-  }, [router, signingOut]);
+  }, [router, signingOut, resetBranding]);
 
   return (
     <div className="relative">
@@ -110,6 +116,16 @@ export function UserMenu({ fullName, email }: UserMenuProps): JSX.Element {
             >
               <UserIcon aria-hidden className="h-4 w-4 text-fg-muted" />
               Mi perfil
+            </Link>
+            <Link
+              href={'/chatbot/history' as never}
+              role="menuitem"
+              onClick={() => setOpen(false)}
+              className="flex min-h-[44px] items-center gap-3 px-3 text-sm text-fg transition-colors hover:bg-bg-elevated focus-visible:outline-none focus-visible:bg-bg-elevated"
+              data-testid="user-menu-chatbot-history"
+            >
+              <MessageCircle aria-hidden className="h-4 w-4 text-fg-muted" />
+              Mis conversaciones
             </Link>
             <button
               type="button"

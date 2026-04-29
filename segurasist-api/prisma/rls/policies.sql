@@ -76,11 +76,19 @@ DECLARE
     'exports',        -- C-15: faltaba aquí. Migration 20260427 sí crea la tabla
                       -- con políticas locales, pero `apply-rls.sh` re-aplicado
                       -- contra DB nueva omitía RLS en `exports` ⇒ drift.
-    'monthly_report_runs' -- S4-04: idempotencia del cron mensual.
+    'monthly_report_runs', -- S4-04: idempotencia del cron mensual.
                           -- Migración 20260428_monthly_report_runs ya crea
                           -- la tabla con policies; agregamos al array para
                           -- que apply-rls.sh re-aplicado contra DB nueva
                           -- (test/CI) NO drift.
+    'tenant_saml_config',  -- S5-1 iter 2 (CC-17): config SAML SP per-tenant.
+                          -- Migración 20260429_tenant_saml_config crea la
+                          -- tabla con políticas tenant-iso locales; el
+                          -- array es el tripwire del drift estático para
+                          -- apply-rls.sh re-aplicado en CI/staging.
+    'tenant_scim_config'  -- S5-1 iter 2 (CC-17): bearer token hash per-tenant.
+                          -- Misma migración que tenant_saml_config; misma
+                          -- razón de drift static.
   ];
 BEGIN
   FOREACH tbl IN ARRAY tables LOOP

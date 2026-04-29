@@ -1,0 +1,172 @@
+name: DAST (OWASP ZAP)
+
+# Sprint 5 — G-2 — DAST gate dedicado.
+# Existe ya `api-dast` en ci.yml (Sprint 2 S2-08) — este workflow:
+#   - Corre baseline scan en push a main contra Swagger expuesto.
+#   - Falla si encuentra High (risk_code >= 3); emite warning si Medium (>=2).
+#   - Sube reporte HTML como GH Actions artifact.
+#   - workflow_dispatch para correr a demanda contra dev URL custom.
+#
+# Alcance distinto de ci.yml/api-dast:
+#   - ci.yml/api-dast: gate de PR (rápido, falla en High).
+#   - este: gate post-merge + reporte detallado (incluye openapi import + active scan
+#     ligero — SAML excluido vía CC-13, ver tests/dast/sprint5-zap-config.yaml).
+#
+# ----------------------------------------------------------------------------
+# REQUIRED SECRETS (Sprint 5 G-2 iter 2)
+# ----------------------------------------------------------------------------
+# Para correr `tests/dast/sprint5-zap-config.yaml` con auth (active scan
+# autenticado contra `/v1/proxy/v1/*`), este workflow necesita:
+#
+#   - PERF_ADMIN_USER   email del admin de pruebas (mapea a `${ZAP_USER}` en
+#                       el YAML de ZAP). Alias legacy: PERF_ADMIN_EMAIL.
+#   - PERF_ADMIN_PASS   password del admin de pruebas (mapea a `${ZAP_PASS}`).
+#
+# Provisionar en GitHub:
+#   1) Settings → Secrets and variables → Actions → New repository secret
+#   2) Crear PERF_ADMIN_USER y PERF_ADMIN_PASS (mismos valores que perf.yml).
+#   3) Para staging real, mover a Environment secrets en `staging`.
+#   4) Verificar con `gh secret list`.
+#
+# El job actual usa `zaproxy/action-baseline` (no autenticado, fail solo en
+# High). Para pasar a `action-full-scan` autenticado, exportar las creds vía
+# `env:` en el step (ver sección `OWASP ZAP Baseline` abajo).
+#
+# TODO post-merge: documentar en `.github/SECRETS.md` cuando exista.
+# ----------------------------------------------------------------------------
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'segurasist-api/src/**'
+      - '.zap/rules.tsv'
+      - 'tests/dast/sprint5-zap-config.yaml'
+      - '.github/workflows/dast.yml'
+  workflow_dispatch:
+    inputs:
+      target_url:
+        description: 'Dev URL (defaults to local boot)'
+        required: false
+        default: 'http://localhost:3000'
+
+permissions:
+  contents: read
+  issues: write   # para crear issues si encuentra High
+
+jobs:
+  zap-baseline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: segurasist-api
+    env:
+      AWS_ENDPOINT_URL: http://localhost:4566
+      AWS_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      DATABASE_URL: postgresql://segurasist:segurasist@localhost:5432/segurasist?schema=public
+      REDIS_URL: redis://localhost:6379/0
+      EMAIL_TRANSPORT: smtp
+      SMTP_HOST: localhost
+      SMTP_PORT: '1025'
+      COGNITO_REGION: local
+      COGNITO_ENDPOINT: http://0.0.0.0:9229
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20.11.x'
+          cache: 'npm'
+          cache-dependency-path: segurasist-api/package-lock.json
+
+      - name: Install npm deps
+        run: npm ci
+
+      - name: Bootstrap .env
+        run: |
+          cp .env.example .env || true
+          {
+            echo ""
+            echo "AWS_ENDPOINT_URL=${AWS_ENDPOINT_URL}"
+            echo "AWS_REGION=${AWS_REGION}"
+            echo "AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}"
+            echo "AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}"
+            echo "EMAIL_TRANSPORT=${EMAIL_TRANSPORT}"
+            echo "SMTP_HOST=${SMTP_HOST}"
+            echo "SMTP_PORT=${SMTP_PORT}"
+          } >> .env
+
+      - name: docker compose up
+        run: docker compose up -d postgres redis localstack mailpit cognito-local
+
+      - name: Wait for healthy services
+        run: |
+          for i in $(seq 1 60); do
+            unhealthy=$(docker compose ps --format json \
+              | grep -c '"Health":"unhealthy"\|"Health":"starting"' || true)
+            [ "$unhealthy" = "0" ] && break
+            sleep 1
+          done
+
+      - name: LocalStack bootstrap
+        run: ./scripts/localstack-bootstrap.sh
+        continue-on-error: true
+
+      - name: Prisma migrate deploy
+        run: npx prisma migrate deploy
+        continue-on-error: true
+
+      - name: Build + start API
+        run: |
+          npm run build
+          NODE_ENV=production node dist/main.js > /tmp/api.log 2>&1 &
+          echo $! > /tmp/api.pid
+
+      - name: Wait for API ready
+        run: npx wait-on -t 60000 http://localhost:3000/health/ready
+
+      - name: OWASP ZAP Baseline (Sprint 5)
+        id: zap
+        uses: zaproxy/action-baseline@v0.10.0
+        # Sprint 5 G-2 iter 2: ZAP_USER/ZAP_PASS expuestos para que el YAML
+        # de tests/dast/sprint5-zap-config.yaml pueda hacer login auth.
+        # Si los secrets no están provisionados, el step sigue corriendo
+        # (passive + spider sin auth) — el active scan autenticado contra
+        # `/v1/proxy/v1/*` queda como NEW-FINDING NF-G2-02.
+        env:
+          ZAP_USER: ${{ secrets.PERF_ADMIN_USER || secrets.PERF_ADMIN_EMAIL }}
+          ZAP_PASS: ${{ secrets.PERF_ADMIN_PASS }}
+        with:
+          target: 'http://localhost:3000/v1/openapi.json'
+          rules_file_name: '.zap/rules.tsv'
+          # -a auto context, -j AJAX spider, -m max minutes per spider
+          cmd_options: '-a -j -m 5 -T 20'
+          # Fail solo si High (risk_code 3); Medium queda en warning vía rules.tsv.
+          fail_action: true
+          # Permitir creación de issue si encuentra High.
+          allow_issue_writing: true
+          issue_title: 'Sprint 5 DAST — High finding detected'
+          artifact_name: zap-sprint5-report
+
+      - name: Print ZAP summary
+        if: always()
+        working-directory: ${{ github.workspace }}
+        continue-on-error: true
+        run: |
+          if [ -f /home/runner/work/_temp/zap_report_md.md ]; then
+            cat /home/runner/work/_temp/zap_report_md.md || true
+          fi
+
+      - name: Print API logs (on failure)
+        if: failure()
+        run: cat /tmp/api.log || true
+        working-directory: ${{ github.workspace }}
+
+      - name: Stop API + compose
+        if: always()
+        run: |
+          if [ -f /tmp/api.pid ]; then kill "$(cat /tmp/api.pid)" || true; fi
+          docker compose down -v

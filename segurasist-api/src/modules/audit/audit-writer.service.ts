@@ -87,7 +87,19 @@ export type AuditEventAction =
   | 'chatbot_escalated'
   | 'report_generated'
   | 'report_downloaded'
-  | 'monthly_report_sent';
+  | 'monthly_report_sent'
+  // Sprint 5 — MT-1 tenant branding (PUT/POST logo/DELETE logo).
+  | 'tenant_branding_updated'
+  // Sprint 5 — S5-1 iter 2 wireup. Enum DB extension lives in
+  // `prisma/migrations/20260429_tenant_saml_config/migration.sql` and
+  // the Prisma client picks them up after `prisma generate`. Until
+  // then, the writer's `action` field flows through an `unknown` cast
+  // (see writer code below) — the DB enum is the source of truth.
+  | 'saml_login_succeeded'
+  | 'saml_login_failed'
+  | 'scim_user_created'
+  | 'scim_user_updated'
+  | 'scim_user_deleted';
 
 export interface AuditEvent {
   tenantId: string;

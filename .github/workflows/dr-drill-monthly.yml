@@ -1,0 +1,150 @@
+name: DR drill (staging) — monthly
+
+# G-1 Sprint 5 iter 2.
+# Ejecuta el orquestador `scripts/dr-drill/99-runbook-helper.sh` contra
+# staging según RB-018 + ADR-0011.
+#
+# **Status: ENABLED (Sprint 5 iter 2)**. El rol OIDC
+# `segurasist-dr-runner-staging` (módulo `dr-drill-iam`) ya está
+# provisionado en la cuenta staging (output `dr_drill_runner_role_arn`
+# de `envs/staging`).
+#
+# Default `dry_run=true` por seguridad: el primer drill real DEBE ser
+# invocado manualmente vía `workflow_dispatch` con `dry_run=false` y
+# requiere aprobación del Tech Lead documentada en Linear DR-DRILL-XX
+# (RB-018 §pre-requisitos). El cron mensual también arranca en dry-run
+# para validar plumbing sin tocar AWS resources reales.
+#
+# Cron: primer lunes 09:00 UTC = Domingo 03:00 CDMX (CST). Coordinado en
+# RB-018 con #ops.
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_timestamp:
+        description: 'PITR target ISO-8601 (default: 1h ago)'
+        required: false
+        default: ''
+      dry_run:
+        description: 'Dry-run (true | false)'
+        required: false
+        default: 'true'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+  schedule:
+    # Primer lunes del mes 09:00 UTC. Cron de GitHub no soporta "first
+    # Monday" nativo, así que disparamos cada lunes 09:00 y filtramos en
+    # un step (DAY_OF_MONTH ≤ 7).
+    - cron: '0 9 * * 1'
+
+permissions:
+  id-token: write   # OIDC para asume-role contra staging
+  contents: read
+
+env:
+  AWS_REGION: mx-central-1
+  DR_SOURCE_DB_IDENTIFIER: segurasist-staging-rds-main
+  DR_RESTORED_INSTANCE_CLASS: db.t4g.small
+  DR_RESTORED_SUBNET_GROUP: segurasist-staging-rds-main-subnets
+
+jobs:
+  dr-drill:
+    name: Run DR drill (staging)
+    runs-on: ubuntu-latest
+
+    # GitHub Environment `staging-dr` (protection rule en GitHub) fuerza
+    # aprobación del Tech Lead para `dry_run=false`. Aligned con el sub
+    # claim del rol OIDC: `repo:.../environment:staging-dr`.
+    environment: staging-dr
+
+    steps:
+      - name: Skip if not first Monday of the month
+        if: github.event_name == 'schedule'
+        run: |
+          dom=$(date -u +%-d)
+          if [ "$dom" -gt 7 ]; then
+            echo "Today (UTC day=$dom) is not within the first week — skipping."
+            exit 0
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.STAGING_ACCOUNT_ID }}:role/segurasist-dr-runner-staging
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: gha-dr-drill-${{ github.run_id }}
+          audience: sts.amazonaws.com
+
+      - name: Install jq + psql
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y jq postgresql-client
+
+      - name: Resolve RESTORED_DB_PASSWORD from Secrets Manager
+        run: |
+          secret_arn=$(aws rds describe-db-instances \
+            --db-instance-identifier "$DR_SOURCE_DB_IDENTIFIER" \
+            --region "$AWS_REGION" \
+            --query 'DBInstances[0].MasterUserSecret.SecretArn' \
+            --output text)
+          pwd=$(aws secretsmanager get-secret-value \
+            --secret-id "$secret_arn" \
+            --region "$AWS_REGION" \
+            --query SecretString --output text | jq -r .password)
+          echo "::add-mask::$pwd"
+          echo "RESTORED_DB_PASSWORD=$pwd" >> "$GITHUB_ENV"
+
+      - name: Run orchestrator
+        env:
+          DR_PROD_ACCOUNT_ID: ${{ secrets.PROD_ACCOUNT_ID }}
+          DR_ENVIRONMENT: staging
+          DR_EXPECTED_TENANTS: ${{ vars.DR_EXPECTED_TENANTS }}
+          DR_EXPECTED_INSUREDS: ${{ vars.DR_EXPECTED_INSUREDS }}
+          DR_EXPECTED_CLAIMS_24H: ${{ vars.DR_EXPECTED_CLAIMS_24H }}
+        run: |
+          # Default dry-run on cron (safety); workflow_dispatch input governs
+          # manual runs. `--no-dry-run` requires Tech Lead approval via the
+          # `staging-dr` GitHub Environment protection rule (RB-018).
+          dry_run_flag="${{ inputs.dry_run }}"
+          if [ -z "$dry_run_flag" ]; then dry_run_flag="true"; fi
+
+          flags=""
+          if [ "$dry_run_flag" = "true" ]; then
+            flags="$flags --dry-run"
+          else
+            flags="$flags --no-dry-run"
+          fi
+          if [ -n "${{ inputs.target_timestamp }}" ]; then
+            flags="$flags --target ${{ inputs.target_timestamp }}"
+          fi
+          ./scripts/dr-drill/99-runbook-helper.sh $flags
+
+      - name: Upload drill logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dr-drill-logs-${{ github.run_id }}
+          path: .dr-drill-logs/
+          retention-days: 90
+
+      - name: Notify Slack #ops
+        if: always()
+        uses: slackapi/slack-github-action@v1
+        with:
+          payload: |
+            {
+              "text": ":rotating_light: DR drill ${{ job.status }} — run ${{ github.run_id }}",
+              "blocks": [
+                { "type": "section",
+                  "text": { "type": "mrkdwn",
+                            "text": "*DR drill (staging)* run *${{ github.run_id }}* finished with status `${{ job.status }}`. See artifacts for logs." } }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_OPS_WEBHOOK_URL }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK

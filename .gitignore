@@ -44,3 +44,7 @@ playwright-report/
 test-results/
 storybook-static/
 ~$*
+
+# DR drill runtime logs (G-1 Sprint 5 — RB-018)
+.dr-drill-logs/
+.aws/

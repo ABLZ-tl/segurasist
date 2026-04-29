@@ -1120,11 +1120,251 @@ pnpm --filter admin test:coverage
 
 ---
 
+## Sprint 5 Anti-patterns (added iter 2 — CC-04)
+
+> Cinco agentes (MT-2, MT-3, MT-4, S5-3, DS-1) repitieron patrones similares al
+> integrar el portal multi-tenant + Lordicons + GSAP + brandable theming. Todas
+> las entradas de abajo son **lectura obligatoria** antes de tocar
+> `segurasist-web/packages/{ui,api-client,security,auth}/` o cualquier app
+> Next.js a partir de Sprint 6. Owner: DS-1 (Sprint 5).
+
+#### S5.1 Roles RBAC reales: `admin_segurasist` / `admin_mac` (NO `superadmin` / `tenant_admin`)
+
+**Evidencia (Sprint 5, MT-2 + S5-3 iter 1)**:
+- Scaffolding inicial usó nombres ficticios `superadmin` y `tenant_admin` en
+  guards de página y en componentes — derivados de la documentación de
+  arquitectura, no del código.
+- Roles reales viven en `segurasist-api/src/common/decorators/roles.decorator.ts`:
+  `'admin_segurasist' | 'admin_mac' | 'operator' | 'supervisor' | 'insured'`.
+- `packages/security/test/jwt.spec.ts` valida claim `custom:role=admin_mac` —
+  cualquier UI que asuma otro string falla en runtime sin error de tipo.
+
+**Regla preventiva**:
+1. Antes de scaffold de cualquier feature con RBAC, leer
+   `segurasist-api/src/common/decorators/roles.decorator.ts` (canonical) y
+   `packages/security/src/jwt.ts` (claim parsing).
+2. NUNCA inventar nombres de roles a partir del PRD/arquitectura — el código es
+   source of truth. El término "superadmin" se usa en docs como sinónimo
+   coloquial de `admin_segurasist`, pero la string literal NO existe.
+3. Tests RBAC siempre usan los roles reales (`Roles('admin_mac', 'operator')`).
+
+**Lección Sprint 6+**: cualquier referencia a `superadmin` o `tenant_admin` en
+PRs nuevos es smell de scaffolding pre-leyendo-código. Reviewer rechaza.
+
+---
+
+#### S5.2 `api()` wrapper fija JSON Content-Type — multipart needs `apiMultipart()`
+
+**Evidencia (Sprint 5, MT-2 iter 1 — CC-03)**:
+- `packages/api-client/src/index.ts:api()` setea
+  `headers['Content-Type']='application/json'` por construcción.
+- MT-2 quiso subir un logo (FormData) y bypassed con `fetch()` directo, lo que
+  desconectó refresh-token rotation, retry y parsing de errores estándar.
+- El `Content-Type: application/json` con un `FormData` body causa el clásico
+  "missing boundary" en Fastify multipart, sin error útil.
+
+**Fix Sprint 5 iter 2 (MT-2)**:
+- Export `apiMultipart()` en `packages/api-client/src/index.ts` que:
+  - Acepta `FormData` directo.
+  - **Omite** `Content-Type` para que el browser inyecte el boundary.
+  - Reusa el flujo de auth (refresh + retry on 401).
+
+**Regla preventiva**:
+1. `FormData` → `apiMultipart()`. JSON → `api()`. NO mezclar.
+2. NUNCA setear `Content-Type` manualmente con FormData (ni en hooks ni en
+   action handlers).
+3. Test de cliente verifica que el header NO contiene `application/json`
+   cuando body es `FormData`.
+
+**Lección Sprint 6+**: cualquier `fetch()` directo en `apps/{admin,portal}` es
+candidato a refactor. El wrapper centraliza retry, refresh y telemetry.
+
+---
+
+#### S5.3 CSP rules viven en `next.config.mjs`, NO en `middleware.ts`
+
+**Evidencia (Sprint 5, MT-3 iter 1 — CC-01)**:
+- MT-3 intentó añadir `script-src https://cdn.lordicon.com` en `middleware.ts`
+  setting headers. El header llegó a la respuesta pero **no a las páginas
+  estáticas** (Next.js sirve assets prerenderizados sin pasar por middleware
+  para rutas con ISR pre-build).
+- Solución: las rules viven en `next.config.mjs` `headers()` async, donde Next
+  las inyecta en TODAS las rutas (estáticas, ISR, dinámicas).
+
+**Regla preventiva**:
+1. CSP / X-Frame-Options / X-Content-Type-Options → `next.config.mjs`.
+2. Cookies, redirects, auth → `middleware.ts`.
+3. Cualquier nuevo header de seguridad pasa por el helper
+   `packages/security/src/csp.ts` (single source of truth para policy strings)
+   y se inyecta en `next.config.mjs` per-app.
+
+**Lección Sprint 6+**: si un header "no aparece" en una ruta, primero
+verificar que está en `next.config.mjs` antes de debuggear middleware.
+
+---
+
+#### S5.4 Web components custom (Lordicon) requieren `'use client'` + register en useEffect
+
+**Evidencia (Sprint 5, DS-1 iter 1)**:
+- `lord-icon-element` registra un custom element via
+  `customElements.define('lord-icon', ...)`. Esto NO es SSR-safe: en Node no
+  existe `customElements`, y en cliente hacerlo a top-level dispara durante
+  hydration mismatches si el server renderizó el tag desconocido.
+
+**Fix Sprint 5 (DS-1, ya en `packages/ui/src/lord-icon/lord-icon.tsx`)**:
+- Componente con `'use client'` directive.
+- `registerLordIconElement()` con guard `typeof window === 'undefined'`,
+  idempotente (memoiza la promise), y llamado dentro de `useEffect`.
+- Pre-hidratación renderiza un fallback `<span>` del tamaño exacto del icono
+  para evitar layout shift.
+
+**Regla preventiva**:
+1. Cualquier import que pegue al DOM en evaluation time (`customElements`,
+   `window.navigator`, `document.adoptedStyleSheets`) → dynamic import dentro
+   de `useEffect`.
+2. Componentes que envuelven web components SIEMPRE llevan `'use client'` y
+   un fallback con dimensiones explícitas (anti CLS).
+3. `if (window.customElements?.get('mi-tag'))` antes de definir → idempotencia.
+
+**Lección Sprint 6+**: Lottie/Three.js/Mapbox/etc. siguen el mismo patrón.
+Antes de añadir una librería con web component / canvas, leer este apartado.
+
+---
+
+#### S5.5 GSAP plugins solo `if (typeof window !== 'undefined')` + cleanup `kill()` en unmount
+
+**Evidencia (Sprint 5, DS-1 iter 1)**:
+- GSAP core funciona en Node (no toca `window`), pero plugins como
+  `ScrollTrigger`, `Draggable`, `MotionPathPlugin` SÍ acceden a `window` en
+  init, rompiendo el SSR build.
+- Sin `tween.kill()` en cleanup del `useEffect`, navegar entre rutas con
+  React Strict Mode (double-invoke) duplica los tweens y dispara warnings de
+  "GSAP target not found" en consola.
+
+**Fix Sprint 5 (`packages/ui/src/animations/use-gsap.ts`)**:
+- `useGsap({ plugins })` registra plugins solo dentro del `useEffect`, donde
+  `typeof window !== 'undefined'` está garantizado.
+- Idempotencia con `WeakSet<Plugin>` para que React Strict Mode no re-registre.
+- Todo primitive cleanea con `return () => tween.kill()`.
+
+**Regla preventiva**:
+1. `import gsap from 'gsap'` está OK a top-level (core es SSR-safe). Plugins
+   NO — siempre `import('gsap/ScrollTrigger')` dentro de `useEffect` o pasar
+   el módulo a `useGsap({ plugins: [ScrollTrigger] })`.
+2. Cualquier `gsap.to/from/fromTo/timeline` dentro de `useEffect` retorna un
+   handle; el cleanup DEBE invocar `.kill()` (tween) o `.kill(true)`
+   (timeline) — el booleano libera children.
+3. Tests de animaciones SIEMPRE asertan `killMock` después de `unmount()`.
+
+**Lección Sprint 6+**: animaciones sin cleanup son leak silencioso. Code review
+rechaza primitives nuevos sin test de cleanup.
+
+---
+
+#### S5.6 `prefers-reduced-motion: reduce` SIEMPRE respetar (WCAG 2.3.3)
+
+**Evidencia (Sprint 5, DS-1 iter 1 + MT-3 iter 1)**:
+- WCAG 2.1 SC 2.3.3 (AAA pero adoptado como AA por nuestra rúbrica) exige que
+  animaciones decorativas sean opt-out cuando el usuario tiene la preferencia
+  del SO activada.
+- Implementación naïf con CSS `@keyframes` ignora la preferencia salvo que se
+  envuelva en `@media (prefers-reduced-motion: reduce)`. Implementación con
+  GSAP necesita un guard explícito en JS — GSAP NO lee la media query por sí
+  mismo.
+
+**Fix Sprint 5 (`packages/ui/src/animations/use-gsap.ts`)**:
+- Hook `usePrefersReducedMotion()` SSR-safe (default `false` en server).
+- Listener `matchMedia('(prefers-reduced-motion: reduce)')` que actualiza si
+  el user togglea OS al runtime.
+- Cada primitive (`<GsapFade>`, etc.) usa `gsap.set(...)` (snap final) en
+  lugar de `gsap.fromTo(...)` cuando `prefersReduced === true`.
+
+**Regla preventiva**:
+1. Cualquier animación NO esencial respeta la media query. Esenciales (loading
+   spinner, indicador de progreso) pueden seguir corriendo pero deben ser
+   sub-5Hz y no parpadear.
+2. CSS global tiene un override blanket en `tokens.css`
+   (`@media (prefers-reduced-motion: reduce) { *, *::before, *::after {
+   animation-duration: 0.01ms !important; ... } }`); GSAP requiere guard JS
+   adicional.
+3. Tests visuales: spec render con MQ reduce-on debe asertar `gsap.set`
+   (no `fromTo`).
+
+**Lección Sprint 6+**: cualquier feature con animación pasa por checklist de
+accesibilidad antes de merge. Auditor a11y (axe-core) NO captura este caso —
+es responsabilidad del autor del PR.
+
+---
+
+#### S5.7 Brandable theming: NUNCA inline-style colores tenant — usar `setProperty` o `<style nonce>`
+
+**Evidencia (Sprint 5, MT-3 iter 1 + DS-1 iter 1 — ADR-0013)**:
+- Inyectar `style="background:#hex"` con valores tenant rompe la CSP `style-src
+  'self'` y bypassa el whitelist de hosts (tenant podría inyectar
+  `url(javascript:alert(1))` en un campo de URL libre).
+- Aproximación correcta: `document.documentElement.style.setProperty(
+  '--tenant-primary', validatedHex)` después de validación regex
+  `/^#[0-9a-fA-F]{6}$/`. CSS consume la var.
+
+**Fix Sprint 5 (`packages/ui/src/theme/brandable-tokens.ts`)**:
+- `applyBrandableTheme({ primaryHex, accentHex, bgImageUrl })` valida hex con
+  regex y URLs contra whitelist `*.cloudfront.net` / `cdn.segurasist.com` /
+  `branding-assets-*.s3.amazonaws.com`.
+- Cualquier valor que no pase la validación se silencia (no se setea la var,
+  default tokens persisten). Defensa en profundidad anti CSS injection.
+- `escapeUrl()` rechaza paréntesis / quotes / backslashes / semicolons antes
+  incluso de `new URL()`.
+
+**Regla preventiva**:
+1. Tenant data NUNCA va a `style="..."` directo.
+2. Hex con regex `/^#[0-9a-fA-F]{6}$/`. URLs con `new URL()` + host whitelist.
+3. Si `<style nonce={n}>` es estrictamente necesario, generar el nonce
+   per-request en middleware y exponerlo a la página vía header — coordinar
+   con MT-1.
+
+**Lección Sprint 6+**: review en cualquier PR que inyecte `style=` con
+variable runtime. Default policy: rechazar y proponer CSS var.
+
+---
+
+#### S5.8 Catálogo Lordicon: pin a IDs verificados, NO referenciar IDs sin confirmación
+
+**Evidencia (Sprint 5, DS-1 iter 1 + iter 2 — CC-15)**:
+- IDs en `cdn.lordicon.com` pueden cambiar si Lordicon refresca un glyph
+  (rebrand de la librería). Pinear sin verificar = breakage silencioso en
+  prod (404 Lottie → fallback `<span>` vacío, sin error visible).
+- Iter 1 dejó 20 IDs como `<TODO_ID_*>`; iter 2 resolvió 16 con verificación
+  manual contra `https://lordicon.com/icons/system/`. 7 quedan como TODO con
+  resolver script para Sprint 6.
+
+**Fix Sprint 5 (`packages/ui/src/lord-icon/catalog.ts`)**:
+- Cada entry confirmada lleva el ID hex de 8 chars. Las no confirmadas usan
+  marker `<TODO_ID_*>`.
+- `listUnresolvedIcons()` sirve de gate runtime + el playground page lista las
+  pendientes para revisión visual.
+- `scripts/fetch-lord-icons.ts` parsea `lordicon.com/icons/system/` y emite
+  candidatos para review (no aplica el patch automáticamente).
+
+**Regla preventiva**:
+1. NUNCA copiar un ID Lordicon de un blog / Stack Overflow sin abrir
+   `https://cdn.lordicon.com/<id>.json` en el browser y validar visualmente.
+2. Cualquier nuevo icono pasa por el playground (`/dev/ui-playground`) antes
+   de ser referenciado en producción.
+3. Si Lordicon publica un mirror pago (`pro` o equivalente), pin a la
+   versión `?v=...` cuando esté disponible — defensa contra glyph drift.
+
+**Lección Sprint 6+**: el resolver script debe correr CI nightly para
+detectar 404s preventivamente; alarmar Slack cuando un ID conocido devuelve
+`status >= 400`. Owner DS-1 + DevOps.
+
+---
+
 ## Sprint 4+ Reading Order (NEW agents/devs)
 
 1. **TL;DR** (sección superior).
 2. **Sección 1** — anti-patterns 1.1-1.11 (lectura obligatoria antes de cualquier PR).
-3. **Sección 2** — cheat-sheet con el snippet del tipo de cambio que estás haciendo.
-4. **Sección 5** — checklist PR (marcar antes de pedir review).
-5. **Sección 8** — lecciones del bundle más cercano a tu cambio.
-6. **ADR correspondiente** si tu cambio toca bypass-rls (ADR-0001) o audit context (ADR-0002).
+3. **Sprint 5 anti-patterns S5.1-S5.8** (FE multi-tenant + Lordicons + GSAP + branding).
+4. **Sección 2** — cheat-sheet con el snippet del tipo de cambio que estás haciendo.
+5. **Sección 5** — checklist PR (marcar antes de pedir review).
+6. **Sección 8** — lecciones del bundle más cercano a tu cambio.
+7. **ADR correspondiente** si tu cambio toca bypass-rls (ADR-0001) o audit context (ADR-0002), o motion design (ADR-0012) / brandable theming (ADR-0013).

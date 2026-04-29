@@ -20,15 +20,50 @@
  * y los exportamos para que el ChatbotController los inyecte.
  */
 import { Module } from '@nestjs/common';
-import { AdminChatbotKbController, ChatbotController } from './chatbot.controller';
+import { ChatbotController } from './chatbot.controller';
+import { ConversationsHistoryController } from './conversations-history/conversations-history.controller';
+import { ConversationsHistoryService } from './conversations-history/conversations-history.service';
+import { ConversationsRetentionService } from './cron/conversations-retention.service';
 import { EscalationService } from './escalation.service';
+import { KbAdminController } from './kb-admin/kb-admin.controller';
+import { KbAdminService } from './kb-admin/kb-admin.service';
 import { KbMatcherService } from './kb-matcher.service';
 import { KbService } from './kb.service';
 import { PersonalizationService } from './personalization.service';
 
+/**
+ * Sprint 5 — S5-3 amplía el módulo con:
+ *   - `KbAdminController` / `KbAdminService` (editor admin con vocabulario
+ *     `intent`/`title`/`body`, test-match, CSV import). Reemplaza el
+ *     `AdminChatbotKbController` legacy de Sprint 4 bajo el mismo path
+ *     `/v1/admin/chatbot/kb` — el nuevo controller soporta tanto `PUT /:id`
+ *     (canónico Sprint 5) como `PATCH /:id` (compat Sprint 4 cross-tenant
+ *     test) para no romper integration tests existentes.
+ *   - `ConversationsHistoryController` / `ConversationsHistoryService`
+ *     (insureds consultan su histórico self-served, paginado).
+ *   - `ConversationsRetentionService` (cron diario que purga
+ *     `chat_conversations` con `expiresAt < NOW()` — cascada vía
+ *     ChatMessage soft-FK).
+ */
 @Module({
-  controllers: [ChatbotController, AdminChatbotKbController],
-  providers: [KbService, KbMatcherService, PersonalizationService, EscalationService],
-  exports: [KbService, KbMatcherService, PersonalizationService, EscalationService],
+  controllers: [ChatbotController, KbAdminController, ConversationsHistoryController],
+  providers: [
+    KbService,
+    KbMatcherService,
+    PersonalizationService,
+    EscalationService,
+    KbAdminService,
+    ConversationsHistoryService,
+    ConversationsRetentionService,
+  ],
+  exports: [
+    KbService,
+    KbMatcherService,
+    PersonalizationService,
+    EscalationService,
+    KbAdminService,
+    ConversationsHistoryService,
+    ConversationsRetentionService,
+  ],
 })
 export class ChatbotModule {}

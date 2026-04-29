@@ -18,6 +18,11 @@ import { decodeJwtPayload, isTokenExpired } from './lib/jwt';
  * The signature is NOT verified here. The backend API re-verifies on every
  * proxied call via `/api/proxy/[...path]`. This middleware is UX-only and
  * runs in the Edge runtime, where pulling Cognito JWKS would add latency.
+ *
+ * NOTE (CC-01, Sprint 5): CSP / security response headers (`Content-Security-
+ * Policy`, `Cross-Origin-*`, `Permissions-Policy`, etc.) live in
+ * `next.config.mjs` (`async headers()`) — NOT here. This middleware only
+ * enforces request-level guards (origin + cookie) and never attaches CSP.
  */
 
 import { PORTAL_SESSION_COOKIE } from './lib/cookie-names';

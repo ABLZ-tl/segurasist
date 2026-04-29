@@ -11,3 +11,9 @@ domain_zone_id = "ZXXXXXXXXXXXXXXXXXX"
 github_oauth_token_secret_arn = "arn:aws:secretsmanager:mx-central-1:222222222222:secret:segurasist/github/amplify-oauth-XXXXXX"
 
 image_tag_api = "bootstrap-placeholder"
+
+# G-1 Sprint 5 iter 2 — DR drill OIDC role (módulo dr-drill-iam).
+# Output `oidc_provider_arns["staging"]` de `global/iam-github-oidc`.
+github_oidc_provider_arn = "arn:aws:iam::222222222222:oidc-provider/token.actions.githubusercontent.com"
+github_org               = "segurasist"
+github_repo              = "segurasist"

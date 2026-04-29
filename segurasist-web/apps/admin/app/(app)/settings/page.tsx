@@ -1,4 +1,5 @@
-import { Card, CardContent, CardDescription, CardHeader, CardTitle, Section } from '@segurasist/ui';
+import Link from 'next/link';
+import { Button, Card, CardContent, CardDescription, CardHeader, CardTitle, Section } from '@segurasist/ui';
 import { AccessDenied } from '../../_components/access-denied';
 import { fetchMe } from '../../../lib/auth-server';
 import { canAccess } from '../../../lib/rbac';
@@ -16,10 +17,17 @@ export default async function SettingsPage() {
       <Card>
         <CardHeader>
           <CardTitle>Branding</CardTitle>
-          <CardDescription>Logo y colores. Vista previa en tiempo real.</CardDescription>
+          <CardDescription>
+            Logo, colores, tagline e imagen de fondo. Vista previa en tiempo real.
+          </CardDescription>
         </CardHeader>
-        <CardContent>
-          <p className="text-sm text-fg-muted">Pendiente: formulario de branding.</p>
+        <CardContent className="flex items-center justify-between gap-4">
+          <p className="text-sm text-fg-muted">
+            Personaliza cómo se ve el portal de tus asegurados.
+          </p>
+          <Button asChild>
+            <Link href="/settings/branding">Abrir editor</Link>
+          </Button>
         </CardContent>
       </Card>
     </div>

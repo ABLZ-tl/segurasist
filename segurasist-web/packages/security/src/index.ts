@@ -10,3 +10,5 @@ export * from './cookie';
 export * from './origin';
 export * from './proxy';
 export * from './jwt';
+// Sprint 5 MT-1 — CSP builder con allow-list de tenant branding CDN. Consumer: MT-3.
+export * from './csp';

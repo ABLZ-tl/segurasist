@@ -13,6 +13,20 @@
 #
 # Uso:
 #   ./scripts/cognito-local-bootstrap.sh
+#   ./scripts/cognito-local-bootstrap.sh --multi-tenant
+#   ./scripts/cognito-local-bootstrap.sh --tenants mac,demo-insurer
+#
+# Sprint 5 / CC-07:
+#   --multi-tenant        Bootstrap usuarios para los 2 tenants del seed
+#                         multi-tenant (mac + demo-insurer). Equivale a
+#                         `--tenants mac,demo-insurer`.
+#   --tenants A,B[,C...]  Lista CSV de slugs de tenants para los cuales
+#                         crear admin + insured (los slugs deben existir en
+#                         BD; ejecuta `npx prisma db seed` o el seed
+#                         multi-tenant antes).
+#
+# Default (sin flags): single-tenant — solo registra usuarios para el
+# tenant slug='mac' (back-compat con seed.ts del Sprint 1).
 #
 # Variables opcionales (con defaults):
 #   COGNITO_ENDPOINT   default http://localhost:9229
@@ -27,6 +41,44 @@
 #   CLIENT_INSURED     default local-insured-client
 
 set -euo pipefail
+
+# =========================================================================
+# Flag parsing — Sprint 5 / CC-07 multi-tenant bootstrap
+# =========================================================================
+# TENANT_SLUGS: lista (array bash) de slugs a bootstrappear. Default = ('mac').
+TENANT_SLUGS=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --multi-tenant)
+      TENANT_SLUGS=("mac" "demo-insurer")
+      shift
+      ;;
+    --tenants)
+      if [[ -z "${2:-}" ]]; then
+        echo "[cognito-local-bootstrap] FATAL: --tenants requiere lista CSV (e.g. --tenants mac,demo-insurer)" >&2
+        exit 64
+      fi
+      IFS=',' read -r -a TENANT_SLUGS <<< "$2"
+      shift 2
+      ;;
+    --tenants=*)
+      IFS=',' read -r -a TENANT_SLUGS <<< "${1#--tenants=}"
+      shift
+      ;;
+    -h|--help)
+      sed -n '1,40p' "$0"
+      exit 0
+      ;;
+    *)
+      echo "[cognito-local-bootstrap] FATAL: flag desconocida '$1'" >&2
+      echo "  uso: $0 [--multi-tenant | --tenants slug1,slug2,...]" >&2
+      exit 64
+      ;;
+  esac
+done
+if [[ ${#TENANT_SLUGS[@]} -eq 0 ]]; then
+  TENANT_SLUGS=("mac")  # back-compat: comportamiento original sin flag.
+fi
 
 COGNITO_ENDPOINT="${COGNITO_ENDPOINT:-http://localhost:9229}"
 AWS_REGION="${AWS_REGION:-local}"
@@ -76,15 +128,27 @@ done
 echo "[cognito-local-bootstrap] cognito-local OK"
 
 # =========================================================================
-# 1) Recuperar tenant_id del seed (tenant slug=mac)
+# 1) Recuperar tenant_id de cada slug solicitado (slug → id)
 # =========================================================================
-TENANT_ID=$(psql "${PGURL}" -tAc "SELECT id FROM tenants WHERE slug='mac' LIMIT 1;" 2>/dev/null | tr -d '[:space:]' || true)
-if [[ -z "${TENANT_ID}" ]]; then
-  echo "[cognito-local-bootstrap] FATAL: no encuentro tenant slug='mac' en la BD." >&2
-  echo "  ¿corriste 'npx prisma db seed' antes?" >&2
-  exit 3
-fi
-echo "[tenant] mac → ${TENANT_ID}"
+# Usamos arrays paralelos: TENANT_IDS[i] mapea a TENANT_SLUGS[i]. Bash no
+# soporta dicts portables en versiones <4 (macOS), así que mantenemos el
+# patrón paralelo por compatibilidad.
+TENANT_IDS=()
+for slug in "${TENANT_SLUGS[@]}"; do
+  tid=$(psql "${PGURL}" -tAc "SELECT id FROM tenants WHERE slug='${slug}' LIMIT 1;" 2>/dev/null | tr -d '[:space:]' || true)
+  if [[ -z "${tid}" ]]; then
+    echo "[cognito-local-bootstrap] FATAL: no encuentro tenant slug='${slug}' en la BD." >&2
+    echo "  Para '--multi-tenant' corre antes: 'npx prisma db seed' (mac) y" >&2
+    echo "  'npx tsx prisma/seed-multi-tenant.ts' (mac + demo-insurer)." >&2
+    exit 3
+  fi
+  TENANT_IDS+=("${tid}")
+  echo "[tenant] ${slug} → ${tid}"
+done
+
+# Mantener TENANT_ID = primer tenant para back-compat con el resumen final
+# y los logs single-tenant del summary block.
+TENANT_ID="${TENANT_IDS[0]}"
 
 # =========================================================================
 # 2) Helper: crear pool si no existe (cognito-local acepta el Id como nombre)
@@ -236,44 +300,83 @@ sync_sub() {
   echo "${sub}"
 }
 
-# Pool admin
-# Superadmin: tenant_attr vacío → no se setea custom:tenant_id en el pool. El
-# JwtAuthGuard usa `custom:role=admin_segurasist` como señal de cross-tenant.
-ensure_user "${ADMIN_POOL_ID}" "${ADMIN_EMAIL}"                "admin_mac"        "${TENANT_ID}" "${ADMIN_PASSWORD}"
+# Pool admin — superadmin único (no tenant-scoped). Solo se crea una vez,
+# no se itera por tenant. tenant_attr vacío → no se setea custom:tenant_id en
+# el pool. El JwtAuthGuard usa `custom:role=admin_segurasist` como señal de
+# cross-tenant.
 ensure_user "${ADMIN_POOL_ID}" "superadmin@segurasist.local"   "admin_segurasist" ""             "${DEMO_PASSWORD}"
-ensure_user "${ADMIN_POOL_ID}" "operator@mac.local"            "operator"         "${TENANT_ID}" "${DEMO_PASSWORD}"
-ensure_user "${ADMIN_POOL_ID}" "supervisor@mac.local"          "supervisor"       "${TENANT_ID}" "${DEMO_PASSWORD}"
-
-# Pool insured (segregado para que un insured nunca pueda obtener un token con
-# un rol admin, aun si los emails colisionan).
-# H-27 — given_name="María", family_name="Hernández" para que el portal asegurado
-# muestre el saludo personalizado ("Hola, María") en lugar de caer al fallback
-# derivado del email local-part ("insured.demo"). Coincide con el seed.ts del
-# insured demo (Hernández García María).
-ensure_user "${INSURED_POOL_ID}" "insured.demo@mac.local"      "insured"          "${TENANT_ID}" "${INSURED_SYS_PASSWORD}" "María" "Hernández"
-
-# =========================================================================
-# 4) Sincronizar cognito_sub real
-# =========================================================================
-ADMIN_SUB=$(sync_sub      "${ADMIN_POOL_ID}"   "${ADMIN_EMAIL}")
 SUPER_SUB=$(sync_sub      "${ADMIN_POOL_ID}"   "superadmin@segurasist.local")
-OPERATOR_SUB=$(sync_sub   "${ADMIN_POOL_ID}"   "operator@mac.local")
-SUPERVISOR_SUB=$(sync_sub "${ADMIN_POOL_ID}"   "supervisor@mac.local")
-INSURED_SUB=$(sync_sub    "${INSURED_POOL_ID}" "insured.demo@mac.local")
+
+# Sprint 5 / CC-07 — bootstrap admin + insured per slug solicitado.
+# Para cada tenant en TENANT_SLUGS[i] / TENANT_IDS[i]:
+#   - admin@<slug>.local / supervisor@<slug>.local / operator@<slug>.local
+#     (admin_mac/supervisor/operator role)
+#   - insured.demo@<slug>.local (insured role, pool insured separado)
+#
+# Excepción back-compat (tenant 'mac'): conservamos los emails canónicos de
+# Sprint 1 (admin@mac.local, ADMIN_PASSWORD distinto del DEMO_PASSWORD,
+# given_name=María/Hernández para el insured demo). Cualquier otro slug usa
+# DEMO_PASSWORD para el admin.
+declare -a SUMMARY_ROWS=()
+SUMMARY_ROWS+=("$(printf "  %-34s  %-14s  %-18s  %-36s  %s" "superadmin@segurasist.local" "${POOL_ADMIN}" "admin_segurasist" "<none>" "${SUPER_SUB}")")
+
+for i in "${!TENANT_SLUGS[@]}"; do
+  slug="${TENANT_SLUGS[$i]}"
+  tid="${TENANT_IDS[$i]}"
+
+  if [[ "${slug}" == "mac" ]]; then
+    admin_email="${ADMIN_EMAIL}"        # admin@mac.local (override)
+    admin_password="${ADMIN_PASSWORD}"
+    insured_given="María"
+    insured_family="Hernández"
+  else
+    admin_email="admin@${slug}.local"
+    admin_password="${DEMO_PASSWORD}"
+    insured_given=""
+    insured_family=""
+  fi
+  operator_email="operator@${slug}.local"
+  supervisor_email="supervisor@${slug}.local"
+  insured_email="insured.demo@${slug}.local"
+
+  echo "[bootstrap] tenant='${slug}' id=${tid}"
+  ensure_user "${ADMIN_POOL_ID}"   "${admin_email}"      "admin_mac"  "${tid}" "${admin_password}"
+  ensure_user "${ADMIN_POOL_ID}"   "${operator_email}"   "operator"   "${tid}" "${DEMO_PASSWORD}"
+  ensure_user "${ADMIN_POOL_ID}"   "${supervisor_email}" "supervisor" "${tid}" "${DEMO_PASSWORD}"
+  ensure_user "${INSURED_POOL_ID}" "${insured_email}"    "insured"    "${tid}" "${INSURED_SYS_PASSWORD}" "${insured_given}" "${insured_family}"
+
+  # Sync subs.
+  admin_sub=$(sync_sub      "${ADMIN_POOL_ID}"   "${admin_email}")
+  operator_sub=$(sync_sub   "${ADMIN_POOL_ID}"   "${operator_email}")
+  supervisor_sub=$(sync_sub "${ADMIN_POOL_ID}"   "${supervisor_email}")
+  insured_sub=$(sync_sub    "${INSURED_POOL_ID}" "${insured_email}")
+
+  SUMMARY_ROWS+=("$(printf "  %-34s  %-14s  %-18s  %-36s  %s" "${admin_email}"      "${POOL_ADMIN}"   "admin_mac"  "${tid}" "${admin_sub}")")
+  SUMMARY_ROWS+=("$(printf "  %-34s  %-14s  %-18s  %-36s  %s" "${operator_email}"   "${POOL_ADMIN}"   "operator"   "${tid}" "${operator_sub}")")
+  SUMMARY_ROWS+=("$(printf "  %-34s  %-14s  %-18s  %-36s  %s" "${supervisor_email}" "${POOL_ADMIN}"   "supervisor" "${tid}" "${supervisor_sub}")")
+  SUMMARY_ROWS+=("$(printf "  %-34s  %-14s  %-18s  %-36s  %s" "${insured_email}"    "${POOL_INSURED}" "insured"    "${tid}" "${insured_sub}")")
+
+  # Back-compat: para el tenant primario (mac, idx 0), populate los
+  # antiguos *_SUB scalars usados por el cliente del summary block.
+  if [[ "${i}" -eq 0 ]]; then
+    ADMIN_SUB="${admin_sub}"
+    OPERATOR_SUB="${operator_sub}"
+    SUPERVISOR_SUB="${supervisor_sub}"
+    INSURED_SUB="${insured_sub}"
+  fi
+done
 
 # =========================================================================
 # 5) Resumen
 # =========================================================================
 echo ""
-echo "[cognito-local-bootstrap] OK"
+echo "[cognito-local-bootstrap] OK (tenants: ${TENANT_SLUGS[*]})"
 echo ""
 printf "  %-34s  %-14s  %-18s  %-36s  %s\n" "USER" "POOL" "ROLE" "TENANT" "SUB"
 printf "  %-34s  %-14s  %-18s  %-36s  %s\n" "----" "----" "----" "------" "---"
-printf "  %-34s  %-14s  %-18s  %-36s  %s\n" "${ADMIN_EMAIL}"                "${POOL_ADMIN}"   "admin_mac"        "${TENANT_ID}" "${ADMIN_SUB}"
-printf "  %-34s  %-14s  %-18s  %-36s  %s\n" "superadmin@segurasist.local"  "${POOL_ADMIN}"   "admin_segurasist" "<none>"       "${SUPER_SUB}"
-printf "  %-34s  %-14s  %-18s  %-36s  %s\n" "operator@mac.local"           "${POOL_ADMIN}"   "operator"         "${TENANT_ID}" "${OPERATOR_SUB}"
-printf "  %-34s  %-14s  %-18s  %-36s  %s\n" "supervisor@mac.local"         "${POOL_ADMIN}"   "supervisor"       "${TENANT_ID}" "${SUPERVISOR_SUB}"
-printf "  %-34s  %-14s  %-18s  %-36s  %s\n" "insured.demo@mac.local"       "${POOL_INSURED}" "insured"          "${TENANT_ID}" "${INSURED_SUB}"
+for row in "${SUMMARY_ROWS[@]}"; do
+  echo "${row}"
+done
 echo ""
 echo "  Pega esto en segurasist-api/.env (sólo dev):"
 echo "    COGNITO_REGION=local"
@@ -284,5 +387,7 @@ echo "    COGNITO_CLIENT_ID_ADMIN=${ADMIN_CLIENT_ID}"
 echo "    COGNITO_CLIENT_ID_INSURED=${INSURED_CLIENT_ID}"
 echo ""
 echo "  Passwords:"
-echo "    ${ADMIN_EMAIL}                 → ${ADMIN_PASSWORD}"
-echo "    *@segurasist.local / *@mac.local (resto) → ${DEMO_PASSWORD}"
+echo "    admin@mac.local                                    → ${ADMIN_PASSWORD}"
+echo "    admin@<otro-slug>.local / operator@*/supervisor@*  → ${DEMO_PASSWORD}"
+echo "    superadmin@segurasist.local                        → ${DEMO_PASSWORD}"
+echo "    insured.demo@<slug>.local                          → ${INSURED_SYS_PASSWORD}"

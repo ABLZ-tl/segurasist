@@ -15,6 +15,7 @@ import { CacheModule } from './infra/cache/cache.module';
 import { AuditPersistenceModule } from './modules/audit/audit-persistence.module';
 import { AuditModule } from './modules/audit/audit.module';
 import { AuthModule } from './modules/auth/auth.module';
+import { SamlModule } from './modules/auth/saml/saml.module';
 import { BatchesModule } from './modules/batches/batches.module';
 import { CertificatesModule } from './modules/certificates/certificates.module';
 import { ChatModule } from './modules/chat/chat.module';
@@ -26,7 +27,9 @@ import { InsuredsModule } from './modules/insureds/insureds.module';
 import { PackagesModule } from './modules/packages/packages.module';
 import { ReportsCronModule } from './modules/reports/cron/reports-cron.module';
 import { ReportsModule } from './modules/reports/reports.module';
+import { ScimModule } from './modules/scim/scim.module';
 import { TenantsModule } from './modules/tenants/tenants.module';
+import { BrandingModule } from './modules/tenants/branding/branding.module';
 import { UsersModule } from './modules/users/users.module';
 import { WebhooksModule } from './modules/webhooks/webhooks.module';
 import { WorkersModule } from './workers/workers.module';
@@ -95,7 +98,14 @@ import { WorkersModule } from './workers/workers.module';
     // H2 — writer de audit_log con PrismaClient propio (DATABASE_URL_AUDIT).
     AuditPersistenceModule,
     AuthModule,
+    // S5-1 — admin SAML SSO (SP-init). Mounts /v1/auth/saml/{metadata,login,acs}.
+    SamlModule,
+    // S5-1 — SCIM 2.0 user provisioning. Mounts /v1/scim/v2/Users (+ Groups stub).
+    ScimModule,
     TenantsModule,
+    // Sprint 5 MT-1 — endpoints de branding multi-tenant. Mounts
+    // GET /v1/tenants/me/branding (insured) y CRUD admin /v1/admin/tenants/:id/branding.
+    BrandingModule,
     UsersModule,
     PackagesModule,
     CoveragesModule,

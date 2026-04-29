@@ -1,21 +1,51 @@
 name: Performance Tests
 
-# Sprint 4 — S4-10.
-# Ejecuta los escenarios JMeter (portal-load-1000 + admin-load-100) contra
-# staging y aplica gates p95/error rate. Deshabilitado en push (cuesta tiempo
-# y carga la infra). Triggers:
-#   - workflow_dispatch  → run on-demand desde Actions UI / gh workflow run
-#   - schedule           → todos los lunes 06:00 UTC (00:00 CDMX) para detectar
-#                          regresiones semanales
+# Sprint 4 — S4-10 — JMeter portal/admin (cron + dispatch).
+# Sprint 5 — G-2 — añade 3 jobs k6:
+#   - sprint5-smoke   → push gate, p95 < 500 ms (1 VU, 30 s).
+#   - sprint5-load    → cron semanal, p95 < 1500 ms (50 VUs, 5 min); comenta
+#                        en último PR si regresión > 20% vs baseline.
+#   - sprint5-stress  → workflow_dispatch manual (200 VUs, 10 min).
 #
-# Gates:
+# Gates legacy (S4-10):
 #   - p95 latencia API ≤ 500 ms
 #   - error rate ≤ 1%
 #
-# Si falla, sube los .jtl + .json como artifacts (retention 30 d) y rompe el
-# build. NO bloquea PRs (no es required check).
+# ----------------------------------------------------------------------------
+# REQUIRED SECRETS (Sprint 5 G-2 iter 2)
+# ----------------------------------------------------------------------------
+# Este workflow requiere los siguientes secrets de GitHub Actions:
+#
+#   - PERF_ADMIN_USER   email del admin de pruebas (ej. perf-admin@segurasist.com)
+#                       fallback: 'softpiratas@gmail.com' (sólo dev local).
+#                       Alias legacy aceptado: PERF_ADMIN_EMAIL.
+#   - PERF_ADMIN_PASS   password del admin de pruebas (mínimo 16 chars,
+#                       rotar trimestralmente).
+#                       fallback: 'change-me-dev' (sólo dev local).
+#
+# Provisionar en GitHub:
+#   1) Settings → Secrets and variables → Actions → New repository secret
+#   2) Crear PERF_ADMIN_USER con el email del usuario seed seguro de staging.
+#   3) Crear PERF_ADMIN_PASS con el password (NO commitear nunca).
+#   4) Si la org tiene environments separados (staging/prod), provisionar
+#      como Environment secrets en `staging` para aislar de prod.
+#   5) Verificar con: `gh secret list` (gh CLI authenticated).
+#
+# Naming: usar `PERF_ADMIN_*` (no `ADMIN_*`) para no colisionar con secrets
+# de deploy. Si ya existe un `PERF_ADMIN_EMAIL` legacy, este workflow lo
+# acepta como fallback de `PERF_ADMIN_USER`.
+#
+# TODO post-merge: documentar en `.github/SECRETS.md` cuando exista (G-2
+# iter 2 dejó comentario inline porque el archivo aún no fue creado).
+# ----------------------------------------------------------------------------
 
 on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'segurasist-api/src/**'
+      - 'tests/performance/k6/sprint5-baseline.js'
+      - '.github/workflows/perf.yml'
   workflow_dispatch:
     inputs:
       base_url:
@@ -43,12 +73,21 @@ on:
           - jmeter
           - k6
           - both
+      run_stress:
+        description: 'Run Sprint 5 stress scenario (200 VUs, 10 min)'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
   schedule:
-    # Lunes 06:00 UTC.
+    # Lunes 06:00 UTC — perf legacy + sprint5 load.
     - cron: '0 6 * * 1'
 
 permissions:
   contents: read
+  pull-requests: write   # Sprint 5 G-2 — comentar regresiones en PR
 
 env:
   BASE_URL: ${{ github.event.inputs.base_url || 'https://api.staging.segurasist.com' }}
@@ -59,10 +98,225 @@ env:
 
 jobs:
   # --------------------------------------------------------------------
+  # Sprint 5 G-2 — k6 smoke gate per-push (sprint5-baseline.js).
+  # --------------------------------------------------------------------
+  sprint5-smoke:
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install k6
+        run: |
+          set -e
+          sudo gpg -k
+          sudo gpg --no-default-keyring \
+            --keyring /usr/share/keyrings/k6-archive-keyring.gpg \
+            --keyserver hkp://keyserver.ubuntu.com:80 \
+            --recv-keys C5AD17C747E3415A3642D57D77C6C491D6AC1D69
+          echo "deb [signed-by=/usr/share/keyrings/k6-archive-keyring.gpg] https://dl.k6.io/deb stable main" \
+            | sudo tee /etc/apt/sources.list.d/k6.list
+          sudo apt-get update
+          sudo apt-get install -y k6 jq
+
+      - name: Boot stack (docker compose)
+        working-directory: segurasist-api
+        run: |
+          docker compose up -d postgres redis localstack mailpit cognito-local
+          for i in $(seq 1 60); do
+            unhealthy=$(docker compose ps --format json \
+              | grep -c '"Health":"unhealthy"\|"Health":"starting"' || true)
+            [ "$unhealthy" = "0" ] && break
+            sleep 1
+          done
+
+      - name: Start API
+        working-directory: segurasist-api
+        run: |
+          cp .env.example .env || true
+          npm ci
+          npx prisma migrate deploy || true
+          npm run build
+          NODE_ENV=production node dist/main.js > /tmp/api.log 2>&1 &
+          echo $! > /tmp/api.pid
+          npx wait-on -t 60000 http://localhost:3000/health/ready
+
+      - name: Run Sprint 5 smoke
+        working-directory: tests/performance/k6
+        env:
+          BASE_URL: http://localhost:3000
+          SCENARIO: smoke
+          # Sprint 5 G-2 iter 2: PERF_ADMIN_USER es el secret canónico;
+          # PERF_ADMIN_EMAIL queda como alias legacy. Fallback a dev contact
+          # sólo aplica cuando los secrets aún no están provisionados.
+          ADMIN_EMAIL: ${{ secrets.PERF_ADMIN_USER || secrets.PERF_ADMIN_EMAIL || 'softpiratas@gmail.com' }}
+          ADMIN_PASS: ${{ secrets.PERF_ADMIN_PASS || 'change-me-dev' }}
+        run: |
+          mkdir -p results
+          k6 run \
+            --summary-export results/sprint5-smoke-summary-export.json \
+            sprint5-baseline.js
+
+      - name: Stop API
+        if: always()
+        run: |
+          if [ -f /tmp/api.pid ]; then kill "$(cat /tmp/api.pid)" || true; fi
+          cd segurasist-api && docker compose down -v
+
+      - name: Upload smoke results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: k6-sprint5-smoke-${{ github.run_id }}
+          path: tests/performance/k6/results/
+          retention-days: 14
+
+  # --------------------------------------------------------------------
+  # Sprint 5 G-2 — k6 load semanal con regression check.
+  # --------------------------------------------------------------------
+  sprint5-load:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install k6
+        run: |
+          set -e
+          sudo gpg -k
+          sudo gpg --no-default-keyring \
+            --keyring /usr/share/keyrings/k6-archive-keyring.gpg \
+            --keyserver hkp://keyserver.ubuntu.com:80 \
+            --recv-keys C5AD17C747E3415A3642D57D77C6C491D6AC1D69
+          echo "deb [signed-by=/usr/share/keyrings/k6-archive-keyring.gpg] https://dl.k6.io/deb stable main" \
+            | sudo tee /etc/apt/sources.list.d/k6.list
+          sudo apt-get update
+          sudo apt-get install -y k6 jq bc
+
+      - name: Run Sprint 5 load
+        working-directory: tests/performance/k6
+        env:
+          BASE_URL: ${{ env.BASE_URL }}
+          SCENARIO: load
+          # Sprint 5 G-2 iter 2: ver header del workflow para provisioning.
+          ADMIN_EMAIL: ${{ secrets.PERF_ADMIN_USER || secrets.PERF_ADMIN_EMAIL }}
+          ADMIN_PASS: ${{ secrets.PERF_ADMIN_PASS }}
+        run: |
+          mkdir -p results
+          k6 run \
+            --summary-export results/sprint5-load-summary-export.json \
+            sprint5-baseline.js
+
+      - name: Regression check vs baseline
+        id: regression
+        working-directory: tests/performance
+        run: |
+          set -e
+          new_p95=$(jq -r '.metrics.http_req_duration["p(95)"] // 0' \
+            k6/results/sprint5-load-summary-export.json)
+          base_p95=$(jq -r '.global_thresholds.p95_ms_max // 1500' baseline.json)
+          ratio=$(echo "scale=3; $new_p95 / $base_p95" | bc -l)
+          echo "new_p95=$new_p95"
+          echo "base_p95=$base_p95"
+          echo "ratio=$ratio"
+          {
+            echo "new_p95=$new_p95"
+            echo "base_p95=$base_p95"
+            echo "ratio=$ratio"
+          } >> "$GITHUB_OUTPUT"
+          # Comentar al PR más reciente si ratio > 1.20 (regresión >20%).
+          if (( $(echo "$ratio > 1.20" | bc -l) )); then
+            echo "regression=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Comment last PR on regression
+        if: steps.regression.outputs.regression == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const newP95 = '${{ steps.regression.outputs.new_p95 }}';
+            const baseP95 = '${{ steps.regression.outputs.base_p95 }}';
+            const ratio = '${{ steps.regression.outputs.ratio }}';
+            const { data: prs } = await github.rest.pulls.list({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'closed',
+              sort: 'updated',
+              direction: 'desc',
+              per_page: 1,
+            });
+            if (prs.length === 0) return;
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prs[0].number,
+              body: `**Sprint 5 perf regression detected** (cron run #${context.runId})\n` +
+                    `- new p95: \`${newP95} ms\`\n` +
+                    `- baseline p95: \`${baseP95} ms\`\n` +
+                    `- ratio: \`${ratio}\` (>1.20 → regresión)\n` +
+                    `Investigar antes del próximo cron.`,
+            });
+
+      - name: Upload load results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: k6-sprint5-load-${{ github.run_id }}
+          path: tests/performance/k6/results/
+          retention-days: 30
+
+  # --------------------------------------------------------------------
+  # Sprint 5 G-2 — k6 stress manual (workflow_dispatch run_stress=true).
+  # --------------------------------------------------------------------
+  sprint5-stress:
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.run_stress == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install k6
+        run: |
+          set -e
+          sudo gpg -k
+          sudo gpg --no-default-keyring \
+            --keyring /usr/share/keyrings/k6-archive-keyring.gpg \
+            --keyserver hkp://keyserver.ubuntu.com:80 \
+            --recv-keys C5AD17C747E3415A3642D57D77C6C491D6AC1D69
+          echo "deb [signed-by=/usr/share/keyrings/k6-archive-keyring.gpg] https://dl.k6.io/deb stable main" \
+            | sudo tee /etc/apt/sources.list.d/k6.list
+          sudo apt-get update
+          sudo apt-get install -y k6 jq
+
+      - name: Run Sprint 5 stress
+        working-directory: tests/performance/k6
+        env:
+          BASE_URL: ${{ env.BASE_URL }}
+          SCENARIO: stress
+          # Sprint 5 G-2 iter 2: ver header del workflow para provisioning.
+          ADMIN_EMAIL: ${{ secrets.PERF_ADMIN_USER || secrets.PERF_ADMIN_EMAIL }}
+          ADMIN_PASS: ${{ secrets.PERF_ADMIN_PASS }}
+        run: |
+          mkdir -p results
+          k6 run \
+            --summary-export results/sprint5-stress-summary-export.json \
+            sprint5-baseline.js
+
+      - name: Upload stress results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: k6-sprint5-stress-${{ github.run_id }}
+          path: tests/performance/k6/results/
+          retention-days: 30
+
+  # --------------------------------------------------------------------
   # JMeter — escenario regulatory / source of truth.
   # --------------------------------------------------------------------
   jmeter:
-    if: ${{ github.event.inputs.tool != 'k6' }}
+    if: ${{ github.event_name != 'push' && github.event.inputs.tool != 'k6' }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -168,7 +422,7 @@ jobs:
   # k6 — alternativa moderna; corre en paralelo si el input lo pide.
   # --------------------------------------------------------------------
   k6:
-    if: ${{ github.event.inputs.tool == 'k6' || github.event.inputs.tool == 'both' }}
+    if: ${{ github.event_name != 'push' && (github.event.inputs.tool == 'k6' || github.event.inputs.tool == 'both') }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:

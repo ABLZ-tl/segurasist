@@ -625,3 +625,85 @@ module "dns_api" {
 
 # Admin / portal alias records resolved against Amplify default domain.
 # In sprint 1 we'll wire Amplify domain associations with ACM-issued certs.
+
+############################################
+# S5-2 — GuardDuty + Security Hub + security-alarms
+#
+# Detector + Security Hub are org-managed in `global/security/`. Here
+# we attach env-specific config: protection plans (S3/Malware/RDS/
+# Lambda — EKS off), findings export to S3, EventBridge HIGH/CRITICAL
+# routing to a security-alerts SNS topic with Slack forwarder.
+#
+# `slack_webhook_secret_arn` MUST be created out-of-band (manual seed
+# in SecretsManager) and referenced via terraform.tfvars (gitignored).
+# `auto_disabled_controls` justifications live in ADR-0010.
+############################################
+
+module "guardduty" {
+  source = "../../modules/guardduty"
+
+  environment      = var.environment
+  name_prefix      = local.name_prefix
+  create_detector  = false # org-managed via global/security/
+  kms_key_arn      = module.kms_general.key_arn
+
+  enable_s3_protection      = true
+  enable_eks_protection     = false # SegurAsist no usa EKS (ECR + AppRunner)
+  enable_malware_protection = true
+  enable_rds_protection     = true
+  enable_lambda_protection  = true
+
+  finding_publishing_frequency = "FIFTEEN_MINUTES"
+  findings_retention_days      = 90
+  findings_glacier_after_days  = 90
+  findings_total_expiration_days = 730
+
+  trusted_ip_lists   = []
+  threat_intel_lists = []
+
+  tags = merge(local.common_tags, { Component = "guardduty" })
+}
+
+module "security_hub" {
+  source = "../../modules/security-hub"
+
+  environment                 = var.environment
+  name_prefix                 = local.name_prefix
+  create_account_subscription = false # org auto-enabled
+
+  enable_aws_foundational = true
+  enable_cis_v1_4_0       = true
+  enable_pci_dss          = false # SegurAsist no procesa pagos (ADR-0010)
+  enable_nist_800_53      = false
+  enable_aggregator       = false # iter 1 single-region
+
+  # NEW-FINDING controles auto-suprimidos (justificados en ADR-0010):
+  auto_disabled_controls = [
+    { standard = "aws-foundational", control_id = "EKS.1", reason = "SegurAsist no usa EKS (App Runner + ECR + Lambda); EKS.1 produce false positives." },
+    { standard = "aws-foundational", control_id = "EKS.2", reason = "Ver EKS.1." },
+    { standard = "aws-foundational", control_id = "ECS.1", reason = "SegurAsist usa App Runner managed; ECS controls no aplican." },
+    { standard = "cis-v1.4.0",       control_id = "1.13",  reason = "MFA en root: gestionado en master account org-level (no por env)." },
+    { standard = "cis-v1.4.0",       control_id = "3.10",  reason = "VPC flow logs: ya enabled en módulo vpc; control reporta lag por delegated admin." },
+  ]
+
+  tags = merge(local.common_tags, { Component = "security-hub" })
+}
+
+module "security_alarms" {
+  source = "../../modules/security-alarms"
+
+  environment = var.environment
+  name_prefix = local.name_prefix
+  kms_key_arn = module.kms_general.key_arn
+
+  # Webhook secret seedeado manualmente; ARN inyectado por tfvars
+  # (`slack_security_webhook_secret_arn`). Si null, skip Slack.
+  slack_webhook_secret_arn = var.slack_security_webhook_secret_arn
+
+  severity_alert_threshold     = 7.0  # ADR-0010: HIGH/CRITICAL paginan
+  securityhub_failed_threshold = 5    # > 5 fallidos en 1h → alarma
+
+  enable_auto_quarantine = false # dev: off; staging canary; prod tras review
+
+  tags = merge(local.common_tags, { Component = "security-alarms" })
+}

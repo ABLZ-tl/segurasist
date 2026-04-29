@@ -23,13 +23,19 @@
  *    (LF/CR/TAB), opcionalmente precedidos del UTF-8 BOM (EF BB BF).
  */
 
-export type DetectedFileType = 'xlsx' | 'csv' | 'unknown';
+export type DetectedFileType = 'xlsx' | 'csv' | 'png' | 'webp' | 'svg' | 'unknown';
 
 const ZIP_SIGNATURE = Buffer.from([0x50, 0x4b, 0x03, 0x04]);
 const ZIP_EMPTY_SIGNATURE = Buffer.from([0x50, 0x4b, 0x05, 0x06]); // ZIP vacío
 const ZIP_SPANNED_SIGNATURE = Buffer.from([0x50, 0x4b, 0x07, 0x08]);
 const UTF8_BOM = Buffer.from([0xef, 0xbb, 0xbf]);
 const XLSX_INNER_MARKER = Buffer.from('xl/workbook.xml', 'utf8');
+
+// Sprint 5 — MT-1 branding upload. Imágenes de logo/bg.
+const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+// WebP = "RIFF" .... "WEBP" (bytes 0..3 = "RIFF", bytes 8..11 = "WEBP").
+const RIFF_SIGNATURE = Buffer.from('RIFF', 'ascii');
+const WEBP_MARKER = Buffer.from('WEBP', 'ascii');
 
 /**
  * Devuelve `'xlsx'`, `'csv'` o `'unknown'` analizando los primeros bytes
@@ -49,6 +55,25 @@ const XLSX_INNER_MARKER = Buffer.from('xl/workbook.xml', 'utf8');
  */
 export function detectFileType(buffer: Buffer): DetectedFileType {
   if (!Buffer.isBuffer(buffer) || buffer.length === 0) return 'unknown';
+
+  // Sprint 5 — MT-1 branding logos. Detección PNG / WebP / SVG ANTES de ZIP
+  // porque PNG/WEBP tienen su propia firma; SVG es texto-XML y caería en la
+  // rama CSV abajo si no lo identificamos primero (un archivo SVG válido
+  // pasa el check de "ASCII printable" y devolvería 'csv', mintiendo al
+  // controller de upload).
+  if (buffer.length >= 8 && buffer.slice(0, 8).equals(PNG_SIGNATURE)) {
+    return 'png';
+  }
+  if (
+    buffer.length >= 12 &&
+    buffer.slice(0, 4).equals(RIFF_SIGNATURE) &&
+    buffer.slice(8, 12).equals(WEBP_MARKER)
+  ) {
+    return 'webp';
+  }
+  if (isLikelySvg(buffer)) {
+    return 'svg';
+  }
 
   // 1) ZIP signature → posible XLSX.
   const isZip =
@@ -98,4 +123,30 @@ export function detectFileType(buffer: Buffer): DetectedFileType {
 export const DETECTED_MIME: Record<Exclude<DetectedFileType, 'unknown'>, string> = {
   xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   csv: 'text/csv; charset=utf-8',
+  png: 'image/png',
+  webp: 'image/webp',
+  svg: 'image/svg+xml',
 };
+
+/**
+ * Sprint 5 — MT-1. SVG es XML; lo detectamos buscando `<svg` (case-insensitive)
+ * dentro de los primeros 1KB. Para evitar falsos positivos contra docs HTML
+ * que mencionen `<svg>`, exigimos que el primer non-whitespace char sea `<`
+ * (XML/SVG puro). NO ejecutamos el SVG (server-side: el CDN lo sirve como
+ * `image/svg+xml`; XSS via `<script>` dentro del SVG es responsabilidad del
+ * navegador con CSP — el portal del asegurado deniega scripts inline).
+ *
+ * **Caveat de seguridad** documentado para el iter 2 / NEW-FINDING:
+ * algunos vectores XSS via SVG `<script>` o `onload` siguen siendo posibles
+ * si el SVG se embebe inline en HTML. La mitigación es servirlo SIEMPRE
+ * como recurso aparte (`<img src=...>`) — eso lo enforza CloudFront +
+ * Content-Disposition. Si hace falta hardening server-side (sanitize SVG
+ * con `dompurify`/`xmlbuilder`), agregar en Sprint 6 antes de UAT externo.
+ */
+function isLikelySvg(buffer: Buffer): boolean {
+  const sample = buffer.slice(0, Math.min(buffer.length, 1024)).toString('utf8').trimStart();
+  if (!sample.startsWith('<')) return false;
+  // Aceptamos `<?xml ...?>` opcional al frente.
+  const lower = sample.slice(0, 200).toLowerCase();
+  return lower.includes('<svg');
+}

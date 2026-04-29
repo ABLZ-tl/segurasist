@@ -72,3 +72,63 @@ export const apiPatch = <T, B = unknown>(path: string, body?: B, init?: RequestI
 
 export const apiDelete = <T = void>(path: string, init?: RequestInit) =>
   api<T>(path, { ...init, method: 'DELETE' });
+
+/**
+ * Sprint 5 — CC-03 (MT-2 iter 2).
+ *
+ * Multipart helper para `FormData` (uploads). NO podemos usar `api()` /
+ * `apiPost()` porque fijan `content-type: application/json`, lo que rompe
+ * el boundary que el browser calcula automáticamente para `multipart/form-data`.
+ *
+ * Mantiene la misma cookie/auth handling que `api()` (rutea por `/api/proxy/*`,
+ * inyecta `x-trace-id` y respeta el override de tenant S3-08), y traduce
+ * non-2xx a `ProblemDetailsError` igual que el wrapper base.
+ *
+ * Consumidores iter 2:
+ *   - MT-2: `useUploadLogoMutation` (branding logo upload).
+ *   - S5-3: import CSV de KB del chatbot (finisher iter 2).
+ *
+ * Consideraciones:
+ *   - `headers` se construyen omitiendo cualquier `content-type`; si el caller
+ *     pasa uno explícito en `init.headers` lo respetamos pero **NO** debería
+ *     hacerlo: el browser pone el boundary correcto sólo si no hay header.
+ *   - `body` siempre es la `FormData` recibida — no la transformamos a string.
+ *   - Soporta `signal` para abortar la subida desde el caller (React Query
+ *     hace abort automático en unmount cuando se le pasa `signal`).
+ */
+export interface ApiMultipartOptions {
+  method?: 'POST' | 'PUT';
+  signal?: AbortSignal;
+  /** Headers adicionales — NO incluyas `content-type` (lo decide el browser). */
+  headers?: Record<string, string>;
+}
+
+export async function apiMultipart<T>(
+  path: string,
+  formData: FormData,
+  opts?: ApiMultipartOptions,
+): Promise<T> {
+  const traceId = crypto.randomUUID();
+  const overrideHeaders: Record<string, string> = {};
+  if (typeof window !== 'undefined' && overrideGetter) {
+    const id = overrideGetter();
+    if (id) overrideHeaders['x-tenant-override'] = id;
+  }
+  // Headers explícitos: NUNCA seteamos content-type (deja que el browser
+  // calcule el boundary del multipart). Si el caller pasa uno, lo respetamos
+  // pero el contrato documentado pide NO hacerlo.
+  const headers: Record<string, string> = {
+    'x-trace-id': traceId,
+    ...overrideHeaders,
+    ...(opts?.headers ?? {}),
+  };
+  const res = await fetch(`/api/proxy${path}`, {
+    method: opts?.method ?? 'POST',
+    body: formData,
+    headers,
+    signal: opts?.signal,
+  });
+  if (!res.ok) throw await ProblemDetailsError.from(res, traceId);
+  if (res.status === 204) return undefined as T;
+  return (await res.json()) as T;
+}

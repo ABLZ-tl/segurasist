@@ -40,13 +40,12 @@ function mockHook(value: Partial<ReturnType<typeof useCertificateMine>>) {
 describe('Portal CertificatePage', () => {
   beforeEach(() => { vi.clearAllMocks(); });
 
-  it('render OK con preview iframe + subtitle con fechas formateadas', () => {
+  it('render OK con subtitle con fechas formateadas', () => {
+    // Preview iframe was removed in commit e2782e7 (CSP S3 LocalStack incompat).
+    // Test now verifies the content shell + dates only.
     mockHook({ data: cert, isLoading: false, isError: false, error: null, refetch: vi.fn() });
     render(<CertificatePage />);
     expect(screen.getByTestId('certificate-content')).toBeInTheDocument();
-    const iframe = screen.getByTestId('certificate-preview') as HTMLIFrameElement;
-    expect(iframe).toHaveAttribute('src', cert.url);
-    expect(iframe).toHaveAttribute('sandbox', 'allow-same-origin');
     expect(screen.getByText(/1 de abril de 2026/)).toBeInTheDocument();
     expect(screen.getByText(/31 de marzo de 2027/)).toBeInTheDocument();
   });
