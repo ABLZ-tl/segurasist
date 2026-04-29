@@ -1,26 +1,14 @@
-import { Avatar, AvatarFallback } from '@segurasist/ui';
 import { ThemeToggle } from '../_components/theme-toggle';
 import { SidebarNav } from '../_components/sidebar-nav';
 import { CommandKTrigger } from '../_components/command-k-trigger';
 import { MobileDrawer } from '../_components/mobile-drawer';
 import { MobileSearchTrigger } from '../_components/mobile-search-trigger';
+import { AdminUserMenu } from '../_components/user-menu';
 import { TenantSwitcher } from '../../components/header/tenant-switcher';
 import { TenantOverrideBridge } from '../../components/header/tenant-override-bridge';
 import { TenantOverrideBanner } from '../../components/layout/tenant-override-banner';
 import { ROLE_LABEL } from '../../lib/rbac';
 import { fetchMe } from '../../lib/auth-server';
-
-/** Inline copy: `initialsOf` is exported from a 'use client' module in
- *  @segurasist/ui, so referencing it from this Server Component returns a
- *  client reference (not the function). Compute it locally. */
-function initialsOf(name: string): string {
-  return name
-    .split(/\s+/)
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((part) => part.charAt(0).toUpperCase())
-    .join('');
-}
 
 /**
  * App-shell layout.
@@ -82,9 +70,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
               {roleLabel}
             </span>
           )}
-          <Avatar className="h-8 w-8 lg:h-7 lg:w-7">
-            <AvatarFallback className="text-[11px]">{initialsOf(userLabel)}</AvatarFallback>
-          </Avatar>
+          <AdminUserMenu email={me.email} roleLabel={roleLabel} />
         </div>
       </header>
 
